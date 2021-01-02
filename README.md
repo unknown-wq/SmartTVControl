@@ -1,8 +1,8 @@
 # SmartTvcontrol
 Control smart tv with this script
-functions:\n
-\t	•play/pause video
-\n\t	•changing volume
-\n\t	•play own video by link
-\n\t
+functions:
+	•play/pause video
+	•changing volume
+	•play own video by link
+
 *(use --d to show device technical info)
