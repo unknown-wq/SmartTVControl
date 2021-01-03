@@ -35,25 +35,32 @@ else:
 	print(cast.status)
 	exit()
 cast.wait()
-#do for debug
 #print(cast.device)
 #print(cast.status)
 mc = cast.media_controller
 mc.block_until_active()
 
 while True:
-	print("\t1.) Play \n\t2.) Pause \n\t3.) Show status \n\t4.) Set volume \n\t5.) play video\n\t6.) Pause and exit")
+	print("\t1.) Play \n\t2.) Pause \n\t3.) Show what playing now \n\t4.) Set volume \n\t5.) play video\n\t6.) Pause and exit")
+	print("$: ",end="")
 	a=int(input())
 	if a==1:
 		mc.play()
 		print('sent.')
 	if a==2:
-		print(mc.status.volume_level)
 		mc.pause()
 		print('sent.')
 
 	if a==3:
-		print(mc.status)
+		if len(sys.argv)>1:
+			if sys.argv[1]=="--d":
+				print(mc.status)
+		else:
+			print(mc.status.title, end="\t")
+			print(mc.status.artist)
+			print(mc.status.current_time,end=" ")
+			print("of",end=" ")
+			print(mc.status.duration)
 	if a==6:
 		pychromecast.discovery.stop_discovery(browser)
 		print('sent. \n Connection closed.')
@@ -61,9 +68,14 @@ while True:
 		print('exit')
 		exit()
 	if a==4:
+		print(mc.status.volume_level)
+		print("Muted: ",end="")
+		print(mc.status.volume_muted)
 		print("Enter volume(from 0 to 100): ", end="")
 		cast.set_volume((float(input())/100))
 	if a==5:
 		print('input link to video:',end=" ")
 		link=input()
 		mc.play_media(link, 'video/mp4')
+	else:
+		pass
