@@ -1,4 +1,4 @@
-# SmartTvControl
+# SmartTVControl
 Control any SmartTV(with chromecast) in local network:  
 	•play/pause playing video  
 	•change volume  
