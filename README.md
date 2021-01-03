@@ -1,4 +1,4 @@
-# SmartTvcontrol
+# SmartTvControl
 Control smart tv with this script
 functions:
 	•play/pause video
