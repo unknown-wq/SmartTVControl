@@ -8,4 +8,4 @@ Script automatically seacrh SmartTV's in network
 Dependencies: pychromecast   
 
 *use --d to show uids and other device's info    
-work only if any user are connected
+
