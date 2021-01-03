@@ -61,6 +61,7 @@ while True:
 		print('exit')
 		exit()
 	if a==4:
+		print("Enter volume(from 0 to 100): ", end="")
 		cast.set_volume((float(input())/100))
 	if a==5:
 		print('input link to video:',end=" ")
