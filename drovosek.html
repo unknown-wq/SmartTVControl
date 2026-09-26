@@ -1624,16 +1624,16 @@ muted = !!save.muted;
 
 const AXES = {
   axe:  { name:'Топор', desc:'Дедовский, надёжный. Ничего лишнего.', price:0, hits:0, swing:1, knot:0, heat:1, coin:1 },
-  light:{ name:'Лёгкий топор', desc:'Замах на 30% быстрее, в жару греешься меньше. Зато в сучке вязнет на удар дольше.', price:60, hits:0, swing:.7, knot:1, heat:.7, coin:1 },
-  maul: { name:'Колун', desc:'Каждое полено поддаётся на удар раньше. Замах тяжёлый и медленный.', price:90, hits:-1, swing:1.35, knot:0, heat:1.15, coin:1 },
-  gold: { name:'Золотой топор', desc:'Лёгкий, как лёгкий топор, колет, как колун, и приносит на 25% больше монет.', price:350, hits:-1, swing:.75, knot:0, heat:.8, coin:1.25 },
+  light:{ name:'Лёгкий топор', desc:'Замах на 30% быстрее, в жару греешься меньше. Зато в сучке вязнет на удар дольше.', price:80, hits:0, swing:.7, knot:1, heat:.7, coin:1 },
+  maul: { name:'Колун', desc:'Каждое полено поддаётся на удар раньше. Замах тяжёлый и медленный.', price:120, hits:-1, swing:1.35, knot:0, heat:1.15, coin:1 },
+  gold: { name:'Золотой топор', desc:'Лёгкий, как лёгкий топор, колет, как колун, и приносит на 25% больше монет.', price:450, hits:-1, swing:.75, knot:0, heat:.8, coin:1.25 },
 };
 const GEAR = {
-  gloves: { name:'Рукавицы', desc:['Промах реже заканчивается травмой (×0,6).', 'Двойные рукавицы: травма при промахе ещё реже (×0,35).'], price:[40,100] },
-  hat:    { name:'Панама', desc:['В жару перегрев копится на 35% медленнее.'], price:[30] },
-  sled:   { name:'Санки', desc:['Дрова в печи больницы горят дольше: полено даёт +3°C тепла вместо +2°C.'], price:[50] },
-  kit:    { name:'Аптечка', desc:['Третья жизнь: можно пережить две травмы.'], price:[120] },
-  lantern:{ name:'Керосинка', desc:['Ночью у колоды светло, как днём.'], price:[25] },
+  gloves: { name:'Рукавицы', desc:['Промах реже заканчивается травмой (×0,6).', 'Двойные рукавицы: травма при промахе ещё реже (×0,35).'], price:[50,130] },
+  hat:    { name:'Панама', desc:['В жару перегрев копится на 35% медленнее.'], price:[40] },
+  sled:   { name:'Санки', desc:['Дрова в печи больницы горят дольше: полено даёт +3°C тепла вместо +2°C.'], price:[70] },
+  kit:    { name:'Аптечка', desc:['Третья жизнь: можно пережить две травмы.'], price:[160] },
+  lantern:{ name:'Керосинка', desc:['Ночью у колоды светло, как днём.'], price:[30] },
 };
 sanitizeSave(save);
 const axeStat = () => AXES[save.axe] || AXES.axe;
@@ -1659,7 +1659,7 @@ const ACH = [
   ['day5','Бригадир','Дойти до 5-й смены'],
   ['day10','Легенда леса','Дойти до 10-й смены'],
 ];
-const ACH_REWARD = 15;
+const ACH_REWARD = 5;
 const toastQ = []; let toastBusy = false;
 function toast(title, text){
   toastQ.push([title, text]);
@@ -1692,7 +1692,7 @@ function checkAch(){
 let pileItems = [], pileCount = 0;
 let pieces = 0, logsDone = 0, splits = 0, injuries = 0, combo = 0;
 let shiftGoal = 12, shiftDone = false, shiftInjured = false;
-const comboMult = () => 1 + Math.min(4, Math.floor(combo/5))*.25;
+const comboMult = () => 1 + Math.min(5, Math.floor(combo/5))*.1;
 function updateHud(){
   $('pieces').textContent = pileCount; $('logs').textContent = logsDone;
   $('coins').textContent = save.coins;
@@ -1732,13 +1732,16 @@ function floaty(text, worldPos){
   el.style.left = ((_proj.x+1)/2*stage.clientWidth) + 'px'; el.style.top = ((1-_proj.y)/2*stage.clientHeight) + 'px';
   stage.appendChild(el); setTimeout(() => el.remove(), 1150);
 }
+let coinFrac = 0;
 function earn(n, worldPos){
-  n = Math.max(1, Math.round(n*axeStat().coin));
+  coinFrac += n*axeStat().coin;
+  n = Math.floor(coinFrac + 1e-6); coinFrac -= n;
+  if(n <= 0) return;
   save.coins += n; save.stats.coinsEarned += n; persist(); updateHud();
   if(worldPos) floaty('+' + n, worldPos);
   const c = $('coinsRow'); c.classList.remove('bump'); void c.offsetWidth; c.classList.add('bump');
 }
-const pieceValue = s => s.kind === 'gold' ? 5 : s.kind === 'twisted' ? 2 : 1;
+const pieceValue = s => s.kind === 'gold' ? 3 : s.kind === 'twisted' ? 1 : .5;
 // the combo bonus is fixed when the piece is split off, not when it lands
 const pieceMult = s => s.mult || 1;
 // Every piece that ends up in the pile (or sold) counts towards the shift goal.
@@ -2052,10 +2055,10 @@ function strike(x){
   plan = cutPlan(cur, aimX);
   hitClass = plan.cls;
   if(climate === 'hot'){
-    heat += axeStat().heat * (gearLvl('hat') ? .65 : 1);
-    const risk = heat > 2.5 ? (heat-2.5)*.18*(.6 + (tempOut-30)/25) : 0;
+    heat = Math.min(6, heat + 1.35*axeStat().heat*(gearLvl('hat') ? .65 : 1));
+    const risk = heat > 3 ? (heat-3)*.2*(.6 + (tempOut-30)/25) : 0;
     if(Math.random() < risk) strokePending = true;
-    else if(heat > 2.5 && !heatWarned){ heatWarned = true; later(()=>popup('Жарко! Передохните','ok'), 500); }
+    else if(heat > 3 && !heatWarned){ heatWarned = true; later(()=>popup('Жарко! Передохните','ok'), 500); }
   }
   state = 'windup'; st = 0; thFrom = axeTh; xFrom = axe.position.x;
   marker.visible = false;
@@ -2109,12 +2112,12 @@ function resolveHitCore(){
     dust(top.clone().setY(top.y - .15), 60, s.sp.dust);
     unlock('first');
     if(c.crack.knotHit){ save.stats.knots++; unlock('knot'); }
-    if(s.kind === 'gold' && s.round){ save.stats.gold++; unlock('gold'); earn(10, top); sfx.fanfare(); }
+    if(s.kind === 'gold' && s.round){ save.stats.gold++; unlock('gold'); earn(5, top); sfx.fanfare(); }
     if(night > .6) unlock('night');
     const [a0, a1] = c.crack.kids.map(areaOf), ratio = Math.min(a0,a1)/Math.max(a0,a1);
     const small = c.crack.kids.filter(isSmall).length;
     if(ratio > .9){
-      save.stats.perfect++; unlock('perfect'); checkAch(); earn(1, top.clone().setY(top.y + .25)); sfx.perfect();
+      save.stats.perfect++; unlock('perfect'); checkAch(); earn(.5, top.clone().setY(top.y + .25)); sfx.perfect();
       popup(combo >= 5 ? `Идеально пополам! Серия ${combo}` : 'Идеально пополам!', 'good');
     } else popup(small === 2 ? 'Оба в поленницу!' : small === 1 ? 'Одно в поленницу!' : s.kind === 'rotten' ? 'Гнилое — рассыпалось' : 'Раскололось!', 'good');
     persist();
@@ -2381,14 +2384,14 @@ function completeShift(){
   if(state !== 'idle' || hurtPending || strokePending || fall || amb){ later(completeShift, 300); return; }
   gameOver = true; marker.visible = false; hoverX = null; kbAim = null;
   const W = climate === 'winter', H = climate === 'hot';
-  const reward = 10 + save.day*5, clean = !shiftInjured, warmBonus = W ? Math.max(0, Math.round((hospH - HOSP_WARM)*1.5)) : 0;
-  const total = reward + (clean ? 10 : 0) + warmBonus;
+  const reward = 5 + save.day*2, clean = !shiftInjured, warmBonus = W ? Math.max(0, Math.round((hospH - HOSP_WARM)*.5)) : 0;
+  const total = reward + (clean ? 5 : 0) + warmBonus;
   save.coins += total; save.stats.coinsEarned += total; save.stats.shifts++;
   if(W) unlock('winter'); if(H) unlock('hot'); if(clean) unlock('clean');
   save.day++; save.stats.bestDay = Math.max(save.stats.bestDay, save.day);
   checkAch(); persist(); updateHud(); sfx.fanfare();
   const parts = [`Наколото ${pieces} ${plural(pieces,'полено','полена','поленьев')}. Оплата за смену: ${reward}`];
-  if(clean) parts.push('без травм: +10');
+  if(clean) parts.push('без травм: +5');
   if(warmBonus) parts.push(`тёплая больница: +${warmBonus}`);
   showCard(`Смена ${save.day - 1} сдана!`, parts.join(', ') + `. Всего +${total} монет. Дальше — смена ${save.day}: ${previewWeather(save.day)}.`, 'Следующая смена', restart, 'Лавка', () => openMenu('shop'));
 }
@@ -2743,7 +2746,7 @@ function updateWeather(dt, t){
     if(hospH < HOSP_WARM + 2 && !coldWarned && !gameOver && state !== 'down'){ coldWarned = true; popup(`В больнице ${fmtT(hospH)}, скоро будет не до лечения`, 'bad', true); }
     if(hospH > HOSP_WARM + 5) coldWarned = false;
   }
-  if(climate === 'hot') heat = Math.max(0, heat - dt/(1.3 + (tempOut-30)*.06));
+  if(climate === 'hot') heat = Math.max(0, heat - dt/(2.4 + (tempOut-30)*.08));
   // look: windows go from dim blue to warm orange (flickering with the fire), frost creeps in as it cools
   const warmth = W ? clamp((hospH-4)/16, 0, 1) : 1, fire = W ? hospBurn : .4;
   hosp.winMat.emissive.setRGB(lerp(.25,1,warmth), lerp(.35,.69,warmth), lerp(.5,.38,warmth));
