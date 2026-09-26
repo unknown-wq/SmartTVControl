@@ -20,14 +20,29 @@
   #stage{ position:relative; width:100%; height:100%; overflow:hidden; cursor:crosshair; }
   #stage.dragging{ cursor:grabbing; }
   #stage canvas{ position:absolute; inset:0; width:100%; height:100%; display:block; }
-  .hud{ position:absolute; top:14px; left:18px; right:18px; display:flex; justify-content:space-between; align-items:flex-start; pointer-events:none; text-shadow:0 1px 4px rgba(0,0,0,.7); }
+  .hud{ position:absolute; top:max(14px, env(safe-area-inset-top,0px)); left:16px; right:16px; display:flex; gap:12px; justify-content:space-between; align-items:flex-start; pointer-events:none; text-shadow:0 1px 4px rgba(0,0,0,.7); }
   .count{ font-family:'Russo One',Impact,'Arial Black',sans-serif; font-size:clamp(38px,8vw,58px); line-height:1; }
   .label{ display:block; font-family:'PT Sans',system-ui,sans-serif; font-size:15px; color:var(--muted); margin-top:4px; }
+  .left{ display:flex; flex-direction:column; gap:6px; min-width:0; }
+  .coins{ font-family:'Russo One',Impact,sans-serif; font-size:22px; display:flex; align-items:center; gap:7px; }
+  .coin{ display:inline-block; width:18px; height:18px; border-radius:50%; background:radial-gradient(circle at 35% 35%, #fff2a8, #e8b64a 55%, #a8741c); box-shadow:0 1px 3px rgba(0,0,0,.5); }
+  .coins.bump{ animation:bump .35s ease-out; }
+  @keyframes bump{ 0%{ transform:scale(1);} 40%{ transform:scale(1.18);} 100%{ transform:scale(1);} }
+  .goal{ font-size:15px; color:var(--muted); }
+  .goal .bar, .heat .bar{ display:block; width:150px; max-width:38vw; height:8px; border-radius:4px; background:rgba(255,255,255,.22); margin-top:4px; overflow:hidden; }
+  #goalBar{ display:block; height:100%; width:0; background:linear-gradient(90deg,#8fc15a,#d6f07a); transition:width .3s; }
+  .combo{ font-family:'Russo One',Impact,sans-serif; font-size:20px; color:#ffd35a; }
+  .combo.hot{ color:#ff8a4a; }
+  .btns{ display:flex; gap:8px; margin-top:2px; pointer-events:auto; }
+  .btns button{ font:700 15px 'PT Sans',system-ui,sans-serif; min-height:40px; min-width:44px; padding:8px 12px; border:none; border-radius:10px; background:rgba(18,16,30,.62); color:var(--ink); cursor:pointer; box-shadow:0 3px 10px rgba(0,0,0,.35); text-shadow:none; }
+  .btns button:focus-visible{ outline:3px solid var(--ink); outline-offset:2px; }
   .side{ text-align:right; font-size:17px; line-height:1.5; }
+  .clock{ font-size:15px; color:var(--muted); }
   .side b{ font-family:'Russo One',Impact,sans-serif; font-weight:400; font-size:22px; }
-  .lives{ display:inline-flex; gap:6px; vertical-align:middle; margin-left:6px; }
-  .lives i{ width:13px; height:13px; border-radius:50%; box-shadow:inset 0 0 0 2px var(--ink), 0 1px 3px rgba(0,0,0,.5); }
-  .lives i.used{ background:var(--bad); box-shadow:inset 0 0 0 2px var(--bad), 0 1px 3px rgba(0,0,0,.5); }
+  .lives{ display:inline-flex; gap:5px; vertical-align:middle; margin-left:6px; }
+  .lives i{ width:16px; height:15px; background:#e0664a; -webkit-mask:var(--heart) center/contain no-repeat; mask:var(--heart) center/contain no-repeat; filter:drop-shadow(0 1px 2px rgba(0,0,0,.6)); }
+  .lives i.used{ background:rgba(255,244,224,.28); }
+  :root{ --heart:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 22'%3E%3Cpath d='M12 21.5 1.8 11.3A6 6 0 0 1 12 3.2a6 6 0 0 1 10.2 8.1z'/%3E%3C/svg%3E"); }
   .bottom{ position:absolute; left:0; right:0; bottom:22px; display:flex; flex-direction:column; align-items:center; gap:6px; pointer-events:none; text-shadow:0 1px 3px rgba(0,0,0,.8); text-align:center; padding:0 16px; }
   .logname{ font-size:19px; font-weight:700; }
   .logname .knot{ color:var(--ok); }
@@ -36,7 +51,7 @@
   .temp{ font-family:'Russo One',Impact,sans-serif; font-size:26px; line-height:1.1; margin-bottom:4px; }
   .temp.cold{ color:#a8d4ff; } .temp.hot{ color:#ffb45a; }
   .hosp b.cold{ color:#a8d4ff; } .hosp b.warm{ color:var(--good); }
-  .heat .bar{ display:inline-block; width:90px; height:10px; border-radius:5px; background:rgba(255,255,255,.22); vertical-align:middle; margin-left:6px; overflow:hidden; }
+  .heat .bar{ width:110px; margin-left:auto; }
   #heatBar{ display:block; height:100%; width:0; background:linear-gradient(90deg,#ffd35a,#ff5a2a); }
   .stove{ pointer-events:auto; margin-top:8px; font-family:'PT Sans',system-ui,sans-serif; font-weight:700; font-size:15px; padding:9px 14px; border:none; border-radius:10px; background:var(--ok); color:#2a1a08; cursor:pointer; box-shadow:0 4px 12px rgba(0,0,0,.4); text-shadow:none; }
   .stove:disabled{ opacity:.45; cursor:default; }
@@ -58,11 +73,45 @@
   .card{ position:relative; text-align:center; padding:26px 28px; max-width:26em; margin:16px; border-radius:18px; background:rgba(18,16,30,.78); box-shadow:0 12px 40px rgba(0,0,0,.5); }
   .card h1{ font-family:'Russo One',Impact,sans-serif; font-weight:400; font-size:clamp(28px,6.5vw,48px); line-height:1.1; margin:0 0 14px; }
   .card p{ font-size:18px; line-height:1.5; color:var(--muted); margin:0 0 22px; }
+  .card .row{ display:flex; gap:10px; justify-content:center; flex-wrap:wrap; }
+  .card button.alt{ background:rgba(255,244,224,.14); color:var(--ink); }
+  #menu{ background:rgba(10,12,25,.72); }
+  #menu .card{ background:rgba(18,16,30,.94); }
+  .card.wide{ max-width:34em; width:calc(100% - 32px); max-height:calc(100% - 32px); overflow:auto; box-sizing:border-box; padding:22px 20px; }
+  .tabs{ display:flex; gap:6px; justify-content:center; margin:0 0 14px; flex-wrap:wrap; }
+  .card .tabs button{ font:700 16px 'PT Sans',system-ui,sans-serif; padding:8px 14px; border-radius:10px; background:rgba(255,244,224,.12); color:var(--ink); box-shadow:none; }
+  .card .tabs button[aria-selected="true"]{ background:var(--ok); color:#2a1a08; }
+  .list{ text-align:left; display:flex; flex-direction:column; gap:8px; margin:0 0 16px; }
+  .item{ display:flex; align-items:center; gap:12px; padding:10px 12px; border-radius:12px; background:rgba(255,244,224,.07); }
+  .item .txt{ flex:1; min-width:0; }
+  .item b{ display:block; font-size:17px; }
+  .item small{ display:block; font-size:14px; color:var(--muted); line-height:1.35; }
+  .card .item button{ font:700 15px 'PT Sans',system-ui,sans-serif; padding:9px 12px; border-radius:10px; white-space:nowrap; box-shadow:none; }
+  .card .item button:disabled{ opacity:.45; cursor:default; }
+  .item.locked{ opacity:.55; }
+  .item .medal{ width:34px; height:34px; border-radius:50%; flex:none; display:grid; place-items:center; font:16px 'Russo One',Impact,sans-serif; background:rgba(255,244,224,.12); color:var(--muted); }
+  .item:not(.locked) .medal{ background:radial-gradient(circle at 35% 35%, #fff2a8, #e8b64a 55%, #a8741c); color:#4a2e08; }
+  .stats{ display:grid; grid-template-columns:1fr auto; gap:6px 16px; text-align:left; font-size:17px; margin:0 0 16px; }
+  .stats span:nth-child(2n){ font-family:'Russo One',Impact,sans-serif; text-align:right; }
+  .wallet{ font-family:'Russo One',Impact,sans-serif; font-size:20px; margin:-6px 0 12px; display:flex; gap:8px; align-items:center; justify-content:center; }
+  .toast{ position:absolute; left:50%; top:max(14px, env(safe-area-inset-top,0px)); transform:translate(-50%,-140%); z-index:6; display:flex; gap:10px; align-items:center; padding:10px 16px; border-radius:14px; background:rgba(18,16,30,.85); box-shadow:0 8px 24px rgba(0,0,0,.45); transition:transform .45s cubic-bezier(.2,1.4,.4,1); pointer-events:none; max-width:calc(100% - 32px); box-sizing:border-box; }
+  .toast.show{ transform:translate(-50%,0); }
+  .toast b{ display:block; font-family:'Russo One',Impact,sans-serif; font-weight:400; font-size:17px; color:#ffd35a; }
+  .toast small{ font-size:14px; color:var(--muted); }
+  .floaty{ position:absolute; pointer-events:none; font-family:'Russo One',Impact,sans-serif; font-size:20px; color:#ffd35a; text-shadow:0 2px 4px rgba(0,0,0,.7); animation:floaty 1s ease-out forwards; }
+  @keyframes floaty{ 0%{ opacity:0; transform:translate(-50%,0) scale(.7);} 15%{ opacity:1; transform:translate(-50%,-8px) scale(1.1);} 100%{ opacity:0; transform:translate(-50%,-60px) scale(1);} }
+  @media (max-width:520px){
+    .side{ font-size:15px; } .side b{ font-size:19px; } .temp{ font-size:21px; }
+    .count{ font-size:36px; } .label{ font-size:13px; }
+    .stove{ font-size:14px; padding:8px 10px; max-width:150px; }
+    .card{ padding:20px 18px; } .card p{ font-size:16px; }
+  }
   .card button{ font-family:'Russo One',Impact,sans-serif; font-size:20px; padding:14px 28px; border:none; border-radius:12px; background:var(--ok); color:#2a1a08; cursor:pointer; box-shadow:0 6px 18px rgba(0,0,0,.4); }
   .card button:focus-visible{ outline:3px solid var(--ink); outline-offset:3px; }
   @media (prefers-reduced-motion: reduce){
     .pop.show{ animation:fade .9s linear; }
     .pop.show.long{ animation-duration:3s; }
+    .toast{ transition:none; } .floaty{ animation-duration:.01s; } .coins.bump{ animation:none; }
     @keyframes fade{ 0%,75%{ opacity:1; transform:translate(-50%,-50%);} 100%{ opacity:0; transform:translate(-50%,-50%);} }
   }
 </style>
@@ -72,27 +121,46 @@
   <div id="flash"></div>
   <div id="fade"></div>
   <div class="hud">
-    <div class="count"><span id="pieces">0</span><span class="label">поленьев в поленнице</span></div>
+    <div class="left">
+      <div class="count"><span id="pieces">0</span><span class="label">поленьев в поленнице</span></div>
+      <div class="coins" id="coinsRow" title="Монеты"><i class="coin"></i><span id="coins">0</span></div>
+      <div class="goal" id="goal"><span id="goalText"></span><span class="bar"><span id="goalBar"></span></span></div>
+      <div class="combo" id="combo" hidden></div>
+      <div class="btns"><button id="menuBtn" aria-label="Пауза и меню">❚❚ Меню</button><button id="soundBtn" aria-label="Выключить звук">🔊</button></div>
+    </div>
     <div class="side">
       <div class="temp" id="temp"></div>
+      <div class="clock" id="clock"></div>
       Брёвен расколото <b id="logs">0</b><br>
-      Травмы<span class="lives" id="lives"><i></i><i></i></span>
+      Здоровье<span class="lives" id="lives" aria-label="Здоровье"></span>
       <div id="hosp" class="hosp" hidden>Больница <b id="hospT"></b></div>
       <div id="heatRow" class="heat" hidden>Перегрев <span class="bar"><span id="heatBar"></span></span></div>
       <button id="stove" class="stove" hidden>Отнести дрова в больницу</button>
     </div>
   </div>
-  <div class="pop" id="pop"></div>
+  <div class="pop" id="pop" role="status" aria-live="polite"></div>
+  <div class="toast" id="toast" role="status" aria-live="polite"><i class="coin"></i><div><b id="toastT"></b><small id="toastD"></small></div></div>
   <div class="bottom">
     <div class="logname" id="kind"></div>
-    <div class="hint" id="hint">Полено расколется по линии удара — любой формы, но не тоньше 4 см.<br>Проведите по экрану или нажмите ← →, чтобы обойти колоду.<br><span id="hintClimate"></span></div>
+    <div class="hint" id="hint"><span id="hintAim"></span><br><span id="hintClimate"></span></div>
   </div>
 </div>
 <div class="over" id="over" hidden>
   <div class="card">
     <h1 id="overTitle">Скорая приехала</h1>
     <p id="overStats"></p>
-    <button id="again">Колоть заново</button>
+    <div class="row"><button id="again">Колоть заново</button><button id="again2" class="alt" hidden></button></div>
+  </div>
+</div>
+<div class="over" id="menu" hidden>
+  <div class="card wide" role="dialog" aria-modal="true" aria-labelledby="menuTitle">
+    <h1 id="menuTitle">Пауза</h1>
+    <div class="wallet"><i class="coin"></i><span id="menuCoins">0</span></div>
+    <div class="tabs" role="tablist">
+      <button role="tab" data-tab="shop">Лавка</button><button role="tab" data-tab="ach">Достижения</button><button role="tab" data-tab="stats">Статистика</button>
+    </div>
+    <div id="menuBody"></div>
+    <div class="row"><button id="resume">Продолжить</button></div>
   </div>
 </div>
 
@@ -100,14 +168,15 @@
 <script>
 (function(){
   var box = document.getElementById('errlog');
-  function log(msg){ box.style.display = 'block'; box.textContent += msg + '\n'; }
+  var debug = /[?&]debug\b/.test(location.search);
+  function log(msg, fatal){ if(!debug && !fatal) return; box.style.display = 'block'; box.textContent += msg + '\n'; }
   window.addEventListener('error', function(e){
     if(e.target && e.target !== window && (e.target.src || e.target.href)) log('Не загрузился ресурс: ' + (e.target.src || e.target.href));
-    else log('Ошибка: ' + e.message + (e.lineno ? ' (строка ' + e.lineno + ':' + e.colno + ')' : '') + (e.error && e.error.stack ? '\n' + e.error.stack.split('\n').slice(0,3).join('\n') : ''));
+    else log('Ошибка: ' + e.message + (e.lineno ? ' (строка ' + e.lineno + ':' + e.colno + ')' : '') + (e.error && e.error.stack ? '\n' + e.error.stack.split('\n').slice(0,3).join('\n') : ''), true);
   }, true);
   window.addEventListener('unhandledrejection', function(e){ log('Promise: ' + (e.reason && (e.reason.stack || e.reason.message) || e.reason)); });
   var ce = console.error; console.error = function(){ try{ log('console.error: ' + Array.prototype.join.call(arguments,' ')); }catch(_){} ce.apply(console, arguments); };
-  window.addEventListener('load', function(){ if(typeof THREE === 'undefined') log('THREE не загрузился'); });
+  window.addEventListener('load', function(){ if(typeof THREE === 'undefined') log('Не удалось загрузить 3D-движок. Проверьте интернет и обновите страницу.', true); });
 })();
 </script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -130,10 +199,16 @@ const $ = id => document.getElementById(id);
 const stage = $('stage');
 
 /* ================= renderer ================= */
-const renderer = new THREE.WebGLRenderer({ antialias:true });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+// Phones and weak GPUs get a lighter scene; ?low / ?high force it.
+const QS = new URLSearchParams(location.search);
+const COARSE = window.matchMedia && matchMedia('(pointer: coarse)').matches;
+const LOW = QS.has('low') || (!QS.has('high') && window.matchMedia && matchMedia('(pointer: coarse)').matches);
+const MAX_DPR = Math.min(window.devicePixelRatio || 1, LOW ? 1.5 : 2);
+let dpr = MAX_DPR;
+const renderer = new THREE.WebGLRenderer({ antialias:!LOW || (window.devicePixelRatio||1) < 2 });
+renderer.setPixelRatio(dpr);
 renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.shadowMap.type = LOW ? THREE.PCFShadowMap : THREE.PCFSoftShadowMap;
 stage.prepend(renderer.domElement);
 const maxAniso = renderer.capabilities.getMaxAnisotropy();
 
@@ -144,8 +219,28 @@ const rig = new THREE.Group(); scene.add(rig); rig.add(camera);
 function canvasTex(w, h, draw){
   const c = document.createElement('canvas'); c.width = w; c.height = h;
   draw(c.getContext('2d'), w, h);
-  const t = new THREE.CanvasTexture(c); t.anisotropy = maxAniso; return t;
+  const t = new THREE.CanvasTexture(c); t.anisotropy = maxAniso;
+  t.redraw = () => { draw(c.getContext('2d'), w, h); t.needsUpdate = true; };
+  return t;
 }
+// Frees GPU memory of a removed subtree. Shared materials (wood species, knots) are kept.
+const SHARED = new Set();
+function disposeTree(o, withMaterials){
+  if(!o) return;
+  if(o.parent) o.parent.remove(o);
+  o.traverse(n => {
+    if(n.geometry && !SHARED.has(n.geometry)) n.geometry.dispose();
+    if(withMaterials && n.material) (Array.isArray(n.material) ? n.material : [n.material]).forEach(m => {
+      if(SHARED.has(m)) return;
+      if(m.map && !SHARED.has(m.map)) m.map.dispose();
+      m.dispose();
+    });
+  });
+}
+// Timers that belong to one round; cleared on restart so stale popups don't leak into the next one.
+const timers = new Set();
+function later(fn, ms){ const id = setTimeout(() => { timers.delete(id); fn(); }, ms); timers.add(id); return id; }
+function clearTimers(){ timers.forEach(clearTimeout); timers.clear(); }
 const std = o => new THREE.MeshStandardMaterial(Object.assign({ roughness:.9, metalness:0, envMapIntensity:.55 }, o));
 
 /* ================= sky & light ================= */
@@ -186,7 +281,7 @@ const sunDir = (() => { const phi = SUN_U*TAU, th = (1-SUN_V)*Math.PI; return ne
 const sun = new THREE.DirectionalLight(0xffc28a, 1.25);
 sun.position.copy(sunDir).multiplyScalar(14).setY(Math.max(3.5, sunDir.y*14));
 sun.castShadow = true;
-sun.shadow.mapSize.set(2048,2048);
+sun.shadow.mapSize.set(LOW ? 1024 : 2048, LOW ? 1024 : 2048);
 Object.assign(sun.shadow.camera, { left:-7, right:7, top:7, bottom:-7, near:1, far:40 });
 sun.shadow.bias = -0.0004; sun.shadow.normalBias = 0.02;
 scene.add(sun);
@@ -246,7 +341,7 @@ function bladeGeometry(){
   g.setAttribute('color', new THREE.Float32BufferAttribute(col,3));
   g.setIndex(idx); g.computeVertexNormals(); return g;
 }
-const GRASS_N = 13000;
+const GRASS_N = LOW ? 5500 : 13000;
 let grass;
 {
   const N = GRASS_N;
@@ -257,7 +352,7 @@ let grass;
     const r = .9 + Math.pow(Math.random(),1.5)*17, a = R(0,TAU);
     if(r < 2.1 && Math.random() > (r-.9)/1.2) continue;
     const x = Math.cos(a)*r, z = Math.sin(a)*r;
-    if(x > -4.7 && x < -.5 && z > -4.1 && z < -1.9 && Math.random() < .8) continue;
+    if(x > -4.7 && x < -.5 && z > -5.1 && z < -1.9 && Math.random() < .8) continue;
     p.set(x,0,z);
     q.setFromEuler(new THREE.Euler(R(-.25,.25), R(0,TAU), R(-.25,.25)));
     s.set(R(.8,1.6), R(.16,.46), 1);
@@ -308,7 +403,8 @@ function species(name, bark, end, ring, inner, line, barkRough){
   return { name,
     bark: std({ map:bark, bumpMap:bark, bumpScale:.035, roughness:barkRough||.92 }),
     end: std({ map:endGrain(end, ring, false), bumpScale:.01 }),
-    inner: std({ map:innerGrain(inner, line), side:THREE.DoubleSide }) };
+    inner: std({ map:innerGrain(inner, line), side:THREE.DoubleSide }),
+    dust: new THREE.Color(inner), hard:1 };
 }
 const SPECIES = [
   species('Сосна', barkTex('#6a4428',(x,w,h)=>{
@@ -335,17 +431,39 @@ const SPECIES = [
       x.beginPath(); x.ellipse(px,py,R(7,17),R(4,9),R(-.3,.3),0,TAU); x.fill(); }
   }), '#e2c08c','145,100,52', '#ecc890','170,125,70'),
 ];
+// hardness: oak needs an extra blow on wide cuts and sounds deeper; aspen is soft and rings higher
+[1, 1.1, 1.5, .8, .95].forEach((h,i) => SPECIES[i].hard = h);
+SPECIES.forEach(sp => ['bark','end','inner'].forEach(k => SHARED.add(sp[k])));
+// Special logs reuse the species textures with a tint; each variant is built once and shared.
+function variant(sp, kind){
+  sp.v = sp.v || {};
+  if(sp.v[kind]) return sp.v[kind];
+  const mk = (m, f) => { const c = m.clone(); f(c); SHARED.add(c); return c; };
+  const tint = hex => c => c.color.setHex(hex);
+  let v;
+  if(kind === 'rotten') v = { ...sp, bark:mk(sp.bark, tint(0x77775a)), end:mk(sp.end, tint(0x8a7c62)), inner:mk(sp.inner, tint(0x9a8a6a)), dust:new THREE.Color(0x8a7a5a), hard:.6 };
+  else if(kind === 'twisted') v = { ...sp, bark:mk(sp.bark, tint(0xb8a898)), end:mk(sp.end, tint(0xd8c4a8)), hard:sp.hard + .3 };
+  else {
+    const gold = c => { c.color.setHex(0xffd35a); c.metalness = .75; c.roughness = .3; c.emissive = new THREE.Color(0x3a2400); c.envMapIntensity = 1.2; };
+    v = { ...sp, bark:mk(sp.bark, gold), end:mk(sp.end, gold), inner:mk(sp.inner, gold), dust:new THREE.Color(0xffd35a) };
+  }
+  delete v.v;
+  return sp.v[kind] = v;
+}
 const knotMat = std({ color:0x2e1f12, roughness:.75 });
+const knotGeo = new THREE.SphereGeometry(.065,16,12), knotRingGeo = new THREE.TorusGeometry(.075,.02,10,24);
+SHARED.add(knotGeo); SHARED.add(knotRingGeo);
 
 /* ================= stump, props, trees ================= */
 const STUMP_TOP = 0.55;
 const stumpTop = endGrain('#c99e6a','110,70,35',true);
+const stumpBark = SPECIES[0].bark.clone(); stumpBark.map = SPECIES[0].bark.map.clone(); stumpBark.map.needsUpdate = true; stumpBark.bumpMap = stumpBark.map;
 const stump = new THREE.Mesh(new THREE.CylinderGeometry(.6,.7,STUMP_TOP,48),
-  [SPECIES[0].bark, std({ map:stumpTop, bumpMap:stumpTop, bumpScale:.01 }), SPECIES[0].bark]);
+  [stumpBark, std({ map:stumpTop, bumpMap:stumpTop, bumpScale:.01 }), stumpBark]);
 stump.position.y = STUMP_TOP/2; stump.castShadow = stump.receiveShadow = true; scene.add(stump);
 for(let i=0;i<5;i++){
   const a = i/5*TAU + R(-.3,.3);
-  const root = new THREE.Mesh(new THREE.ConeGeometry(.14,.75,12), SPECIES[0].bark);
+  const root = new THREE.Mesh(new THREE.ConeGeometry(.14,.75,12), stumpBark);
   root.position.set(Math.cos(a)*.68, .06, Math.sin(a)*.68);
   root.lookAt(Math.cos(a)*2, -.2, Math.sin(a)*2); root.rotateX(Math.PI/2);
   root.castShadow = root.receiveShadow = true; scene.add(root);
@@ -356,34 +474,52 @@ for(let i=0;i<5;i++){
   const glow = new THREE.Mesh(new THREE.SphereGeometry(.055,16,12), new THREE.MeshBasicMaterial({ color:0xffc070 })); glow.position.set(0,.12,.075);
   lantern.add(lb, glow); lantern.position.set(1.8,0,1.7); lantern.castShadow = true; scene.add(lantern);
 }
-const chipGeo = new THREE.BoxGeometry(.06,.02,.08);
+const chipGeo = new THREE.BoxGeometry(.06,.02,.08); SHARED.add(chipGeo);
 for(let i=0;i<55;i++){
   const a=R(0,TAU), d=R(.8,2.1);
   const c = new THREE.Mesh(chipGeo, SPECIES[i%5].inner);
   c.position.set(Math.cos(a)*d,.01,Math.sin(a)*d); c.rotation.set(R(-.2,.2),R(0,6),R(-.2,.2));
   c.scale.setScalar(R(.7,1.4)); c.receiveShadow = true; scene.add(c);
 }
-const trees = [], snowCaps = [];
+// Forest is drawn with instancing: one draw call for trunks, one for needles, one for snow caps.
+const trees = [];
 const HOSP_POS = new V3(7.5, 0, -10.5);
 const distToSeg = (px, pz, ax, az, bx, bz) => { const abx=bx-ax, abz=bz-az; const k = clamp(((px-ax)*abx+(pz-az)*abz)/(abx*abx+abz*abz),0,1); return Math.hypot(px-(ax+abx*k), pz-(az+abz*k)); };
-{
-  const snowMat = std({ color:0xf4f7fb, roughness:.8 });
-  const trunkMat = std({ color:0x3a2a1c });
-  for(let i=0;i<95;i++){
-    const a=R(0,TAU), d=R(8,30), x=Math.cos(a)*d, z=Math.sin(a)*d;
-    if(Math.hypot(x-HOSP_POS.x, z-HOSP_POS.z) < 8.5 || distToSeg(x,z,HOSP_POS.x,HOSP_POS.z,0,0) < 4) continue;
-    const s=R(1.1,2.3), t=new THREE.Group();
-    const tr=new THREE.Mesh(new THREE.CylinderGeometry(.1*s,.17*s,1.2*s,10), trunkMat); tr.position.y=.6*s; t.add(tr);
-    const fm = std({ color:new THREE.Color().setHSL(R(.3,.38), R(.25,.4), R(.14,.22)) });
-    for(let k=0;k<4;k++){ const c=new THREE.Mesh(new THREE.ConeGeometry((1.2-k*.24)*s,1.4*s,14), fm); c.position.y=(1.3+k*.62)*s; c.rotation.y=R(0,6); c.castShadow = d < 12; t.add(c);
-      const sc = new THREE.Mesh(new THREE.ConeGeometry((1.2-k*.24)*s*.8,.7*s,14), snowMat); sc.position.y = c.position.y + .42*s; sc.rotation.y = c.rotation.y; sc.visible = false; t.add(sc); snowCaps.push(sc); }
-    t.position.set(x,0,z); scene.add(t); trees.push(t);
-  }
+for(let i=0;i<95;i++){
+  const a=R(0,TAU), d=R(8,30), x=Math.cos(a)*d, z=Math.sin(a)*d;
+  if(Math.hypot(x-HOSP_POS.x, z-HOSP_POS.z) < 8.5 || distToSeg(x,z,HOSP_POS.x,HOSP_POS.z,0,0) < 4) continue;
+  trees.push({ position:new V3(x,0,z), s:R(1.1,2.3), rot:[0,1,2,3].map(()=>R(0,6)), visible:true,
+    color:new THREE.Color().setHSL(R(.3,.38), R(.25,.4), R(.14,.22)) });
 }
+const forest = (() => {
+  const N = trees.length;
+  const trunk = new THREE.InstancedMesh(new THREE.CylinderGeometry(.1,.17,1.2,10), std({ color:0x3a2a1c }), N);
+  const needles = new THREE.InstancedMesh(new THREE.ConeGeometry(1,1,14), std({ color:0xffffff }), N*4);
+  const snowCap = new THREE.InstancedMesh(new THREE.ConeGeometry(1,1,14), std({ color:0xf4f7fb, roughness:.8 }), N*4);
+  trunk.castShadow = needles.castShadow = true; snowCap.visible = false;
+  trees.forEach((t,i) => { for(let k=0;k<4;k++) needles.setColorAt(i*4+k, t.color); });
+  scene.add(trunk, needles, snowCap);
+  return { trunk, needles, snowCap };
+})();
+function syncTrees(){
+  const m = new THREE.Matrix4(), q = new THREE.Quaternion(), p = new V3(), sc = new V3();
+  trees.forEach((t,i) => {
+    const s = t.visible ? t.s : 0;
+    m.compose(p.set(t.position.x, .6*s, t.position.z), q.identity(), sc.set(s,s,s)); forest.trunk.setMatrixAt(i, m);
+    for(let k=0;k<4;k++){
+      const r = (1.2-k*.24)*s, y = (1.3+k*.62)*s;
+      q.setFromAxisAngle(Y, t.rot[k]);
+      m.compose(p.set(t.position.x, y, t.position.z), q, sc.set(r, 1.4*s, r)); forest.needles.setMatrixAt(i*4+k, m);
+      m.compose(p.set(t.position.x, y + .42*s, t.position.z), q, sc.set(r*.8, .7*s, r*.8)); forest.snowCap.setMatrixAt(i*4+k, m);
+    }
+  });
+  [forest.trunk, forest.needles, forest.snowCap].forEach(o => { o.instanceMatrix.needsUpdate = true; o.computeBoundingSphere && o.computeBoundingSphere(); });
+}
+function showAllTrees(){ trees.forEach(t => t.visible = true); syncTrees(); }
+syncTrees();
 
 /* ================= woodpile (behind the block) ================= */
-const PILE_COLS = 6, PILE_ROWS = 5, PILE_STACKS = 2, PILE_CAP = PILE_COLS*PILE_ROWS*PILE_STACKS;
-const PILE_X0 = -4.2, PILE_BOX = { x0:-4.8, x1:-.5, z0:-4.3, z1:-1.8 };
+const PILE_STACKS = 3, PILE_BOX = { x0:-4.8, x1:-.5, z0:-5.3, z1:-1.8 };
 const pileZ = s => -2.55 - s*1.0;
 {
   const plankMat = std({ color:0x3f3226 });
@@ -423,7 +559,7 @@ const hosp = (() => {
   const lampH = new THREE.PointLight(0xffb060, 1, 9, 2); lampH.position.set(0,2.3,3.4); g.add(lampH);
   g.position.copy(HOSP_POS); g.lookAt(0,0,0); scene.add(g); g.updateMatrixWorld(true);
   const out = new V3(-HOSP_POS.x, 0, -HOSP_POS.z).normalize();
-  return { g, roofMat, winMat, lamp:lampH, chimney:g.localToWorld(new V3(2.4,5.3,-.6)), exit:HOSP_POS.clone().addScaledVector(out, 6.5) };
+  return { g, roofMat, winMat, signTex, lamp:lampH, chimney:g.localToWorld(new V3(2.4,5.3,-.6)), exit:HOSP_POS.clone().addScaledVector(out, 6.5) };
 })();
 const softDot = canvasTex(64,64,(x,w,h)=>{ const rg = x.createRadialGradient(32,32,0,32,32,32); rg.addColorStop(0,'rgba(255,255,255,1)'); rg.addColorStop(1,'rgba(255,255,255,0)'); x.fillStyle = rg; x.fillRect(0,0,w,h); });
 const smoke = [];
@@ -579,10 +715,10 @@ function pieceMesh(s){
   const m = new THREE.Mesh(pieceGeometry(s), [s.sp.bark, s.sp.end, s.sp.inner]);
   m.castShadow = m.receiveShadow = true; g.add(m);
   if(s.knot){
-    const k = new THREE.Mesh(new THREE.SphereGeometry(.065,16,12), knotMat);
+    const k = new THREE.Mesh(knotGeo, knotMat);
     k.scale.set(1,1.4,.55); k.position.set(s.knot.x, s.knot.y, s.knot.z); k.rotation.y = s.knot.a;
     k.castShadow = true; g.add(k);
-    const ring = new THREE.Mesh(new THREE.TorusGeometry(.075,.02,10,24), knotMat);
+    const ring = new THREE.Mesh(knotRingGeo, knotMat);
     ring.position.copy(k.position); ring.rotation.y = s.knot.a; g.add(ring);
   }
   return g;
@@ -590,8 +726,18 @@ function pieceMesh(s){
 
 /* ================= sound ================= */
 let ac = null;
+let master = null, noiseBuf = null, muted = false;
 function audio(){
-  if(!ac){ try{ ac = new (window.AudioContext||window.webkitAudioContext)(); }catch(e){ ac = null; console.error('AudioContext: ' + e); } }
+  if(!ac){
+    try{ ac = new (window.AudioContext||window.webkitAudioContext)(); }catch(e){ ac = null; console.error('AudioContext: ' + e); }
+    if(ac){
+      const comp = ac.createDynamicsCompressor(); comp.threshold.value = -14; comp.ratio.value = 4; comp.connect(ac.destination);
+      master = ac.createGain(); master.gain.value = muted ? 0 : .9; master.connect(comp);
+      noiseBuf = ac.createBuffer(1, ac.sampleRate*2, ac.sampleRate);
+      const d = noiseBuf.getChannelData(0); for(let i=0;i<d.length;i++) d[i] = Math.random()*2-1;
+    }
+  }
+  if(document.hidden) return ac;
   if(ac && ac.state !== 'running' && ac.state !== 'closed'){ const p = ac.resume(); if(p && p.catch) p.catch(()=>{}); }
   return ac;
 }
@@ -614,28 +760,36 @@ function unlockAudio(){
   const a = audio(); if(!a) return;
   if(!audioUnlocked){
     audioUnlocked = true;
-    try{ const b = a.createBuffer(1,1,22050), s = a.createBufferSource(); s.buffer = b; s.connect(a.destination); s.start(0); }catch(e){ console.error('unlock: ' + e); }
+    try{ const b = a.createBuffer(1,1,22050), s = a.createBufferSource(); s.buffer = b; s.connect(master); s.start(0); }catch(e){ console.error('unlock: ' + e); }
     try{ const p = silentEl.play(); if(p && p.catch) p.catch(e => console.error('silent audio: ' + e)); }catch(e){}
     setTimeout(() => { if(ac && ac.state !== 'running') console.error('Звук не запустился, состояние: ' + ac.state); }, 800);
   }
 }
 ['pointerup','touchend','click','keydown'].forEach(ev => window.addEventListener(ev, unlockAudio, { capture:true, passive:true }));
-document.addEventListener('visibilitychange', () => { if(!document.hidden && ac) audio(); });
+document.addEventListener('visibilitychange', () => {
+  if(document.hidden){ if(ac && ac.state === 'running') ac.suspend().catch(()=>{}); keys.left = keys.right = false; if(!paused && !gameOver && started) openMenu(); }
+  else if(ac) audio();
+});
+function setMuted(m){
+  muted = m; save.muted = m; persist();
+  if(master) master.gain.value = m ? 0 : .9;
+  const b = $('soundBtn'); b.textContent = m ? '🔇' : '🔊'; b.setAttribute('aria-label', m ? 'Включить звук' : 'Выключить звук');
+}
+// pitch: >1 = higher/lighter (soft wood), <1 = deeper (oak)
+let pitch = 1;
 function noise(dur,freq,q,gain,type='lowpass'){
-  const a = ac; if(!a) return;
-  const len = Math.floor(a.sampleRate*dur), b = a.createBuffer(1,len,a.sampleRate), d = b.getChannelData(0);
-  for(let i=0;i<len;i++) d[i] = (Math.random()*2-1)*Math.pow(1-i/len,2.2);
-  const s=a.createBufferSource(); s.buffer=b;
-  const f=a.createBiquadFilter(); f.type=type; f.frequency.value=freq; f.Q.value=q;
-  const g=a.createGain(); g.gain.value=gain;
-  s.connect(f); f.connect(g); g.connect(a.destination); s.start();
+  const a = ac; if(!a || a.state !== 'running') return;
+  const t = a.currentTime, s = a.createBufferSource(); s.buffer = noiseBuf;
+  const f = a.createBiquadFilter(); f.type = type; f.frequency.value = freq*pitch; f.Q.value = q;
+  const g = a.createGain(); g.gain.setValueAtTime(gain, t); g.gain.exponentialRampToValueAtTime(.001, t+dur);
+  s.connect(f); f.connect(g); g.connect(master); s.start(t, Math.random()*1.5); s.stop(t+dur+.02);
 }
 function tone(f0,f1,dur,gain,type='sine'){
-  const a = ac; if(!a) return;
+  const a = ac; if(!a || a.state !== 'running') return;
   const o=a.createOscillator(), g=a.createGain(), t=a.currentTime;
-  o.type=type; o.frequency.setValueAtTime(f0,t); o.frequency.exponentialRampToValueAtTime(f1,t+dur);
+  o.type=type; o.frequency.setValueAtTime(f0*pitch,t); o.frequency.exponentialRampToValueAtTime(f1*pitch,t+dur);
   g.gain.setValueAtTime(gain,t); g.gain.exponentialRampToValueAtTime(.001,t+dur);
-  o.connect(g); g.connect(a.destination); o.start(t); o.stop(t+dur+.02);
+  o.connect(g); g.connect(master); o.start(t); o.stop(t+dur+.02);
 }
 const sfx = {
   whoosh(){ noise(.16,900,.6,.25,'bandpass'); },
@@ -648,6 +802,10 @@ const sfx = {
   ouch(){ noise(.25,300,1,1); tone(160,40,.5,.7); noise(.4,1800,.7,.3,'bandpass'); },
   thud(){ noise(.3,200,1,1.2); tone(70,30,.4,.8); },
   stack(){ noise(.08,700,1.5,.25,'bandpass'); tone(260,180,.08,.12,'triangle'); },
+  coin(){ tone(1320,1320,.07,.08,'square'); setTimeout(() => tone(1760,1760,.12,.07,'square'), 70); },
+  perfect(){ [660,880,1320].forEach((f,i) => setTimeout(() => tone(f,f*1.01,.18,.12,'triangle'), i*70)); },
+  fanfare(){ [523,659,784,1047].forEach((f,i) => setTimeout(() => tone(f,f,.28,.14,'triangle'), i*120)); },
+  buy(){ tone(880,1320,.12,.1,'triangle'); noise(.1,4000,.8,.15,'highpass'); },
 };
 let sirenNodes = null;
 function siren(){
@@ -656,22 +814,149 @@ function siren(){
   o.type = 'triangle'; o.frequency.value = 780; lfo.type = 'square'; lfo.frequency.value = 1.4; lg.gain.value = 170;
   lfo.connect(lg); lg.connect(o.frequency);
   g.gain.setValueAtTime(.005,t); g.gain.exponentialRampToValueAtTime(.1,t+5);
-  o.connect(g); g.connect(a.destination); o.start(t); lfo.start(t); o.stop(t+40); lfo.stop(t+40);
+  o.connect(g); g.connect(master); o.start(t); lfo.start(t); o.stop(t+40); lfo.stop(t+40);
   sirenNodes = { o, lfo, g };
 }
 function stopSiren(){ if(sirenNodes){ try{ sirenNodes.o.stop(); sirenNodes.lfo.stop(); }catch(e){} sirenNodes = null; } }
 
+/* ================= save, economy, achievements ================= */
+const SAVE_KEY = 'drovosek-save-v2';
+const STATS0 = { pieces:0, logs:0, splits:0, perfect:0, injuries:0, burned:0, shifts:0, bestCombo:0, gold:0, knots:0, coinsEarned:0, bestDay:1 };
+const save = (() => {
+  let d = {};
+  try{ d = JSON.parse(localStorage.getItem(SAVE_KEY) || '{}') || {}; }catch(e){}
+  const s = Object.assign({ coins:0, best:0, day:1, axe:'axe', owned:{ axe:true }, gear:{}, ach:{}, muted:false, seenIntro:false }, d);
+  s.stats = Object.assign({}, STATS0, d.stats);
+  try{ const old = parseInt(localStorage.getItem('drovosek-best-pieces') || '0', 10) || 0; if(old > s.best) s.best = old; }catch(e){}
+  return s;
+})();
+function persist(){ try{ localStorage.setItem(SAVE_KEY, JSON.stringify(save)); }catch(e){} }
+muted = !!save.muted;
+
+const AXES = {
+  axe:  { name:'Топор', desc:'Дедовский, надёжный. Ничего лишнего.', price:0, hits:0, swing:1, knot:0, heat:1, coin:1 },
+  light:{ name:'Лёгкий топор', desc:'Замах на 30% быстрее, в жару греешься меньше. Зато в сучке вязнет на удар дольше.', price:60, hits:0, swing:.7, knot:1, heat:.7, coin:1 },
+  maul: { name:'Колун', desc:'Каждое полено поддаётся на удар раньше. Замах тяжёлый и медленный.', price:90, hits:-1, swing:1.35, knot:0, heat:1.15, coin:1 },
+  gold: { name:'Золотой топор', desc:'Лёгкий, как лёгкий топор, колет, как колун, и приносит на 25% больше монет.', price:350, hits:-1, swing:.75, knot:0, heat:.8, coin:1.25 },
+};
+const GEAR = {
+  gloves: { name:'Рукавицы', desc:['Промах реже заканчивается травмой (×0,6).', 'Двойные рукавицы: травма при промахе ещё реже (×0,35).'], price:[40,100] },
+  hat:    { name:'Панама', desc:['В жару перегрев копится на 35% медленнее.'], price:[30] },
+  sled:   { name:'Санки', desc:['Возите больше дров: полено греет больницу на +3°C вместо +2°C.'], price:[50] },
+  kit:    { name:'Аптечка', desc:['Третья жизнь: можно пережить две травмы.'], price:[120] },
+  lantern:{ name:'Керосинка', desc:['Ночью у колоды светло, как днём.'], price:[25] },
+};
+const axeStat = () => AXES[save.axe] || AXES.axe;
+const gearLvl = k => save.gear[k] || 0;
+const maxLives = () => 2 + gearLvl('kit');
+const injuryMul = () => [1, .6, .35][gearLvl('gloves')];
+
+const ACH = [
+  ['first','Первый раскол','Расколоть первое бревно'],
+  ['perfect','Ровно пополам','Расколоть полено идеально пополам'],
+  ['perfect10','Геометр','10 идеальных расколов'],
+  ['combo10','В ритме','Серия из 10 точных ударов'],
+  ['combo25','Машина','Серия из 25 точных ударов'],
+  ['p100','Сотня','Наколоть 100 поленьев за всё время'],
+  ['p1000','Тысяча','Наколоть 1000 поленьев за всё время'],
+  ['knot','Сучкоруб','Расколоть бревно прямо через сучок'],
+  ['gold','Золотая жила','Расколоть золотое бревно'],
+  ['night','Ночная смена','Расколоть бревно ночью'],
+  ['winter','Истопник','Сдать зимнюю смену'],
+  ['hot','Под палящим солнцем','Сдать смену в жару'],
+  ['clean','Ни царапины','Сдать смену без единой травмы'],
+  ['shop','Обновка','Купить что-нибудь в лавке'],
+  ['day5','Бригадир','Дойти до 5-й смены'],
+  ['day10','Легенда леса','Дойти до 10-й смены'],
+];
+const ACH_REWARD = 15;
+const toastQ = []; let toastBusy = false;
+function toast(title, text){
+  toastQ.push([title, text]);
+  if(toastBusy) return;
+  const next = () => {
+    const it = toastQ.shift(); if(!it){ toastBusy = false; return; }
+    toastBusy = true; $('toastT').textContent = it[0]; $('toastD').textContent = it[1];
+    $('toast').classList.add('show');
+    setTimeout(() => { $('toast').classList.remove('show'); setTimeout(next, 500); }, 2600);
+  };
+  next();
+}
+function unlock(id){
+  if(save.ach[id]) return;
+  const a = ACH.find(x => x[0] === id); if(!a) return;
+  save.ach[id] = Date.now();
+  save.coins += ACH_REWARD; save.stats.coinsEarned += ACH_REWARD; persist(); updateHud();
+  toast('Достижение: ' + a[1], a[2] + ` · +${ACH_REWARD}`); sfx.perfect();
+}
+function checkAch(){
+  const st = save.stats;
+  if(st.perfect >= 10) unlock('perfect10');
+  if(st.pieces >= 100) unlock('p100');
+  if(st.pieces >= 1000) unlock('p1000');
+  if(save.day >= 5) unlock('day5');
+  if(save.day >= 10) unlock('day10');
+}
+
 /* ================= HUD ================= */
 let pileItems = [], pileCount = 0;
-let pieces = 0, logsDone = 0, splits = 0, injuries = 0, best = 0;
-try{ best = parseInt(localStorage.getItem('drovosek-best-pieces')||'0',10) || 0; }catch(e){}
-function updateHud(){ $('pieces').textContent = pileCount; $('logs').textContent = logsDone; }
-function updateLives(){ document.querySelectorAll('#lives i').forEach((el,i)=>el.classList.toggle('used', i < injuries)); }
+let pieces = 0, logsDone = 0, splits = 0, injuries = 0, combo = 0;
+let shiftGoal = 12, shiftDone = false, shiftInjured = false;
+const comboMult = () => 1 + Math.min(4, Math.floor(combo/5))*.25;
+function updateHud(){
+  $('pieces').textContent = pileCount; $('logs').textContent = logsDone;
+  $('coins').textContent = save.coins;
+  $('goalText').textContent = `Смена ${save.day}: ${Math.min(pieces, shiftGoal)} из ${shiftGoal} поленьев`;
+  $('goalBar').style.width = Math.min(100, pieces/shiftGoal*100) + '%';
+}
+function updateLives(){
+  const el = $('lives'), n = maxLives();
+  if(el.children.length !== n) el.innerHTML = '<i></i>'.repeat(n);
+  [...el.children].forEach((c,i) => c.classList.toggle('used', i >= n - injuries));
+  el.setAttribute('aria-label', `Здоровье: ${Math.max(0, n - injuries)} из ${n}`);
+}
+function updateCombo(){
+  const el = $('combo');
+  el.hidden = combo < 3;
+  el.textContent = `Серия ${combo} · ×${comboMult().toString().replace('.', ',')}`;
+  el.classList.toggle('hot', combo >= 10);
+}
+function setCombo(n){
+  combo = n;
+  if(n > save.stats.bestCombo) save.stats.bestCombo = n;
+  if(n >= 10) unlock('combo10');
+  if(n >= 25) unlock('combo25');
+  updateCombo();
+}
+const _proj = new V3();
+function floaty(text, worldPos){
+  _proj.copy(worldPos).project(camera);
+  if(_proj.z > 1) return;
+  const el = document.createElement('div'); el.className = 'floaty'; el.textContent = text;
+  el.style.left = ((_proj.x+1)/2*stage.clientWidth) + 'px'; el.style.top = ((1-_proj.y)/2*stage.clientHeight) + 'px';
+  stage.appendChild(el); setTimeout(() => el.remove(), 1000);
+}
+function earn(n, worldPos){
+  n = Math.max(1, Math.round(n*axeStat().coin));
+  save.coins += n; save.stats.coinsEarned += n; persist(); updateHud();
+  if(worldPos) floaty('+' + n, worldPos);
+  const c = $('coinsRow'); c.classList.remove('bump'); void c.offsetWidth; c.classList.add('bump');
+}
+const pieceValue = s => s.kind === 'gold' ? 5 : s.kind === 'twisted' ? 2 : 1;
+// Every piece that ends up in the pile (or sold) counts towards the shift goal.
+function countPiece(){
+  pieces++; save.stats.pieces++;
+  if(pieces > save.best) save.best = pieces;
+  checkAch(); updateHud();
+  if(!shiftDone && pieces >= shiftGoal){ shiftDone = true; later(completeShift, 900); }
+}
 const pop = $('pop');
 function popup(text, cls, long){ pop.className='pop'; void pop.offsetWidth; pop.textContent=text; pop.className='pop show '+cls+(long?' long':''); }
 function flash(level, kind){ const f=$('flash');
+  if(reduceMotion) level *= .5;
   f.style.background = kind==='sun' ? 'radial-gradient(ellipse at 50% 55%, rgba(255,250,220,.25) 15%, rgba(255,226,150,.97))' : '';
-  f.style.transition='none'; f.style.opacity=1; void f.offsetWidth; f.style.transition='opacity .9s'; f.style.opacity=level; }
+  f.style.transition='none'; f.style.opacity=reduceMotion ? .5 : 1; void f.offsetWidth; f.style.transition='opacity .9s'; f.style.opacity=level; }
+const KIND_LABEL = { rotten:' <span class="knot">гнилое</span>', twisted:' <span class="knot">свилеватое</span>', gold:' <span class="knot" style="color:#ffd35a">золотое!</span>' };
 function updateLabel(){
   const el = $('kind');
   if(!cur){ el.textContent=''; return; }
@@ -679,9 +964,9 @@ function updateLabel(){
   let t;
   if(s.round) t = `${s.sp.name}, чурбак Ø ${Math.round(s.R*200)} см`;
   else { const f = flatFit(s.poly); t = `${s.sp.name}, полено ${Math.round(f.h*100)}×${Math.round(f.w*100)} см`; }
-  el.innerHTML = t + (s.knot ? ' <span class="knot">с сучком</span>' : '');
+  el.innerHTML = t + (KIND_LABEL[s.kind] || '') + (s.knot ? ' <span class="knot">с сучком</span>' : '');
 }
-updateHud();
+updateHud(); updateLives();
 
 /* ================= movement ================= */
 const tweens = [], flyers = [];
@@ -693,8 +978,9 @@ function blockPose(s){
   const phi = R(0,TAU), c = polyCentroid(s.poly), r = rotXZ(c.x, c.z, phi);
   return { p:new V3(R(-.05,.05) - r.x, STUMP_TOP + s.h/2, R(-.05,.05) - r.z), q:qAxis(Y, phi), phi };
 }
+function clearGroup(g){ while(g.children.length) disposeTree(g.children[0]); }
 function setCur(g, s, phi, falling){
-  while(g.children.length) g.remove(g.children[0]);
+  clearGroup(g); kbAim = null;
   const mesh = pieceMesh(s); g.add(mesh);
   cur = { g, spec:s, phi, mesh, crack:null, falling, vy:0, rest:STUMP_TOP+s.h/2, wiggle:0, knotty:!!s.knot, warned:false, baseQ:g.quaternion.clone() };
   updateLabel();
@@ -708,8 +994,12 @@ function makeCrack(c, pl){
     kids[dist >= 0 ? 0 : 1].knot = s.knot;
     knotHit = Math.abs(dist) < .12;
   }
-  let hits = 1 + (pl.chord > .55 ? 1 : 0) + (knotHit ? 2 + (Math.random()<.5?1:0) : 0);
-  while(c.g.children.length) c.g.remove(c.g.children[0]);
+  const ax = axeStat(), hard = s.sp.hard || 1;
+  let hits = 1 + (pl.chord > .55 ? 1 : 0) + (hard >= 1.4 && pl.chord > .35 ? 1 : 0) + (s.kind === 'twisted' ? 1 : 0)
+    + (knotHit ? 2 + (Math.random()<.5?1:0) + ax.knot : 0);
+  if(s.kind === 'rotten') hits = 1;
+  hits = Math.max(1, hits + ax.hits);
+  clearGroup(c.g);
   const meshes = kids.map(k => pieceMesh(k));
   c.g.add(meshes[0], meshes[1]);
   c.crack = { P:pl.P, d:pl.d, n:pl.n, kids, meshes, hitsLeft:hits, gap:0, knotHit };
@@ -723,7 +1013,8 @@ function setGap(c, gap){
 const WAIT_SLOTS = [[1.8,-1.3],[2.4,-.55],[1.35,-2.25],[2.7,-1.7],[2.95,.3],[2.1,-2.75]].map(([x,z])=>({ x, z, item:null }));
 const WAIT_BOX = { x0:.8, x1:3.5, z0:-3.3, z1:.8 };
 function toWaiting(g, s){
-  const slot = WAIT_SLOTS.find(w=>!w.item) || WAIT_SLOTS[0];
+  const slot = WAIT_SLOTS.find(w=>!w.item);
+  if(!slot){ toPile(g, s); return; }
   slot.item = { g, s, ready:false };
   const phi = R(0,TAU), c = polyCentroid(s.poly), r = rotXZ(c.x, c.z, phi);
   tween(g, new V3(slot.x - r.x, s.h/2, slot.z - r.z), qAxis(Y, phi), .6, .8, ()=>{ slot.item.ready = true; sfx.land(); });
@@ -739,22 +1030,23 @@ function takeWaiting(){
 }
 
 /* woodpile: pieces are laid flat side down, packed row by row */
-const PILE = { x0:-4.3, x1:-.9, maxH:1.5, stacks:[[],[]], stack:0, rowBase:.08, rowX:-4.3, rowH:0 };
+const PILE = { x0:-4.3, x1:-.9, maxH:1.5, stacks:[[],[],[]], stack:0, rowBase:.08, rowX:-4.3, rowH:0 };
 function resetPile(){
-  PILE.stacks.forEach(a => a.forEach(it => scene.remove(it.g)));
-  PILE.stacks = [[],[]]; PILE.stack = 0; PILE.rowBase = .08; PILE.rowX = PILE.x0; PILE.rowH = 0;
-  pileItems = []; pileCount = 0;
+  PILE.stacks.forEach(a => a.forEach(it => disposeTree(it.g)));
+  PILE.stacks = [[],[],[]]; PILE.stack = 0; PILE.rowBase = .08; PILE.rowX = PILE.x0; PILE.rowH = 0;
+  pileItems = []; pileCount = 0; pileFullWarned = false;
 }
 function removeFromPile(n){
   let removed = 0;
   while(removed < n && pileItems.length){
     const it = pileItems[pileItems.length-1];
     if(!it.landed) break;
-    pileItems.pop(); scene.remove(it.g);
+    pileItems.pop(); disposeTree(it.g);
     const arr = PILE.stacks[it.stack], k = arr.indexOf(it); if(k >= 0) arr.splice(k,1);
     Object.assign(PILE, it.before);
     pileCount--; removed++;
   }
+  if(removed) pileFullWarned = false;
   updateHud();
   return removed;
 }
@@ -763,9 +1055,8 @@ function toPile(g, s){
   const before = { stack:PILE.stack, rowBase:PILE.rowBase, rowX:PILE.rowX, rowH:PILE.rowH };
   if(PILE.rowX + f.w > PILE.x1 && PILE.rowX > PILE.x0){ PILE.rowBase += PILE.rowH + .01; PILE.rowX = PILE.x0; PILE.rowH = 0; }
   if(PILE.rowBase + f.h > PILE.maxH){
-    PILE.stack = (PILE.stack+1) % PILE.stacks.length;
-    PILE.stacks[PILE.stack].forEach(o => { scene.remove(o.g); const k = pileItems.indexOf(o); if(k >= 0) pileItems.splice(k,1); if(o.landed) pileCount--; });
-    PILE.stacks[PILE.stack] = [];
+    if(PILE.stack + 1 >= PILE.stacks.length){ Object.assign(PILE, before); sellPiece(g, s); return; }
+    PILE.stack++;
     PILE.rowBase = .08; PILE.rowX = PILE.x0; PILE.rowH = 0;
   }
   const q = qAxis(new V3(0,0,1), f.psi).multiply(qAxis(new V3(1,0,0), Math.PI/2));
@@ -773,7 +1064,15 @@ function toPile(g, s){
   PILE.rowX += f.w + .015; PILE.rowH = Math.max(PILE.rowH, f.h);
   const item = { g, s, landed:false, before, stack:PILE.stack };
   PILE.stacks[PILE.stack].push(item); pileItems.push(item);
-  tween(g, p, q, .8, 1.3, ()=>{ item.landed = true; if(pileItems.includes(item)) pileCount++; pieces++; updateHud(); sfx.stack(); });
+  tween(g, p, q, .8, 1.3, ()=>{ item.landed = true; if(pileItems.includes(item)) pileCount++; earn(pieceValue(s)*comboMult(), g.position); countPiece(); sfx.stack(); });
+}
+// The pile is full: the piece goes to the neighbour's cart for coins instead of vanishing silently.
+let pileFullWarned = false;
+function sellPiece(g, s){
+  tween(g, g.position.clone().add(new V3(R(-.3,.3), 1.6, -1.5)), g.quaternion.clone(), .5, .4, () => disposeTree(g));
+  earn(pieceValue(s)*comboMult(), g.position);
+  countPiece();
+  if(!pileFullWarned){ pileFullWarned = true; popup(climate === 'winter' ? 'Поленница полна! Несите дрова в больницу' : 'Поленница полна, излишки продаём', 'ok', true); }
 }
 function route(g, s){
   if(isSmall(s)) toPile(g, s);
@@ -796,14 +1095,17 @@ function splitCur(){
   scene.remove(c.g);
 }
 function spawnLog(){
-  if(started){ logsDone++; updateHud(); }
+  if(started){ logsDone++; save.stats.logs++; updateHud(); }
   started = true;
   const first = pieces === 0 && logsDone === 0;
-  const sp = first ? SPECIES[0] : SPECIES[Math.floor(Math.random()*SPECIES.length)];
+  const base = first ? SPECIES[0] : SPECIES[Math.floor(Math.random()*SPECIES.length)];
+  let kind = 'normal';
+  if(!first){ const r = Math.random(); if(save.day >= 2 && r < .035) kind = 'gold'; else if(r < .11) kind = 'rotten'; else if(r < .21) kind = 'twisted'; }
+  const sp = kind === 'normal' ? base : variant(base, kind);
   const Rr = first ? .3 : R(.2,.38), h = first ? .7 : R(.5,.85);
   let knot = null;
   if(!first && Math.random() < .4){ const a = R(0,TAU); knot = { a, x:Math.sin(a)*Rr, z:Math.cos(a)*Rr, y:R(-.28,.28)*h }; }
-  const s = { poly:circlePoly(Rr), h, R:Rr, sp, round:true, knot };
+  const s = { poly:circlePoly(Rr), h, R:Rr, sp, round:true, knot, kind };
   sp.bark.map.offset.set(Math.random(), Math.random());
   const phi = R(0,TAU), g = new THREE.Group();
   g.quaternion.copy(qAxis(Y, phi));
@@ -823,11 +1125,51 @@ function spawnChips(p, n, mat){
   }
 }
 
+/* ================= sawdust ================= */
+// One pooled Points cloud; each burst recolours its particles to the wood being split.
+const DUST_N = LOW ? 220 : 480;
+const dustGeo = new THREE.BufferGeometry();
+const dustPos = new Float32Array(DUST_N*3), dustCol = new Float32Array(DUST_N*3), dustVel = new Float32Array(DUST_N*3), dustLife = new Float32Array(DUST_N);
+dustGeo.setAttribute('position', new THREE.BufferAttribute(dustPos, 3));
+dustGeo.setAttribute('color', new THREE.BufferAttribute(dustCol, 3));
+const dustPts = new THREE.Points(dustGeo, new THREE.PointsMaterial({ size:.035, map:softDot, vertexColors:true, transparent:true, depthWrite:false, opacity:.9 }));
+dustPts.frustumCulled = false; scene.add(dustPts);
+for(let i=0;i<DUST_N;i++) dustPos[i*3+1] = -10;
+let dustNext = 0, dustAlive = 0;
+function dust(p, n, color){
+  for(let j=0;j<n;j++){
+    const i = dustNext; dustNext = (dustNext+1) % DUST_N;
+    dustPos[i*3] = p.x + R(-.06,.06); dustPos[i*3+1] = p.y + R(0,.05); dustPos[i*3+2] = p.z + R(-.06,.06);
+    const a = R(0,TAU), sp = R(.4,2.2);
+    dustVel[i*3] = Math.cos(a)*sp; dustVel[i*3+1] = R(.6,2.6); dustVel[i*3+2] = Math.sin(a)*sp;
+    const l = R(.8,1.15); dustCol[i*3] = color.r*l; dustCol[i*3+1] = color.g*l; dustCol[i*3+2] = color.b*l;
+    dustLife[i] = R(.5,1.1);
+  }
+  dustAlive = 1.2;
+  dustGeo.attributes.color.needsUpdate = true;
+}
+function updateDust(dt){
+  if(dustAlive <= 0) return;
+  dustAlive -= dt;
+  for(let i=0;i<DUST_N;i++){
+    if(dustLife[i] <= 0) continue;
+    dustLife[i] -= dt;
+    dustVel[i*3+1] -= 6*dt;
+    const drag = Math.max(0, 1 - dt*2.5);
+    dustVel[i*3] *= drag; dustVel[i*3+2] *= drag;
+    dustPos[i*3] += dustVel[i*3]*dt; dustPos[i*3+1] += dustVel[i*3+1]*dt; dustPos[i*3+2] += dustVel[i*3+2]*dt;
+    if(dustPos[i*3+1] < .01){ dustPos[i*3+1] = .01; dustVel[i*3] = dustVel[i*3+2] = 0; }
+    if(dustLife[i] <= 0) dustPos[i*3+1] = -10;
+  }
+  dustGeo.attributes.position.needsUpdate = true;
+}
+
 /* ================= current piece seen from the player ================= */
+const _pe = new V3();
 function pieceExtent(c){
   c.g.updateMatrixWorld(true);
   let min = 1e9, max = -1e9;
-  const v = new V3();
+  const v = _pe;
   for(const p of c.spec.poly){ v.set(p.x,0,p.z); c.g.localToWorld(v); rig.worldToLocal(v); min = Math.min(min,v.x); max = Math.max(max,v.x); }
   const cc = polyCentroid(c.spec.poly); v.set(cc.x,0,cc.z); c.g.localToWorld(v); rig.worldToLocal(v);
   return { min, max, cx:v.x };
@@ -861,6 +1203,7 @@ function cutPlan(c, ax){
 const IDLE = -1.15, WIND = 1.05;
 let state='idle', st=0, axeTh=IDLE, thFrom=IDLE, xFrom=0, aimX=0, strikeTh=0, deepTh=0, hitClass='', result='', shake=0;
 let plan = null, heat = 0, heatWarned = false, strokePending = false, lastInjury = 'axe', hoverX = null, hurtPending = false, gameOver = false, yawTarget = 0;
+let paused = false, hitStop = 0, night = 0, kbAim = null;
 const CAM_STAND = new V3(-.12, 1.72, 1.5), LOOK_STAND = new V3(0, .85, -.15);
 const camLocal = CAM_STAND.clone(), lookLocal = LOOK_STAND.clone();
 let roll = 0, fall = null, amb = null;
@@ -879,40 +1222,46 @@ function aimFrom(e){
 }
 function strike(x){
   audio();
-  if(gameOver || state!=='idle' || !cur || cur.falling) return;
+  if(gameOver || paused || state!=='idle' || !cur || cur.falling) return;
   aimX = clamp(x, -.75, .75);
   plan = cutPlan(cur, aimX);
   hitClass = plan.cls;
   if(climate === 'hot'){
-    heat += 1;
+    heat += axeStat().heat * (gearLvl('hat') ? .65 : 1);
     const risk = heat > 2.5 ? (heat-2.5)*.18*(.6 + (tempOut-30)/25) : 0;
     if(Math.random() < risk) strokePending = true;
-    else if(heat > 2.5 && !heatWarned){ heatWarned = true; setTimeout(()=>popup('Жарко! Передохните','ok'), 500); }
+    else if(heat > 2.5 && !heatWarned){ heatWarned = true; later(()=>popup('Жарко! Передохните','ok'), 500); }
   }
   state = 'windup'; st = 0; thFrom = axeTh; xFrom = axe.position.x;
   marker.visible = false;
+}
+function hurt(kind){
+  injuries++; updateLives(); lastInjury = kind; shiftInjured = true; save.stats.injuries++; persist(); setCombo(0);
+  return injuries >= maxLives();
 }
 function resolveHit(){
   resolveHitCore();
   if(strokePending){
     strokePending = false;
     if(!hurtPending){
-      injuries++; updateLives(); lastInjury = 'stroke'; heat = Math.max(0, heat-2);
-      if(injuries >= 2){ hurtPending = true; setTimeout(()=>popup('Солнечный удар!','bad'), 250); }
-      else { flash(.2,'sun'); sfx.ouch(); shake = .2; setTimeout(()=>popup('Солнечный удар! Рубите медленнее','bad'), 250); }
+      heat = Math.max(0, heat-2);
+      if(hurt('stroke')){ hurtPending = true; later(()=>popup('Солнечный удар!','bad'), 250); }
+      else { flash(.2,'sun'); sfx.ouch(); shake = .2; later(()=>popup('Солнечный удар! Рубите медленнее','bad'), 250); }
     }
   }
 }
 function resolveHitCore(){
   const c = cur, s = c.spec;
+  pitch = 1/Math.sqrt(s.sp.hard || 1);
   const top = rig.localToWorld(new V3(aimX, topY(), 0));
   if(hitClass === 'block' || hitClass === 'edge'){
-    if(hitClass === 'block'){ result = 'stuck'; sfx.block(); spawnChips(rig.localToWorld(new V3(aimX, STUMP_TOP, 0)), 4, SPECIES[0].inner); }
+    if(hitClass === 'block'){ result = 'stuck'; sfx.block(); spawnChips(rig.localToWorld(new V3(aimX, STUMP_TOP, 0)), 4, SPECIES[0].inner); dust(rig.localToWorld(new V3(aimX, STUMP_TOP, 0)), 14, SPECIES[0].dust); }
     else { result = 'glance'; sfx.glance(); c.wiggle = .3; spawnChips(top, 5, s.sp.inner); }
-    shake = .05;
-    if(Math.random() < .28){
-      injuries++; updateLives(); lastInjury = 'axe';
-      if(injuries >= 2){ hurtPending = true; result = 'glance'; popup('Ай! Опять по ноге','bad'); }
+    shake = .05; setCombo(0);
+    // A clean miss into the block is riskier than a glancing blow off the edge; gloves help with both.
+    const risk = (hitClass === 'block' ? .3 : .14) * injuryMul();
+    if(Math.random() < risk){
+      if(hurt('axe')){ hurtPending = true; result = 'glance'; popup('Ай! Опять по ноге','bad'); }
       else { sfx.ouch(); flash(.18); shake = .15; popup('Ай! По ноге','bad'); }
     } else popup(hitClass === 'block' ? 'Промах' : 'Слишком с краю, соскользнул', 'ok');
     return;
@@ -923,20 +1272,33 @@ function resolveHitCore(){
   const replaced = k && !same;
   if(!same) makeCrack(c, pl);
   c.crack.hitsLeft--;
+  setCombo(combo + 1);
   spawnChips(top, 9, s.sp.inner);
+  dust(top, 26, s.sp.dust);
   if(c.crack.hitsLeft <= 0){
-    result = 'split'; sfx.split(); shake = .12; splits++;
+    result = 'split'; sfx.split(); splits++; save.stats.splits++;
+    shake = Math.min(.24, .1 + areaOf(s)*.5); hitStop = .075;
     deepTh = angleFor(STUMP_TOP - .02);
     spawnChips(top.clone().setY(top.y - .2), 14, s.sp.inner);
+    dust(top.clone().setY(top.y - .15), 60, s.sp.dust);
+    unlock('first');
+    if(c.crack.knotHit){ save.stats.knots++; unlock('knot'); }
+    if(s.kind === 'gold' && s.round){ save.stats.gold++; unlock('gold'); earn(10, top); sfx.fanfare(); }
+    if(night > .6) unlock('night');
+    const [a0, a1] = c.crack.kids.map(areaOf), ratio = Math.min(a0,a1)/Math.max(a0,a1);
     const small = c.crack.kids.filter(isSmall).length;
-    popup(small === 2 ? 'Оба в поленницу!' : small === 1 ? 'Одно в поленницу!' : 'Раскололось!', 'good');
+    if(ratio > .9){
+      save.stats.perfect++; unlock('perfect'); checkAch(); earn(1, top.clone().setY(top.y + .25)); sfx.perfect();
+      popup(combo >= 5 ? `Идеально пополам! Серия ${combo}` : 'Идеально пополам!', 'good');
+    } else popup(small === 2 ? 'Оба в поленницу!' : small === 1 ? 'Одно в поленницу!' : s.kind === 'rotten' ? 'Гнилое — рассыпалось' : 'Раскололось!', 'good');
+    persist();
     if(splits >= 4) $('hint').style.opacity = 0;
     splitCur();
   } else {
-    result = 'stuck'; shake = .06; c.wiggle = .3;
+    result = 'stuck'; shake = .06; c.wiggle = .3; hitStop = .035;
     setGap(c, c.crack.gap + .013);
     if(c.crack.knotHit){ sfx.knot(); popup(!c.warned ? 'Попали в сучок, рубится туго' : 'Сидит туго', 'ok'); c.warned = true; }
-    else { sfx.thunk(); popup(replaced ? 'Новая трещина' : 'Трещина, ещё удар', 'ok'); }
+    else { sfx.thunk(); popup(replaced ? 'Новая трещина' : s.sp.hard >= 1.4 ? 'Дуб крепкий, ещё удар' : 'Трещина, ещё удар', 'ok'); }
   }
 }
 
@@ -969,7 +1331,11 @@ function startFall(){
     const k = clamp(ap.dot(ab)/ab.lengthSq(), 0, 1);
     if(ap.sub(ab.multiplyScalar(k)).length() < 3) t.visible = false;
   }
+  syncTrees();
 }
+const ambBlue = new THREE.PointLight(0x3a6bff, 0, 16, 2), ambHead = new THREE.PointLight(0xfff0d0, 0, 12, 2);
+scene.add(ambBlue, ambHead);
+function releaseAmbLights(){ ambBlue.intensity = ambHead.intensity = 0; scene.add(ambBlue, ambHead); }
 function makeAmbulance(){
   const g = new THREE.Group();
   const white = std({ color:0xf1f1ec, roughness:.35, envMapIntensity:.9 });
@@ -1012,8 +1378,8 @@ function makeAmbulance(){
     const m = new THREE.Mesh(new THREE.BoxGeometry(.5,.16,.3), new THREE.MeshStandardMaterial({ color:0x2050ff, emissive:0x2a5cff, emissiveIntensity:1 }));
     m.position.set(sx*.35,2.55,.9); g.add(m); return m;
   });
-  const blue = new THREE.PointLight(0x3a6bff, 0, 16, 2); blue.position.set(0,3,1); g.add(blue);
-  const head = new THREE.PointLight(0xfff0d0, 1.2, 12, 2); head.position.set(0,1,3.8); g.add(head);
+  const blue = ambBlue; blue.position.set(0,3,1); g.add(blue);
+  const head = ambHead; head.intensity = 1.2; head.position.set(0,1,3.8); g.add(head);
   return { g, wheels, lamps, blue, door };
 }
 function makeMedic(){
@@ -1143,10 +1509,11 @@ function updateAmbulance(dt, t){
   amb.lamps[1].material.emissiveIntensity = on ? .1 : 2;
   amb.blue.intensity = 3 + Math.sin(t*32)*2;
 }
-let cardAction = null;
-function showCard(title, text, btn, action){
+let cardAction = null, cardAction2 = null;
+function showCard(title, text, btn, action, btn2, action2){
   $('overTitle').textContent = title; $('overStats').textContent = text; $('again').textContent = btn;
-  cardAction = action; $('over').hidden = false; $('again').focus();
+  $('again2').hidden = !btn2; if(btn2) $('again2').textContent = btn2;
+  cardAction = action; cardAction2 = action2 || null; $('over').hidden = false; $('again').focus();
 }
 const pick = a => a[Math.floor(Math.random()*a.length)];
 const fmtT = v => (Math.round(v) >= 0 ? '+' : '−') + Math.abs(Math.round(v)) + '°C';
@@ -1160,9 +1527,10 @@ function hospitalOutcome(){
     const txt = lastInjury === 'stroke'
       ? pick(['Вас обернули мокрой простынёй, дали холодного кваса и велели рубить помедленнее.', 'Медсестра обмахивала вас историей болезни, пока не полегчало. Шапку — на голову.'])
       : pick(['Хирург зашил ногу аккуратной ёлочкой, медсестра налила чаю.', 'Вам наложили шину, выдали справку и отправили обратно: дрова сами себя не наколют.', 'Главврач посмотрел на ногу, сказал «до свадьбы заживёт» и выписал.']);
-    showCard('Вас подлатали', `${txt} В больнице ${fmtT(hospH)}.`, 'Вернуться к колоде', heal);
+    const tip = gearLvl('gloves') < 2 ? ' В лавке продаются рукавицы — с ними промах реже бьёт по ноге.' : '';
+    showCard('Вас подлатали', `${txt} В больнице ${fmtT(hospH)}.${tip}`, 'Вернуться к колоде', heal);
   } else {
-    if(pieces > best){ best = pieces; try{ localStorage.setItem('drovosek-best-pieces', best); }catch(e){} }
+    persist();
     const h = fmtT(hospH);
     const txt = pick([
       'Пока врач зашивал ваши дырки, замёрз сам и умер. Вы тоже.',
@@ -1172,74 +1540,199 @@ function hospitalOutcome(){
       'Главврач прошептал «хоть бы пару поленьев…» и больше ничего не сказал. Как и вы.',
       `Градусник показал ${h}. Про вас градусник уже ничего не показал.`,
     ]);
-    showCard('В больнице холодно', `${txt} Наколото поленьев: ${pieces}, сожжено в печи: ${burned}, брёвен расколото: ${logsDone}. Рекорд: ${best}.`, 'Колоть заново', restart);
+    showCard('В больнице холодно', `${txt} Наколото поленьев: ${pieces}, сожжено в печи: ${burned}, брёвен расколото: ${logsDone}. Смена ${save.day} начнётся заново — монеты и покупки остаются.`, 'Колоть заново', restart, 'Лавка', () => openMenu('shop'));
   }
 }
-function heal(){
-  $('over').hidden = true;
-  if(res){ res.medics.forEach(m => scene.remove(m.g)); scene.remove(res.str); res = null; }
-  if(amb){ scene.remove(amb.g); amb = null; }
-  fall = null; trees.forEach(t => t.visible = true);
+function completeShift(){
+  if(gameOver) return;
+  gameOver = true; marker.visible = false;
+  const W = climate === 'winter', H = climate === 'hot';
+  const reward = 10 + save.day*5, clean = !shiftInjured, warmBonus = W ? Math.max(0, Math.round((hospH - HOSP_WARM)*1.5)) : 0;
+  const total = reward + (clean ? 10 : 0) + warmBonus;
+  save.coins += total; save.stats.coinsEarned += total; save.stats.shifts++;
+  if(W) unlock('winter'); if(H) unlock('hot'); if(clean) unlock('clean');
+  save.day++; save.stats.bestDay = Math.max(save.stats.bestDay, save.day);
+  checkAch(); persist(); updateHud(); sfx.fanfare();
+  const parts = [`Наколото ${pieces} ${plural(pieces,'полено','полена','поленьев')}. Оплата за смену: ${reward}`];
+  if(clean) parts.push('без травм: +10');
+  if(warmBonus) parts.push(`тёплая больница: +${warmBonus}`);
+  showCard(`Смена ${save.day - 1} сдана!`, parts.join(', ') + `. Всего +${total} монет. Дальше — смена ${save.day}: ${previewWeather(save.day)}.`, 'Следующая смена', restart, 'Лавка', () => openMenu('shop'));
+}
+// Clears the player, rescue scene and timers. Shared by heal (same round) and restart (new round).
+function resetPlayer(){
+  clearTimers(); stopSiren();
+  $('over').hidden = true; $('flash').style.opacity = 0; document.activeElement && document.activeElement.blur();
+  fadeEl.style.transition = 'none'; fadeEl.style.opacity = 0; void fadeEl.offsetWidth; fadeEl.style.transition = '';
+  if(res){ res.medics.forEach(m => disposeTree(m.g, true)); disposeTree(res.str, true); res = null; }
+  if(amb){ releaseAmbLights(); disposeTree(amb.g, true); amb = null; }
+  fall = null; showAllTrees();
   state = 'idle'; st = 0; axeTh = IDLE; axe.position.set(0, PIVOT_Y, PIVOT_Z); axe.rotation.z = 0; axe.visible = true; arms.forEach(a=>a.visible=true);
-  camLocal.copy(CAM_STAND); lookLocal.copy(LOOK_STAND); roll = 0; shake = 0;
-  injuries = 0; heat = 0; heatWarned = false; updateLives();
+  camLocal.copy(CAM_STAND); lookLocal.copy(LOOK_STAND); roll = 0; shake = 0; hitStop = 0;
+  injuries = 0; heat = 0; heatWarned = false; lastInjury = 'axe'; hoverX = null; kbAim = null; keys.left = keys.right = false;
   gameOver = false; hurtPending = false; strokePending = false;
-  $('flash').style.opacity = 0; fadeEl.style.opacity = 0;
+  updateLives(); setCombo(0);
+}
+function heal(){
+  resetPlayer();
   popup('Снова у колоды','good');
 }
 function restart(){
-  newWeather();
-  stopSiren(); $('over').hidden = true; $('flash').style.opacity = 0;
-  if(res){ res.medics.forEach(m => scene.remove(m.g)); scene.remove(res.str); res = null; }
-  fadeEl.style.transition = 'none'; fadeEl.style.opacity = 0; void fadeEl.offsetWidth; fadeEl.style.transition = '';
-  const groups = [cur && cur.g, ...WAIT_SLOTS.map(w=>w.item && w.item.g), ...flyers.map(f=>f.g), ...tweens.map(t=>t.g), amb && amb.g];
-  groups.forEach(g => g && scene.remove(g));
+  resetPlayer();
+  const groups = [cur && cur.g, ...WAIT_SLOTS.map(w=>w.item && w.item.g), ...flyers.map(f=>f.g), ...tweens.map(t=>t.g)];
+  groups.forEach(g => disposeTree(g));
   chips.forEach(c => scene.remove(c.m)); chips.length = 0;
-  trees.forEach(t => t.visible = true);
-  resetPile(); cur = null; amb = null; fall = null; WAIT_SLOTS.forEach(w => w.item = null); flyers.length = 0; tweens.length = 0;
-  pieces = 0; logsDone = 0; splits = 0; injuries = 0; started = false; blockIncoming = false; idleT = 0;
-  state = 'idle'; axeTh = IDLE; axe.position.set(0, PIVOT_Y, PIVOT_Z); axe.rotation.z = 0; axe.visible = true; arms.forEach(a=>a.visible=true);
-  camLocal.copy(CAM_STAND); lookLocal.copy(LOOK_STAND); roll = 0; shake = 0;
-  gameOver = false; hurtPending = false; strokePending = false; heat = 0; heatWarned = false;
-  updateHud(); updateLives(); updateLabel(); $('hint').style.opacity = 1;
+  resetPile(); cur = null; WAIT_SLOTS.forEach(w => w.item = null); flyers.length = 0; tweens.length = 0;
+  pieces = 0; logsDone = 0; splits = 0; started = false; blockIncoming = false; idleT = 0; shiftDone = false; shiftInjured = false;
+  yawTarget = 0; rig.rotation.y = 0;
+  newWeather();
+  updateHud(); updateLabel(); $('hint').style.opacity = 1;
+  later(weatherPopup, 300);
 }
 $('again').addEventListener('click', () => cardAction && cardAction());
+$('again2').addEventListener('click', () => cardAction2 && cardAction2());
+
+/* ================= menu: shop, achievements, stats ================= */
+let menuTab = 'shop';
+function openMenu(tab){
+  if(tab) menuTab = tab;
+  paused = true; drag = null; hoverX = null; keys.left = keys.right = false;
+  $('menuTitle').textContent = gameOver ? 'Лавка и достижения' : 'Пауза';
+  $('resume').textContent = gameOver ? 'Назад' : 'Продолжить';
+  $('menu').hidden = false; renderMenu();
+  const t = document.querySelector(`#menu [data-tab="${menuTab}"]`); t && t.focus();
+}
+function closeMenu(){
+  $('menu').hidden = true; paused = false; clock.getDelta();
+  if(!$('over').hidden) $('again').focus(); else document.activeElement && document.activeElement.blur();
+}
+function buyBtn(label, price, disabled, act){ return `<button data-act="${act}" ${disabled ? 'disabled' : ''}>${label}${price ? ` · ${price}` : ''}</button>`; }
+function renderMenu(){
+  $('menuCoins').textContent = save.coins;
+  document.querySelectorAll('#menu [role=tab]').forEach(b => b.setAttribute('aria-selected', b.dataset.tab === menuTab));
+  let h = '';
+  if(menuTab === 'shop'){
+    h += '<div class="list">';
+    for(const [id, a] of Object.entries(AXES)){
+      const own = save.owned[id], eq = save.axe === id;
+      const btn = eq ? buyBtn('В руках', 0, true, '') : own ? buyBtn('Взять', 0, false, 'equip:'+id) : buyBtn('Купить', a.price, save.coins < a.price, 'axe:'+id);
+      h += `<div class="item"><div class="txt"><b>${a.name}</b><small>${a.desc}</small></div>${btn}</div>`;
+    }
+    for(const [id, g] of Object.entries(GEAR)){
+      const lvl = gearLvl(id), max = g.price.length, done = lvl >= max, price = g.price[Math.min(lvl, max-1)];
+      const name = g.name + (max > 1 ? ` ${Math.min(lvl + (done ? 0 : 1), max)}/${max}` : '');
+      const desc = g.desc[Math.min(lvl, max-1)];
+      h += `<div class="item"><div class="txt"><b>${name}</b><small>${desc}</small></div>${done ? buyBtn('Есть', 0, true, '') : buyBtn('Купить', price, save.coins < price, 'gear:'+id)}</div>`;
+    }
+    h += '</div>';
+  } else if(menuTab === 'ach'){
+    const got = ACH.filter(a => save.ach[a[0]]).length;
+    h += `<p style="margin:0 0 12px">Открыто ${got} из ${ACH.length}. За каждое — ${ACH_REWARD} монет.</p><div class="list">`;
+    for(const [id, name, desc] of ACH) h += `<div class="item ${save.ach[id] ? '' : 'locked'}"><span class="medal">${save.ach[id] ? '★' : '?'}</span><div class="txt"><b>${name}</b><small>${desc}</small></div></div>`;
+    h += '</div>';
+  } else {
+    const st = save.stats;
+    const rows = [['Смена', save.day], ['Лучшая смена', st.bestDay], ['Поленьев наколото', st.pieces], ['Брёвен расколото', st.splits], ['Идеально пополам', st.perfect],
+      ['Лучшая серия', st.bestCombo], ['Через сучок', st.knots], ['Золотых брёвен', st.gold], ['Сожжено в больнице', st.burned], ['Травм', st.injuries], ['Смен сдано', st.shifts], ['Монет заработано', st.coinsEarned]];
+    h += '<div class="stats">' + rows.map(([a,b]) => `<span>${a}</span><span>${b}</span>`).join('') + '</div>';
+    h += '<div class="row" style="margin-bottom:14px"><button class="alt" data-act="reset">Сбросить прогресс</button></div>';
+  }
+  $('menuBody').innerHTML = h;
+}
+$('menuBody').addEventListener('click', e => {
+  const b = e.target.closest('button[data-act]'); if(!b || b.disabled) return;
+  const [act, id] = b.dataset.act.split(':');
+  if(act === 'axe' && save.coins >= AXES[id].price){ save.coins -= AXES[id].price; save.owned[id] = true; save.axe = id; sfx.buy(); unlock('shop'); }
+  else if(act === 'equip'){ save.axe = id; sfx.stack(); }
+  else if(act === 'gear'){ const g = GEAR[id], lvl = gearLvl(id), p = g.price[lvl]; if(p != null && save.coins >= p){ save.coins -= p; save.gear[id] = lvl + 1; sfx.buy(); unlock('shop'); } }
+  else if(act === 'reset'){
+    if(!confirm('Стереть монеты, покупки, достижения и статистику?')) return;
+    const m = save.muted; Object.keys(save).forEach(k => delete save[k]);
+    Object.assign(save, { coins:0, best:0, day:1, axe:'axe', owned:{ axe:true }, gear:{}, ach:{}, muted:m, seenIntro:true, stats:Object.assign({}, STATS0) });
+    persist(); closeMenu(); restart(); return;
+  }
+  persist(); updateHud(); updateLives(); renderMenu();
+  const again = $('menuBody').querySelector(`[data-act="${b.dataset.act}"]`); (again && !again.disabled ? again : document.querySelector('#menu [aria-selected="true"]')).focus();
+});
+document.querySelectorAll('#menu [role=tab]').forEach(b => b.addEventListener('click', () => { menuTab = b.dataset.tab; renderMenu(); b.focus(); }));
+$('resume').addEventListener('click', closeMenu);
+$('menuBtn').addEventListener('click', e => { e.stopPropagation(); audio(); openMenu(); });
+$('soundBtn').addEventListener('click', e => { e.stopPropagation(); audio(); setMuted(!muted); });
 
 /* ================= input ================= */
+// Mouse: hover aims, click strikes, drag orbits. Touch: press on the log, slide to aim, release to strike;
+// a drag that starts off the log orbits the block. Keyboard: ← → orbit, Q/E aim, Space/Enter strike.
 let drag = null;
-const canRotate = () => !gameOver && state !== 'down';
+const canRotate = () => !gameOver && !paused && state !== 'down';
+function onLog(p){
+  if(!p || !cur || cur.falling) return false;
+  const ext = pieceExtent(cur);
+  return p.x > ext.min - .12 && p.x < ext.max + .12 && Math.abs(p.z) < 1.1;
+}
 stage.addEventListener('pointerdown', e => {
   if(e.target.closest('button')) return;
   e.preventDefault(); audio();
-  drag = { id:e.pointerId, x0:e.clientX, y0:e.clientY, last:e.clientX, moved:false };
+  if(paused) return;
+  const p = aimFrom(e);
+  const aim = e.pointerType !== 'mouse' && onLog(p) && state === 'idle' && !gameOver;
+  drag = { id:e.pointerId, x0:e.clientX, y0:e.clientY, last:e.clientX, moved:false, aim, type:e.pointerType };
+  if(aim) hoverX = p.x;
   try{ stage.setPointerCapture(e.pointerId); }catch(_){}
 });
 stage.addEventListener('pointermove', e => {
+  if(paused) return;
   if(drag && e.pointerId === drag.id){
+    if(drag.aim){
+      const p = aimFrom(e); if(p) hoverX = p.x;
+      return;
+    }
     const dx = e.clientX - drag.last; drag.last = e.clientX;
     if(!drag.moved && Math.hypot(e.clientX-drag.x0, e.clientY-drag.y0) > 10){ drag.moved = true; stage.classList.add('dragging'); }
     if(drag.moved && canRotate()) yawTarget -= dx*.008;
   }
   if(e.pointerType === 'mouse' && !(drag && drag.moved)){
     const p = aimFrom(e);
-    hoverX = (p && Math.abs(p.x) < .9 && Math.abs(p.z) < 1.2) ? p.x : null;
+    hoverX = onLog(p) ? p.x : null;
   } else if(drag && drag.moved) hoverX = null;
 });
 stage.addEventListener('pointerup', e => {
   if(!drag || e.pointerId !== drag.id) return;
   const d = drag; drag = null; stage.classList.remove('dragging');
-  if(!d.moved){ const p = aimFrom(e); if(p) strike(p.x); }
+  if(paused) return;
+  if(d.aim){
+    const x = hoverX; hoverX = null;
+    if(x !== null && cur && !cur.falling) strike(x);
+    return;
+  }
+  if(d.moved) return;
+  const p = aimFrom(e);
+  if(onLog(p)) strike(p.x);
+  else if(cur && !cur.falling && state === 'idle' && !gameOver) popup(d.type === 'mouse' ? 'Цельтесь в полено' : 'Прижмите палец к полену', 'ok');
 });
-stage.addEventListener('pointercancel', () => { drag = null; stage.classList.remove('dragging'); });
-stage.addEventListener('pointerleave', () => { hoverX = null; });
+stage.addEventListener('pointercancel', () => { drag = null; hoverX = null; stage.classList.remove('dragging'); });
+stage.addEventListener('pointerleave', e => { if(e.pointerType === 'mouse') hoverX = null; });
 const keys = { left:false, right:false };
+window.addEventListener('blur', () => { keys.left = keys.right = false; });
 window.addEventListener('keydown', e => {
+  if(e.code === 'Escape' || e.code === 'KeyP'){
+    e.preventDefault();
+    if(!$('menu').hidden) closeMenu(); else if($('over').hidden || e.code === 'Escape') openMenu();
+    return;
+  }
+  if(e.code === 'KeyM'){ setMuted(!muted); return; }
+  // Buttons and dialogs handle their own Space/Enter; don't swing the axe underneath them.
+  const btn = e.target && e.target.closest && e.target.closest('button');
+  if(!$('menu').hidden || (btn && btn.offsetParent && (e.code === 'Space' || e.code === 'Enter'))) return;
   if(e.code==='ArrowLeft' || e.code==='KeyA'){ keys.left = true; e.preventDefault(); }
   if(e.code==='ArrowRight' || e.code==='KeyD'){ keys.right = true; e.preventDefault(); }
+  if((e.code==='KeyQ' || e.code==='KeyE') && cur && !cur.falling){
+    const ext = pieceExtent(cur);
+    kbAim = clamp((kbAim ?? ext.cx) + (e.code==='KeyE' ? .03 : -.03), ext.min + .02, ext.max - .02);
+    hoverX = kbAim; e.preventDefault();
+  }
   if((e.code==='Space' || e.code==='Enter') && !e.repeat){
     e.preventDefault();
     if(gameOver){ if(!$('over').hidden && cardAction) cardAction(); return; }
-    if(cur) strike(hoverX ?? pieceExtent(cur).cx);
+    if(cur) strike(kbAim ?? hoverX ?? pieceExtent(cur).cx + R(-.04,.04));
   }
 });
 window.addEventListener('keyup', e => {
@@ -1249,31 +1742,61 @@ window.addEventListener('keyup', e => {
 
 function resize(){
   const w = stage.clientWidth, h = stage.clientHeight;
+  renderer.setPixelRatio(dpr);
   renderer.setSize(w, h, false);
   camera.aspect = w/h; camera.fov = camera.aspect < .8 ? 82 : 70;
   camera.updateProjectionMatrix();
 }
 window.addEventListener('resize', resize); resize();
+// Adaptive resolution: drop the pixel ratio when frames run slow, creep back up when there is headroom.
+const perf = { t:0, n:0, cool:3 };
+function adaptQuality(rawDt){
+  perf.t += rawDt; perf.n++; perf.cool -= rawDt;
+  if(perf.t < 2) return;
+  const avg = perf.t/perf.n; perf.t = 0; perf.n = 0;
+  if(perf.cool > 0 || document.hidden) return;
+  if(avg > 1/40 && dpr > 1){ dpr = Math.max(1, dpr - .25); resize(); perf.cool = 4; }
+  else if(avg < 1/58 && dpr < MAX_DPR){ dpr = Math.min(MAX_DPR, dpr + .25); resize(); perf.cool = 8; }
+}
+if(document.fonts && document.fonts.ready) document.fonts.ready.then(() => hosp.signTex.redraw());
 
 /* ================= weather, hospital heating ================= */
-const HOSP_WARM = 12, HOSP_MAX = 26, HOSP_PER = 2;
+const HOSP_WARM = 12, HOSP_MAX = 26;
+const hospPer = () => gearLvl('sled') ? 3 : 2;
 let tempOut = 10, climate = 'mild', hospH = 20, burned = 0, tripDone = false;
+// Campaign: the first three shifts introduce one climate each, later ones are seeded per shift and get harsher.
+function shiftWeather(day){
+  if(day === 1) return 14;
+  if(day === 2) return 32;
+  if(day === 3) return -8;
+  let n = (day*48271) % 2147483647 || 1;
+  const rnd = () => (n = (n*16807) % 2147483647) / 2147483647;
+  const r = rnd(), k = Math.min(1, (day-3)/12);
+  if(r < .45) return -Math.round(8 + 42*k*(.6 + .4*rnd()));
+  if(r < .75) return Math.round(30 + 20*k*(.5 + .5*rnd()));
+  return Math.round(5 + rnd()*20);
+}
+const shiftGoalFor = day => Math.min(60, 10 + (day-1)*5);
+function previewWeather(day){ const t = shiftWeather(day); return (t < 0 ? `мороз ${fmtT(t)}` : t >= 30 ? `жара ${fmtT(t)}` : `${fmtT(t)}, погода без капризов`) + `, цель ${shiftGoalFor(day)} поленьев`; }
+const climateBase = { sun:1.25, hemi:.45, fog:new THREE.Color(0x6e5468) };
+const NIGHT_FOG = new THREE.Color(0x10142a);
 function newWeather(){
-  tempOut = Math.round(R(-50, 50));
+  tempOut = shiftWeather(save.day);
   climate = tempOut < 0 ? 'winter' : tempOut >= 30 ? 'hot' : 'mild';
-  hospH = 20; burned = 0; heat = 0;
+  shiftGoal = shiftGoalFor(save.day);
+  hospH = 20; burned = 0; heat = 0; tod = .3; envNight = -1;
   drawSky(skyTex.image.getContext('2d'), 1024, 512, SKY[climate]); skyTex.needsUpdate = true; rebuildEnv();
   drawGround(groundTex.image.getContext('2d'), 512, 512, climate); groundTex.needsUpdate = true;
   drawDirt(dirtTex.image.getContext('2d'), 512, 512, climate); dirtTex.needsUpdate = true;
   const W = climate === 'winter', H = climate === 'hot';
-  scene.fog.color.setHex(W ? 0xb3bccb : H ? 0x9c7c64 : 0x6e5468); scene.fog.near = W ? 8 : 12; scene.fog.far = W ? 38 : H ? 52 : 46;
-  hemi.color.setHex(W ? 0xd6e2ff : H ? 0xffe2b0 : 0xaab6ff); hemi.groundColor.setHex(W ? 0xb8c0cc : H ? 0x5a4a2a : 0x3d3020); hemi.intensity = W ? .6 : H ? .55 : .45;
-  sun.color.setHex(W ? 0xffe4c8 : H ? 0xffd49a : 0xffc28a); sun.intensity = W ? .95 : H ? 1.6 : 1.25;
+  climateBase.fog.setHex(W ? 0xb3bccb : H ? 0x9c7c64 : 0x6e5468); scene.fog.color.copy(climateBase.fog); scene.fog.near = W ? 8 : 12; scene.fog.far = W ? 38 : H ? 52 : 46;
+  hemi.color.setHex(W ? 0xd6e2ff : H ? 0xffe2b0 : 0xaab6ff); hemi.groundColor.setHex(W ? 0xb8c0cc : H ? 0x5a4a2a : 0x3d3020); climateBase.hemi = hemi.intensity = W ? .6 : H ? .55 : .45;
+  sun.color.setHex(W ? 0xffe4c8 : H ? 0xffd49a : 0xffc28a); climateBase.sun = sun.intensity = W ? .95 : H ? 1.6 : 1.25;
   grass.visible = !W;
   const col = new THREE.Color();
   for(let i=0;i<GRASS_N;i++){ H ? col.setHSL(R(.1,.17), R(.35,.5), R(.3,.45)) : col.setHSL(R(.19,.29), R(.35,.55), R(.24,.4)); grass.setColorAt(i, col); }
   grass.instanceColor.needsUpdate = true;
-  snowCaps.forEach(c => c.visible = W);
+  forest.snowCap.visible = W;
   hosp.roofMat.color.setHex(W ? 0xeef2f6 : 0x3f6b4c);
   snow.visible = W; snowGeo.setDrawRange(0, Math.round(SNOW_N*clamp(-tempOut/35, .2, 1)));
   const te = $('temp');
@@ -1281,14 +1804,43 @@ function newWeather(){
   te.className = 'temp' + (W ? ' cold' : H ? ' hot' : '');
   $('hosp').hidden = !W; $('stove').hidden = !W; $('heatRow').hidden = !H;
   $('hintClimate').textContent = W
-    ? `Больница топится вашими дровами: в минуту сгорает 1 полено за каждые 10° мороза (сейчас ${(Math.abs(tempOut)/10).toFixed(1).replace('.',',')}), полено даёт +2°C. Ниже +12°C лечить не смогут.`
-    : H ? 'В жару не рубите часто: при перегреве можно получить солнечный удар.' : '';
-  setTimeout(() => popup(W ? `Мороз ${fmtT(tempOut)}. Больница топится вашими дровами` : H ? `Жара ${fmtT(tempOut)}. Не спешите` : `${fmtT(tempOut)}, отличная погода для дров`, W ? 'bad' : H ? 'ok' : 'good', true), 300);
+    ? `Больница топится вашими дровами: остывает на ${(Math.abs(tempOut)/5).toFixed(0)}°C в минуту, ночью быстрее; полено даёт +${hospPer()}°C. Ниже +12°C лечить не смогут.`
+    : H ? 'В жару не рубите часто: при перегреве можно получить солнечный удар.' : 'Погода хорошая — самое время заработать на лавку.';
+  $('hintAim').textContent = COARSE
+    ? 'Прижмите палец к полену и ведите — это линия удара, отпустите — удар. Смахните в стороне, чтобы обойти колоду.'
+    : 'Наведите на полено и щёлкните — топор ударит по линии. Перетащите мышью или ← →, чтобы обойти колоду; Q/E — прицел, Esc — меню.';
+  updateHud();
 }
+function weatherPopup(){
+  const W = climate === 'winter', H = climate === 'hot';
+  popup(W ? `Смена ${save.day}. Мороз ${fmtT(tempOut)}, топите больницу` : H ? `Смена ${save.day}. Жара ${fmtT(tempOut)}, не спешите` : `Смена ${save.day}. ${fmtT(tempOut)}, отличная погода для дров`, W ? 'bad' : H ? 'ok' : 'good', true);
+}
+/* day & night: the sun stays put for stable shadows, light, sky tint and fog follow the clock */
+const DAY_LEN = 300;
+let tod = .3, envNight = -1;
+function updateSky(dt){
+  tod = (tod + dt/DAY_LEN) % 1;
+  const elev = -Math.cos(tod*TAU), dayK = clamp(elev*1.6 + .45, 0, 1);
+  night = 1 - dayK;
+  sun.intensity = climateBase.sun*dayK;
+  hemi.intensity = climateBase.hemi*(.3 + .7*dayK);
+  skyMat.color.setRGB(lerp(.14,1,dayK), lerp(.17,1,dayK), lerp(.32,1,dayK));
+  scene.fog.color.copy(climateBase.fog).lerp(NIGHT_FOG, night*.85);
+  if(Math.abs(night - envNight) > .08){ envNight = night; rebuildEnv(); }
+  const lantern = gearLvl('lantern');
+  lamp.distance = lantern ? 11 : 7;
+  lampBase = .95 + night*(lantern ? 2.6 : 1.1);
+  const mins = Math.floor(tod*24*60), hh = String(Math.floor(mins/60)).padStart(2,'0'), mm = String(Math.floor(mins%60/10)*10).padStart(2,'0');
+  const txt = (night > .5 ? '☾ ' : '☀ ') + hh + ':' + mm;
+  if(clockEl.textContent !== txt) clockEl.textContent = txt;
+}
+const clockEl = $('clock');
+let lampBase = .95;
 let hudCache = '';
 function updateWeather(dt, t){
   const W = climate === 'winter';
-  if(W) hospH = Math.max(tempOut, hospH - dt*Math.abs(tempOut)/300);
+  updateSky(dt);
+  if(W) hospH = Math.max(tempOut, hospH - dt*Math.abs(tempOut)/300*(1 + .5*night));
   if(climate === 'hot') heat = Math.max(0, heat - dt/(1.3 + (tempOut-30)*.06));
   const warmth = W ? clamp((hospH-4)/16, 0, 1) : 1;
   hosp.winMat.emissive.setRGB(lerp(.25,1,warmth), lerp(.35,.69,warmth), lerp(.5,.38,warmth));
@@ -1331,7 +1883,7 @@ function updateWeather(dt, t){
 }
 $('stove').addEventListener('click', e => {
   e.stopPropagation();
-  if(state !== 'idle' || gameOver || pileCount === 0) return;
+  if(state !== 'idle' || gameOver || paused || pileCount === 0) return;
   if(pileItems.length && !pileItems[pileItems.length-1].landed){ popup('Подождите, полено ещё летит','ok'); return; }
   audio(); state = 'trip'; st = 0; tripDone = false; marker.visible = false;
   fadeEl.style.opacity = 1;
@@ -1340,10 +1892,16 @@ $('stove').addEventListener('click', e => {
 
 /* ================= loop ================= */
 const clock = new THREE.Clock();
-const tmpV = new V3(), tmpQ = new THREE.Quaternion(), lookW = new V3();
+const TIME_SCALE = QS.has('debug') && +QS.get('speed') || 1;
+const tmpV = new V3(), tmpQ = new THREE.Quaternion(), tmpQ2 = new THREE.Quaternion(), lookW = new V3(), ZAX = new V3(0,0,1);
 let idleT = 0;
 function tick(){
-  const dt = Math.min(clock.getDelta(), .05), t = clock.elapsedTime;
+  const raw = clock.getDelta(), t = clock.elapsedTime;
+  adaptQuality(raw);
+  const dt = paused ? 0 : Math.min(raw, .05)*TIME_SCALE;
+  // hit-stop: the world nearly freezes for a beat on impact, the camera keeps shaking
+  let sdt = dt;
+  if(hitStop > 0){ hitStop -= dt; sdt = dt*.08; }
 
   // rotate around the block
   if(canRotate()) yawTarget += ((keys.left?1:0) - (keys.right?1:0))*dt*1.7;
@@ -1352,24 +1910,24 @@ function tick(){
 
   // feed the block
   const waitingMoving = WAIT_SLOTS.some(w=>w.item && !w.item.ready);
-  if(!gameOver && state!=='down' && !cur && !blockIncoming && flyers.length===0 && !waitingMoving){
+  if(!gameOver && !paused && state!=='down' && !cur && !blockIncoming && flyers.length===0 && !waitingMoving){
     idleT += dt;
     if(idleT > .3){ idleT = 0; if(!takeWaiting()) spawnLog(); }
   } else idleT = 0;
 
   if(cur){
     if(cur.falling){
-      cur.vy -= 14*dt; cur.g.position.y += cur.vy*dt;
+      cur.vy -= 14*sdt; cur.g.position.y += cur.vy*sdt;
       if(cur.g.position.y <= cur.rest){ cur.g.position.y = cur.rest; cur.falling = false; sfx.land(); shake = Math.max(shake,.025); }
     }
     if(cur.wiggle > 0){
-      cur.wiggle -= dt;
+      cur.wiggle -= sdt;
       const amp = cur.wiggle > 0 ? Math.sin(t*60)*.03*(cur.wiggle/.3) : 0;
-      cur.g.quaternion.copy(qAxis(new V3(0,0,1), amp)).multiply(cur.baseQ);
+      cur.g.quaternion.copy(tmpQ2.setFromAxisAngle(ZAX, amp)).multiply(cur.baseQ);
     }
   }
 
-  if(hoverX !== null && cur && !cur.falling && state==='idle'){
+  if(hoverX !== null && cur && !cur.falling && state==='idle' && !paused && !gameOver){
     marker.visible = true; marker.position.set(clamp(hoverX,-.75,.75), topY()+.004, 0);
   } else marker.visible = false;
 
@@ -1379,16 +1937,16 @@ function tick(){
       axe.position.x += (tx - axe.position.x)*Math.min(1, dt*10);
       axeTh += (IDLE + Math.sin(t*1.8)*.04 - axeTh)*Math.min(1, dt*8); axe.rotation.z = 0; break; }
     case 'windup': {
-      st += dt; const k = Math.min(1, st/.13);
+      st += sdt; const k = Math.min(1, st/(.13*axeStat().swing));
       axeTh = lerp(thFrom, WIND, easeOut(k)); axe.position.x = lerp(xFrom, aimX, easeOut(k));
       if(k >= 1){ state='strike'; st=0; strikeTh = angleFor(hitClass==='block' ? STUMP_TOP - .01 : topY() - .05); sfx.whoosh(); }
       break; }
     case 'strike': {
-      st += dt; const k = Math.min(1, st/.11); axeTh = lerp(WIND, strikeTh, k*k*k);
+      st += sdt; const k = Math.min(1, st/.11); axeTh = lerp(WIND, strikeTh, k*k*k);
       if(k >= 1){ resolveHit(); state='impact'; st=0; }
       break; }
     case 'impact':
-      st += dt;
+      st += sdt;
       if(result==='split') axeTh = lerp(strikeTh, deepTh, Math.min(1, st/.06));
       if(result==='glance'){ const k=Math.min(1,st/.24); axeTh = strikeTh + Math.sin(k*Math.PI)*.35; axe.rotation.z = Math.sin(st*45)*.12*(1-k); }
       if(st > .24){
@@ -1397,18 +1955,18 @@ function tick(){
       }
       break;
     case 'return': {
-      st += dt; const k = Math.min(1, st/.35); axeTh = lerp(thFrom, IDLE, easeInOut(k)); axe.rotation.z *= .8;
+      st += sdt; const k = Math.min(1, st/(.35*axeStat().swing)); axeTh = lerp(thFrom, IDLE, easeInOut(k)); axe.rotation.z *= .8;
       if(k >= 1) state='idle';
       break; }
     case 'trip': {
       st += dt;
       if(st > .85 && !tripDone){
         tripDone = true;
-        const want = Math.max(1, Math.ceil((HOSP_MAX - hospH)/HOSP_PER));
+        const want = Math.max(1, Math.ceil((HOSP_MAX - hospH)/hospPer()));
         const n = removeFromPile(want);
-        hospH = Math.min(HOSP_MAX, hospH + n*HOSP_PER); burned += n;
+        hospH = Math.min(HOSP_MAX, hospH + n*hospPer()); burned += n; save.stats.burned += n; persist();
         popup(`Сожгли ${n} ${plural(n,'полено','полена','поленьев')}. В больнице ${fmtT(hospH)}`, 'good', true);
-        for(let i=0;i<Math.min(n,5);i++) setTimeout(sfx.stack, i*120);
+        for(let i=0;i<Math.min(n,5);i++) later(sfx.stack, i*120);
       }
       if(st > 2.1) fadeEl.style.opacity = 0;
       if(st > 2.6){ state = 'idle'; st = 0; }
@@ -1434,40 +1992,47 @@ function tick(){
   updateAmbulance(dt, t);
 
   for(let i=flyers.length-1;i>=0;i--){
-    const f = flyers[i]; f.t += dt;
-    f.v.y -= 9.8*dt; f.g.position.addScaledVector(f.v, dt);
-    f.g.quaternion.premultiply(tmpQ.setFromAxisAngle(f.axis, f.w*dt));
+    const f = flyers[i]; f.t += sdt;
+    f.v.y -= 9.8*sdt; f.g.position.addScaledVector(f.v, sdt);
+    f.g.quaternion.premultiply(tmpQ.setFromAxisAngle(f.axis, f.w*sdt));
     if(f.t > .38){ flyers.splice(i,1); route(f.g, f.s); }
   }
   for(let i=tweens.length-1;i>=0;i--){
-    const tw = tweens[i]; tw.t += dt;
+    const tw = tweens[i]; tw.t += sdt;
     const k = Math.min(1, tw.t/tw.dur), e = easeInOut(k);
     tw.g.position.lerpVectors(tw.fromP, tw.toP, e); tw.g.position.y += Math.sin(k*Math.PI)*tw.arc;
     tw.g.quaternion.copy(tw.fromQ).slerp(tw.toQ, e);
     if(k >= 1){ tweens.splice(i,1); tw.done && tw.done(); }
   }
   for(let i=chips.length-1;i>=0;i--){
-    const c = chips[i]; c.life -= dt;
-    c.v.y -= 9.8*dt; c.m.position.addScaledVector(c.v, dt);
+    const c = chips[i]; c.life -= sdt;
+    c.v.y -= 9.8*sdt; c.m.position.addScaledVector(c.v, sdt);
     const floor = (Math.hypot(c.m.position.x, c.m.position.z) < .62 ? STUMP_TOP : 0) + .01;
     if(c.m.position.y < floor){ c.m.position.y = floor; c.v.set(c.v.x*.3, 0, c.v.z*.3); c.s.multiplyScalar(.3); }
-    c.m.rotation.x += c.s.x*dt; c.m.rotation.y += c.s.y*dt; c.m.rotation.z += c.s.z*dt;
-    if(c.life < .3) c.m.scale.multiplyScalar(Math.max(0, 1 - dt*6));
+    c.m.rotation.x += c.s.x*sdt; c.m.rotation.y += c.s.y*sdt; c.m.rotation.z += c.s.z*sdt;
+    if(c.life < .3) c.m.scale.multiplyScalar(Math.max(0, 1 - sdt*6));
     if(c.life <= 0){ scene.remove(c.m); chips.splice(i,1); }
   }
 
-  lamp.intensity = .95 + Math.sin(t*7)*.05 + Math.sin(t*13)*.04;
+  updateDust(sdt);
+  lamp.intensity = lampBase + Math.sin(t*7)*.05 + Math.sin(t*13)*.04;
   shake = Math.max(0, shake - dt*.6);
   const sm = shake * (reduceMotion ? .25 : 1);
   camera.position.copy(camLocal).add(tmpV.set(R(-sm,sm), R(-sm,sm), R(-sm,sm)));
   lookW.copy(lookLocal);
   if(state==='idle' && hoverX!==null) lookW.x += hoverX*.12;
   rig.localToWorld(lookW);
-  camera.lookAt(lookW); camera.rotateZ(roll);
+  camera.lookAt(lookW); camera.rotateZ(roll*(reduceMotion ? .35 : 1));
   renderer.render(scene, camera);
   requestAnimationFrame(tick);
 }
 newWeather();
+setMuted(muted);
+gameOver = true;
+if(!save.seenIntro) showCard('Дровосек', 'Колите брёвна, складывайте поленницу и сдавайте смены. За поленья платят монеты — в лавке есть колун, рукавицы и кое-что золотое. Бейте точно: ровный раскол пополам и серия точных ударов дают больше. Мимо полена — можно и по ноге.', 'Начать смену', startShift, 'Лавка', () => openMenu('shop'));
+else showCard(`Смена ${save.day}`, `${previewWeather(save.day)[0].toUpperCase() + previewWeather(save.day).slice(1)}. Монет: ${save.coins}.`, 'Начать смену', startShift, 'Лавка', () => openMenu('shop'));
+if(QS.has('debug')) window.__dbg = () => ({ state, paused, gameOver, cur:!!cur, falling:cur && cur.falling, pieces, pileCount, combo, coins:save.coins, dpr, night, tod, hidden:document.hidden, calls:renderer.info.render.calls, geos:renderer.info.memory.geometries, tex:renderer.info.memory.textures });
+function startShift(){ save.seenIntro = true; persist(); $('over').hidden = true; gameOver = false; document.activeElement && document.activeElement.blur(); weatherPopup(); }
 tick();
 })();
 </script>
