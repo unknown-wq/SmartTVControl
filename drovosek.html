@@ -238,9 +238,20 @@ function disposeTree(o, withMaterials){
   });
 }
 // Timers that belong to one round; cleared on restart so stale popups don't leak into the next one.
-const timers = new Set();
-function later(fn, ms){ const id = setTimeout(() => { timers.delete(id); fn(); }, ms); timers.add(id); return id; }
-function clearTimers(){ timers.forEach(clearTimeout); timers.clear(); }
+// They run on game time (advanced by tick), so they freeze while the game is paused.
+const timers = new Map();
+let gameTime = 0, timerSeq = 0;
+function later(fn, ms){ const id = ++timerSeq; timers.set(id, { at:gameTime + ms/1000, fn }); return id; }
+function clearTimers(){ timers.clear(); }
+function runTimers(dt){
+  gameTime += dt;
+  if(!timers.size) return;
+  const due = [];
+  timers.forEach((tm, id) => { if(tm.at <= gameTime) due.push([id, tm]); });
+  due.sort((a,b) => a[1].at - b[1].at || a[0] - b[0]);
+  // a callback may clear the timers (restart) — skip the ones that were removed meanwhile
+  for(const [id, tm] of due){ if(!timers.has(id)) continue; timers.delete(id); tm.fn(); }
+}
 const std = o => new THREE.MeshStandardMaterial(Object.assign({ roughness:.9, metalness:0, envMapIntensity:.55 }, o));
 
 /* ================= sky & light ================= */
@@ -814,10 +825,17 @@ function siren(){
   o.type = 'triangle'; o.frequency.value = 780; lfo.type = 'square'; lfo.frequency.value = 1.4; lg.gain.value = 170;
   lfo.connect(lg); lg.connect(o.frequency);
   g.gain.setValueAtTime(.005,t); g.gain.exponentialRampToValueAtTime(.1,t+5);
-  o.connect(g); g.connect(master); o.start(t); lfo.start(t); o.stop(t+40); lfo.stop(t+40);
+  // stopSiren() ends it when the rescue is over; the long stop time is only a safety net
+  o.connect(g); g.connect(master); o.start(t); lfo.start(t); o.stop(t+600); lfo.stop(t+600);
   sirenNodes = { o, lfo, g };
+  if(paused) pauseSiren(true);
 }
 function stopSiren(){ if(sirenNodes){ try{ sirenNodes.o.stop(); sirenNodes.lfo.stop(); }catch(e){} sirenNodes = null; } }
+function pauseSiren(on){
+  if(!sirenNodes || !ac) return;
+  const g = sirenNodes.g.gain, t = ac.currentTime;
+  try{ g.cancelScheduledValues(t); if(on) g.setValueAtTime(0, t); else { g.setValueAtTime(.005, t); g.exponentialRampToValueAtTime(.1, t+.6); } }catch(e){}
+}
 
 /* ================= save, economy, achievements ================= */
 const SAVE_KEY = 'drovosek-save-v2';
@@ -830,6 +848,24 @@ const save = (() => {
   try{ const old = parseInt(localStorage.getItem('drovosek-best-pieces') || '0', 10) || 0; if(old > s.best) s.best = old; }catch(e){}
   return s;
 })();
+// Old or hand-edited saves may hold strings, nulls or ids that no longer exist; coerce everything to sane values.
+function sanitizeSave(s){
+  const num = (v, min, def) => { const n = Math.floor(Number(v)); return Number.isFinite(n) ? Math.max(min, n) : def; };
+  const obj = v => v && typeof v === 'object' && !Array.isArray(v) ? v : {};
+  s.coins = num(s.coins, 0, 0); s.best = num(s.best, 0, 0); s.day = num(s.day, 1, 1);
+  s.owned = obj(s.owned); s.gear = obj(s.gear); s.ach = obj(s.ach);
+  for(const k of Object.keys(s.owned)) if(!AXES[k] || !s.owned[k]) delete s.owned[k]; else s.owned[k] = true;
+  s.owned.axe = true;
+  if(!AXES[s.axe] || !s.owned[s.axe]) s.axe = 'axe';
+  for(const k of Object.keys(s.gear)){ if(!GEAR[k]) delete s.gear[k]; else s.gear[k] = Math.min(GEAR[k].price.length, num(s.gear[k], 0, 0)); }
+  for(const k of Object.keys(s.ach)) if(!s.ach[k]) delete s.ach[k];
+  s.muted = !!s.muted; s.seenIntro = !!s.seenIntro;
+  const st = obj(s.stats);
+  s.stats = {};
+  for(const k of Object.keys(STATS0)) s.stats[k] = num(st[k], k === 'bestDay' ? 1 : 0, STATS0[k]);
+  s.stats.bestDay = Math.max(s.stats.bestDay, s.day);
+  return s;
+}
 function persist(){ try{ localStorage.setItem(SAVE_KEY, JSON.stringify(save)); }catch(e){} }
 muted = !!save.muted;
 
@@ -846,10 +882,11 @@ const GEAR = {
   kit:    { name:'Аптечка', desc:['Третья жизнь: можно пережить две травмы.'], price:[120] },
   lantern:{ name:'Керосинка', desc:['Ночью у колоды светло, как днём.'], price:[25] },
 };
+sanitizeSave(save);
 const axeStat = () => AXES[save.axe] || AXES.axe;
 const gearLvl = k => save.gear[k] || 0;
 const maxLives = () => 2 + gearLvl('kit');
-const injuryMul = () => [1, .6, .35][gearLvl('gloves')];
+const injuryMul = () => [1, .6, .35][Math.min(2, gearLvl('gloves'))];
 
 const ACH = [
   ['first','Первый раскол','Расколоть первое бревно'],
@@ -943,6 +980,8 @@ function earn(n, worldPos){
   const c = $('coinsRow'); c.classList.remove('bump'); void c.offsetWidth; c.classList.add('bump');
 }
 const pieceValue = s => s.kind === 'gold' ? 5 : s.kind === 'twisted' ? 2 : 1;
+// the combo bonus is fixed when the piece is split off, not when it lands
+const pieceMult = s => s.mult || 1;
 // Every piece that ends up in the pile (or sold) counts towards the shift goal.
 function countPiece(){
   pieces++; save.stats.pieces++;
@@ -1064,13 +1103,13 @@ function toPile(g, s){
   PILE.rowX += f.w + .015; PILE.rowH = Math.max(PILE.rowH, f.h);
   const item = { g, s, landed:false, before, stack:PILE.stack };
   PILE.stacks[PILE.stack].push(item); pileItems.push(item);
-  tween(g, p, q, .8, 1.3, ()=>{ item.landed = true; if(pileItems.includes(item)) pileCount++; earn(pieceValue(s)*comboMult(), g.position); countPiece(); sfx.stack(); });
+  tween(g, p, q, .8, 1.3, ()=>{ item.landed = true; if(pileItems.includes(item)) pileCount++; earn(pieceValue(s)*pieceMult(s), g.position); countPiece(); sfx.stack(); });
 }
 // The pile is full: the piece goes to the neighbour's cart for coins instead of vanishing silently.
 let pileFullWarned = false;
 function sellPiece(g, s){
   tween(g, g.position.clone().add(new V3(R(-.3,.3), 1.6, -1.5)), g.quaternion.clone(), .5, .4, () => disposeTree(g));
-  earn(pieceValue(s)*comboMult(), g.position);
+  earn(pieceValue(s)*pieceMult(s), g.position);
   countPiece();
   if(!pileFullWarned){ pileFullWarned = true; popup(climate === 'winter' ? 'Поленница полна! Несите дрова в больницу' : 'Поленница полна, излишки продаём', 'ok', true); }
 }
@@ -1090,6 +1129,7 @@ function splitCur(){
     const g = new THREE.Group(); g.quaternion.copy(c.g.quaternion);
     g.position.copy(c.g.position).add(m.position.clone().applyQuaternion(c.g.quaternion));
     c.g.remove(m); m.position.set(0,0,0); g.add(m); scene.add(g);
+    k.kids[i].mult = comboMult();
     flyers.push({ g, s:k.kids[i], v:dir.clone().multiplyScalar(R(1.1,1.6)).add(new V3(0,R(1.8,2.4),0)), axis:new V3().crossVectors(Y,dir).normalize(), w:R(3,4.5), t:0 });
   });
   scene.remove(c.g);
@@ -1222,7 +1262,7 @@ function aimFrom(e){
 }
 function strike(x){
   audio();
-  if(gameOver || paused || state!=='idle' || !cur || cur.falling) return;
+  if(gameOver || shiftDone || paused || state!=='idle' || !cur || cur.falling) return;
   aimX = clamp(x, -.75, .75);
   plan = cutPlan(cur, aimX);
   hitClass = plan.cls;
@@ -1272,7 +1312,8 @@ function resolveHitCore(){
   const replaced = k && !same;
   if(!same) makeCrack(c, pl);
   c.crack.hitsLeft--;
-  setCombo(combo + 1);
+  // re-cracking a log elsewhere is not a precise blow: only a split or a follow-up into the same crack counts
+  if(same || c.crack.hitsLeft <= 0) setCombo(combo + 1);
   spawnChips(top, 9, s.sp.inner);
   dust(top, 26, s.sp.dust);
   if(c.crack.hitsLeft <= 0){
@@ -1521,7 +1562,8 @@ function plural(n, a, b, c){ const m10 = n%10, m100 = n%100; return m10===1 && m
 function hospitalOutcome(){
   stopSiren();
   gameOver = true;
-  const warm = climate !== 'winter' || hospH >= HOSP_WARM;
+  // The shift quota is already met: the doctors pull you through even in a cold ward, and the shift is paid after.
+  const warm = climate !== 'winter' || hospH >= HOSP_WARM || shiftDone;
   if(warm){
     if(climate === 'winter') hospH = Math.max(tempOut, hospH - 3);
     const txt = lastInjury === 'stroke'
@@ -1543,9 +1585,11 @@ function hospitalOutcome(){
     showCard('В больнице холодно', `${txt} Наколото поленьев: ${pieces}, сожжено в печи: ${burned}, брёвен расколото: ${logsDone}. Смена ${save.day} начнётся заново — монеты и покупки остаются.`, 'Колоть заново', restart, 'Лавка', () => openMenu('shop'));
   }
 }
+// Waits for the swing, the stove trip or the rescue to finish; heal() re-schedules it if a fall got in the way.
 function completeShift(){
-  if(gameOver) return;
-  gameOver = true; marker.visible = false;
+  if(gameOver || !shiftDone) return;
+  if(state !== 'idle' || hurtPending || strokePending || fall || amb){ later(completeShift, 300); return; }
+  gameOver = true; marker.visible = false; hoverX = null; kbAim = null;
   const W = climate === 'winter', H = climate === 'hot';
   const reward = 10 + save.day*5, clean = !shiftInjured, warmBonus = W ? Math.max(0, Math.round((hospH - HOSP_WARM)*1.5)) : 0;
   const total = reward + (clean ? 10 : 0) + warmBonus;
@@ -1575,6 +1619,8 @@ function resetPlayer(){
 function heal(){
   resetPlayer();
   popup('Снова у колоды','good');
+  // the goal was reached before (or during) the injury: hand in the shift now
+  if(shiftDone) later(completeShift, 900);
 }
 function restart(){
   resetPlayer();
@@ -1595,16 +1641,19 @@ $('again2').addEventListener('click', () => cardAction2 && cardAction2());
 let menuTab = 'shop';
 function openMenu(tab){
   if(tab) menuTab = tab;
-  paused = true; drag = null; hoverX = null; keys.left = keys.right = false;
+  paused = true; drag = null; hoverX = null; keys.left = keys.right = false; pauseSiren(true);
   $('menuTitle').textContent = gameOver ? 'Лавка и достижения' : 'Пауза';
   $('resume').textContent = gameOver ? 'Назад' : 'Продолжить';
   $('menu').hidden = false; renderMenu();
   const t = document.querySelector(`#menu [data-tab="${menuTab}"]`); t && t.focus();
 }
 function closeMenu(){
-  $('menu').hidden = true; paused = false; clock.getDelta();
+  $('menu').hidden = true; paused = false; clock.getDelta(); pauseSiren(false); disarmReset();
   if(!$('over').hidden) $('again').focus(); else document.activeElement && document.activeElement.blur();
 }
+// Two-step reset (confirm() is blocked in sandboxed iframes): the first tap arms the button for 3 s.
+let resetArmed = false, resetTimer = 0;
+function disarmReset(){ resetArmed = false; clearTimeout(resetTimer); }
 function buyBtn(label, price, disabled, act){ return `<button data-act="${act}" ${disabled ? 'disabled' : ''}>${label}${price ? ` · ${price}` : ''}</button>`; }
 function renderMenu(){
   $('menuCoins').textContent = save.coins;
@@ -1634,7 +1683,7 @@ function renderMenu(){
     const rows = [['Смена', save.day], ['Лучшая смена', st.bestDay], ['Поленьев наколото', st.pieces], ['Брёвен расколото', st.splits], ['Идеально пополам', st.perfect],
       ['Лучшая серия', st.bestCombo], ['Через сучок', st.knots], ['Золотых брёвен', st.gold], ['Сожжено в больнице', st.burned], ['Травм', st.injuries], ['Смен сдано', st.shifts], ['Монет заработано', st.coinsEarned]];
     h += '<div class="stats">' + rows.map(([a,b]) => `<span>${a}</span><span>${b}</span>`).join('') + '</div>';
-    h += '<div class="row" style="margin-bottom:14px"><button class="alt" data-act="reset">Сбросить прогресс</button></div>';
+    h += `<div class="row" style="margin-bottom:14px"><button class="alt" data-act="reset"${resetArmed ? ' style="background:var(--bad);color:#fff"' : ''}>${resetArmed ? 'Точно сбросить?' : 'Сбросить прогресс'}</button></div>`;
   }
   $('menuBody').innerHTML = h;
 }
@@ -1645,7 +1694,14 @@ $('menuBody').addEventListener('click', e => {
   else if(act === 'equip'){ save.axe = id; sfx.stack(); }
   else if(act === 'gear'){ const g = GEAR[id], lvl = gearLvl(id), p = g.price[lvl]; if(p != null && save.coins >= p){ save.coins -= p; save.gear[id] = lvl + 1; sfx.buy(); unlock('shop'); } }
   else if(act === 'reset'){
-    if(!confirm('Стереть монеты, покупки, достижения и статистику?')) return;
+    if(!resetArmed){
+      resetArmed = true; clearTimeout(resetTimer);
+      // wall-clock timer on purpose: the menu is open, so game time is frozen
+      resetTimer = setTimeout(() => { resetArmed = false; if(!$('menu').hidden && menuTab === 'stats'){ renderMenu(); const r = $('menuBody').querySelector('[data-act="reset"]'); r && r.focus(); } }, 3000);
+      renderMenu(); const r = $('menuBody').querySelector('[data-act="reset"]'); r && r.focus();
+      return;
+    }
+    disarmReset();
     const m = save.muted; Object.keys(save).forEach(k => delete save[k]);
     Object.assign(save, { coins:0, best:0, day:1, axe:'axe', owned:{ axe:true }, gear:{}, ach:{}, muted:m, seenIntro:true, stats:Object.assign({}, STATS0) });
     persist(); closeMenu(); restart(); return;
@@ -1653,7 +1709,7 @@ $('menuBody').addEventListener('click', e => {
   persist(); updateHud(); updateLives(); renderMenu();
   const again = $('menuBody').querySelector(`[data-act="${b.dataset.act}"]`); (again && !again.disabled ? again : document.querySelector('#menu [aria-selected="true"]')).focus();
 });
-document.querySelectorAll('#menu [role=tab]').forEach(b => b.addEventListener('click', () => { menuTab = b.dataset.tab; renderMenu(); b.focus(); }));
+document.querySelectorAll('#menu [role=tab]').forEach(b => b.addEventListener('click', () => { menuTab = b.dataset.tab; disarmReset(); renderMenu(); b.focus(); }));
 $('resume').addEventListener('click', closeMenu);
 $('menuBtn').addEventListener('click', e => { e.stopPropagation(); audio(); openMenu(); });
 $('soundBtn').addEventListener('click', e => { e.stopPropagation(); audio(); setMuted(!muted); });
@@ -1871,7 +1927,7 @@ function updateWeather(dt, t){
     snowGeo.attributes.position.needsUpdate = true;
     camera.getWorldPosition(tmpV); snow.position.set(tmpV.x, 0, tmpV.z);
   }
-  const key = W ? Math.round(hospH) + '|' + pileCount + '|' + state : climate==='hot' ? (heat*20|0) + '' : '';
+  const key = W ? Math.round(hospH) + '|' + pileCount + '|' + state + '|' + gameOver + '|' + paused : climate==='hot' ? (heat*20|0) + '' : '';
   if(key !== hudCache){
     hudCache = key;
     if(W){
@@ -1899,6 +1955,7 @@ function tick(){
   const raw = clock.getDelta(), t = clock.elapsedTime;
   adaptQuality(raw);
   const dt = paused ? 0 : Math.min(raw, .05)*TIME_SCALE;
+  if(!paused) runTimers(dt);
   // hit-stop: the world nearly freezes for a beat on impact, the camera keeps shaking
   let sdt = dt;
   if(hitStop > 0){ hitStop -= dt; sdt = dt*.08; }
@@ -2031,7 +2088,8 @@ setMuted(muted);
 gameOver = true;
 if(!save.seenIntro) showCard('Дровосек', 'Колите брёвна, складывайте поленницу и сдавайте смены. За поленья платят монеты — в лавке есть колун, рукавицы и кое-что золотое. Бейте точно: ровный раскол пополам и серия точных ударов дают больше. Мимо полена — можно и по ноге.', 'Начать смену', startShift, 'Лавка', () => openMenu('shop'));
 else showCard(`Смена ${save.day}`, `${previewWeather(save.day)[0].toUpperCase() + previewWeather(save.day).slice(1)}. Монет: ${save.coins}.`, 'Начать смену', startShift, 'Лавка', () => openMenu('shop'));
-if(QS.has('debug')) window.__dbg = () => ({ state, paused, gameOver, cur:!!cur, falling:cur && cur.falling, pieces, pileCount, combo, coins:save.coins, dpr, night, tod, hidden:document.hidden, calls:renderer.info.render.calls, geos:renderer.info.memory.geometries, tex:renderer.info.memory.textures });
+if(QS.has('debug')) window.__dbg = () => ({ state, paused, gameOver, shiftDone, shiftGoal, hurtPending, injuries, day:save.day, climate, hospH, timers:timers.size, gameTime, fall:!!fall, amb:!!amb, siren:!!sirenNodes, overHidden:$('over').hidden, overTitle:$('overTitle').textContent, stoveDisabled:$('stove').disabled, saveObj:JSON.parse(JSON.stringify(save)), cur:!!cur, falling:cur && cur.falling, pieces, pileCount, combo, coins:save.coins, dpr, night, tod, hidden:document.hidden, calls:renderer.info.render.calls, geos:renderer.info.memory.geometries, tex:renderer.info.memory.textures });
+if(QS.has('debug')) window.__dbgSet = o => { if(o.hospH != null) hospH = o.hospH; if(o.pieces != null) pieces = o.pieces; if(o.countPiece) countPiece(); };
 function startShift(){ save.seenIntro = true; persist(); $('over').hidden = true; gameOver = false; document.activeElement && document.activeElement.blur(); weatherPopup(); }
 tick();
 })();
