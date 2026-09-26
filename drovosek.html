@@ -1219,7 +1219,7 @@ const head = new THREE.Mesh(headGeo, new THREE.MeshStandardMaterial({ color:0x9a
 head.position.y = L; head.castShadow = true; axe.add(head);
 
 const plaid = canvasTex(256,256,(x,w,h)=>{
-  x.fillStyle='#9e2b25'; x.fillRect(0,0,w,h);
+  x.fillStyle='#6e2a24'; x.fillRect(0,0,w,h);
   x.fillStyle='rgba(20,15,15,.55)'; x.fillRect(0,80,w,56); x.fillRect(80,0,56,h);
   x.fillStyle='rgba(255,230,200,.15)'; x.fillRect(0,184,w,10); x.fillRect(184,0,10,h);
   for(let i=0;i<4000;i++){ x.fillStyle=`rgba(0,0,0,${R(0,.08)})`; x.fillRect(R(0,w),R(0,h),1,1); }
@@ -1232,10 +1232,10 @@ const hands = [-.03, .17].map(y => {
   m.scale.set(1.15,1.35,1.15); m.position.y = y; m.castShadow = true; axe.add(m); return m;
 });
 const arms = [0,1].map(() => {
-  const m = new THREE.Mesh(new THREE.CylinderGeometry(.045,.06,1,20,1,true), sleeveMat);
+  const m = new THREE.Mesh(new THREE.CylinderGeometry(.036,.05,1,20,1,true), sleeveMat);
   m.castShadow = true; rig.add(m); return m;
 });
-const shoulders = [new V3(.3,1.45,1.4), new V3(-.36,1.45,1.4)];
+const shoulders = [new V3(.2,2.2,2.05), new V3(-.26,2.2,2.05)];
 const _hp = new V3(), _sh = new V3(), _d = new V3();
 function updateArms(){
   axe.updateMatrix();
@@ -1631,7 +1631,7 @@ const AXES = {
 const GEAR = {
   gloves: { name:'Рукавицы', desc:['Промах реже заканчивается травмой (×0,6).', 'Двойные рукавицы: травма при промахе ещё реже (×0,35).'], price:[40,100] },
   hat:    { name:'Панама', desc:['В жару перегрев копится на 35% медленнее.'], price:[30] },
-  sled:   { name:'Санки', desc:['Возите больше дров: полено греет больницу на +3°C вместо +2°C.'], price:[50] },
+  sled:   { name:'Санки', desc:['Дрова в печи больницы горят дольше: полено даёт +3°C тепла вместо +2°C.'], price:[50] },
   kit:    { name:'Аптечка', desc:['Третья жизнь: можно пережить две травмы.'], price:[120] },
   lantern:{ name:'Керосинка', desc:['Ночью у колоды светло, как днём.'], price:[25] },
 };
@@ -2717,7 +2717,7 @@ function updateSky(dt){
   lamp.distance = lantern ? 11 : 7;
   lampBase = .95 + night*(lantern ? 2.6 : 1.1);
   const mins = Math.floor(tod*24*60), hh = String(Math.floor(mins/60)).padStart(2,'0'), mm = String(Math.floor(mins%60/10)*10).padStart(2,'0');
-  const txt = (night > .5 ? '☾ ' : '☀ ') + hh + ':' + mm;
+  const txt = hh + ':' + mm;
   if(clockEl.textContent !== txt) clockEl.textContent = txt;
 }
 const clockEl = $('clock');
