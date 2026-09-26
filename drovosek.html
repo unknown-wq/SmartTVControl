@@ -2,25 +2,42 @@
 <html lang="ru">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Дровосек">
+<meta name="format-detection" content="telephone=no">
+<meta name="theme-color" content="#1f2a4a">
+<link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 180 180'%3E%3Crect width='180' height='180' fill='%231f2a4a'/%3E%3Cellipse cx='90' cy='140' rx='62' ry='18' fill='%23a8741c'/%3E%3Crect x='28' y='108' width='124' height='32' fill='%23c98a3a'/%3E%3Cellipse cx='90' cy='108' rx='62' ry='18' fill='%23e8c48a'/%3E%3Cellipse cx='90' cy='108' rx='30' ry='8' fill='none' stroke='%23b0803a' stroke-width='4'/%3E%3Crect x='84' y='30' width='12' height='84' rx='5' fill='%237a4a1c' transform='rotate(-28 90 72)'/%3E%3Cpath d='M92 22 L136 30 L130 64 L100 50 Z' fill='%23d8dde6' transform='rotate(-28 90 72)'/%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 180 180'%3E%3Crect width='180' height='180' fill='%231f2a4a'/%3E%3Cellipse cx='90' cy='140' rx='62' ry='18' fill='%23a8741c'/%3E%3Crect x='28' y='108' width='124' height='32' fill='%23c98a3a'/%3E%3Cellipse cx='90' cy='108' rx='62' ry='18' fill='%23e8c48a'/%3E%3Cellipse cx='90' cy='108' rx='30' ry='8' fill='none' stroke='%23b0803a' stroke-width='4'/%3E%3Crect x='84' y='30' width='12' height='84' rx='5' fill='%237a4a1c' transform='rotate(-28 90 72)'/%3E%3Cpath d='M92 22 L136 30 L130 64 L100 50 Z' fill='%23d8dde6' transform='rotate(-28 90 72)'/%3E%3C/svg%3E">
 <title>Дровосек</title>
+<script>
+// iOS wants a PNG home-screen icon: rasterise the inline SVG once it has loaded.
+(function(){ try{
+  var l = document.querySelector('link[rel="apple-touch-icon"]'), img = new Image();
+  img.onload = function(){ try{ var c = document.createElement('canvas'); c.width = c.height = 180; c.getContext('2d').drawImage(img,0,0,180,180); l.href = c.toDataURL('image/png'); }catch(e){} };
+  img.src = l.href;
+}catch(e){} })();
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Russo+One&family=PT+Sans:wght@400;700&display=swap" rel="stylesheet">
 <style>
   :root{
     --ink:#fff4e0; --muted:rgba(255,244,224,.78); --good:#8fc15a; --ok:#e8b64a; --bad:#e0664a; --bg:#1f2a4a;
-    box-sizing:border-box;
-    padding-top:env(safe-area-inset-top,0px);
-    padding-bottom:env(safe-area-inset-bottom,0px);
+    --sat:env(safe-area-inset-top,0px); --sab:env(safe-area-inset-bottom,0px);
+    --sal:env(safe-area-inset-left,0px); --sar:env(safe-area-inset-right,0px);
   }
   @media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){ --ink:#fff4e0; --muted:rgba(255,244,224,.78); --bg:#1f2a4a; } }
   :root[data-theme="dark"]{ --ink:#fff4e0; --muted:rgba(255,244,224,.78); --bg:#1f2a4a; }
-  html{ height:100%; scroll-padding-top:env(safe-area-inset-top,0px); background:var(--bg); }
-  body{ margin:0; height:100%; overflow:hidden; background:var(--bg); color:var(--ink); font-family:'PT Sans',system-ui,-apple-system,'Segoe UI',sans-serif; touch-action:none; user-select:none; -webkit-user-select:none; -webkit-tap-highlight-color:transparent; }
-  #stage{ position:relative; width:100%; height:100%; overflow:hidden; cursor:crosshair; }
+  /* iPhone only: a fixed, non-scrolling, non-zooming full-screen page (no rubber band, no callouts). */
+  html{ height:100%; background:var(--bg); overflow:hidden; overscroll-behavior:none; -webkit-text-size-adjust:100%; text-size-adjust:100%; }
+  body{ position:fixed; inset:0; width:100%; height:100%; height:100dvh; margin:0; overflow:hidden; overscroll-behavior:none; background:var(--bg); color:var(--ink); font-family:'PT Sans',system-ui,-apple-system,'Segoe UI',sans-serif; touch-action:none; user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; -webkit-tap-highlight-color:transparent; }
+  button{ touch-action:manipulation; -webkit-touch-callout:none; }
+  #stage{ position:absolute; inset:0; overflow:hidden; }
   #stage.dragging{ cursor:grabbing; }
   #stage canvas{ position:absolute; inset:0; width:100%; height:100%; display:block; }
-  .hud{ position:absolute; top:max(14px, env(safe-area-inset-top,0px)); left:16px; right:16px; display:flex; gap:12px; justify-content:space-between; align-items:flex-start; pointer-events:none; text-shadow:0 1px 4px rgba(0,0,0,.7); }
+  .hud{ position:absolute; top:calc(var(--sat) + 10px); left:calc(var(--sal) + 14px); right:calc(var(--sar) + 14px); display:flex; gap:12px; justify-content:space-between; align-items:flex-start; pointer-events:none; text-shadow:0 1px 4px rgba(0,0,0,.7); }
   .count{ font-family:'Russo One',Impact,'Arial Black',sans-serif; font-size:clamp(38px,8vw,58px); line-height:1; }
   .label{ display:block; font-family:'PT Sans',system-ui,sans-serif; font-size:15px; color:var(--muted); margin-top:4px; }
   .left{ display:flex; flex-direction:column; gap:6px; min-width:0; }
@@ -34,7 +51,7 @@
   .combo{ font-family:'Russo One',Impact,sans-serif; font-size:20px; color:#ffd35a; }
   .combo.hot{ color:#ff8a4a; }
   .btns{ display:flex; gap:8px; margin-top:2px; pointer-events:auto; }
-  .btns button{ font:700 15px 'PT Sans',system-ui,sans-serif; min-height:40px; min-width:44px; padding:8px 12px; border:none; border-radius:10px; background:rgba(18,16,30,.62); color:var(--ink); cursor:pointer; box-shadow:0 3px 10px rgba(0,0,0,.35); text-shadow:none; }
+  .btns button{ font:700 15px 'PT Sans',system-ui,sans-serif; min-height:44px; min-width:44px; padding:8px 12px; border:none; border-radius:10px; background:rgba(18,16,30,.62); color:var(--ink); cursor:pointer; box-shadow:0 3px 10px rgba(0,0,0,.35); text-shadow:none; }
   .btns button:focus-visible{ outline:3px solid var(--ink); outline-offset:2px; }
   .side{ text-align:right; font-size:17px; line-height:1.5; }
   .clock{ font-size:15px; color:var(--muted); }
@@ -43,7 +60,7 @@
   .lives i{ width:16px; height:15px; background:#e0664a; -webkit-mask:var(--heart) center/contain no-repeat; mask:var(--heart) center/contain no-repeat; filter:drop-shadow(0 1px 2px rgba(0,0,0,.6)); }
   .lives i.used{ background:rgba(255,244,224,.28); }
   :root{ --heart:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 22'%3E%3Cpath d='M12 21.5 1.8 11.3A6 6 0 0 1 12 3.2a6 6 0 0 1 10.2 8.1z'/%3E%3C/svg%3E"); }
-  .bottom{ position:absolute; left:0; right:0; bottom:22px; display:flex; flex-direction:column; align-items:center; gap:6px; pointer-events:none; text-shadow:0 1px 3px rgba(0,0,0,.8); text-align:center; padding:0 16px; }
+  .bottom{ position:absolute; left:0; right:0; bottom:calc(var(--sab) + 14px); display:flex; flex-direction:column; align-items:center; gap:6px; pointer-events:none; text-shadow:0 1px 3px rgba(0,0,0,.8); text-align:center; padding:0 16px; }
   .logname{ font-size:19px; font-weight:700; }
   .logname .knot{ color:var(--ok); }
   .hint{ font-size:15px; color:var(--muted); transition:opacity .5s; line-height:1.4; }
@@ -53,7 +70,7 @@
   .hosp b.cold{ color:#a8d4ff; } .hosp b.warm{ color:var(--good); }
   .heat .bar{ width:110px; margin-left:auto; }
   #heatBar{ display:block; height:100%; width:0; background:linear-gradient(90deg,#ffd35a,#ff5a2a); }
-  .stove{ pointer-events:auto; margin-top:8px; font-family:'PT Sans',system-ui,sans-serif; font-weight:700; font-size:15px; padding:9px 14px; border:none; border-radius:10px; background:var(--ok); color:#2a1a08; cursor:pointer; box-shadow:0 4px 12px rgba(0,0,0,.4); text-shadow:none; }
+  .stove{ pointer-events:auto; margin-top:8px; font-family:'PT Sans',system-ui,sans-serif; font-weight:700; font-size:15px; min-height:44px; padding:9px 14px; border:none; border-radius:10px; background:var(--ok); color:#2a1a08; cursor:pointer; box-shadow:0 4px 12px rgba(0,0,0,.4); text-shadow:none; }
   .stove:disabled{ opacity:.45; cursor:default; }
   .stove:focus-visible{ outline:3px solid var(--ink); outline-offset:2px; }
   #fade{ position:absolute; inset:0; pointer-events:none; background:#000; opacity:0; transition:opacity .8s; }
@@ -68,7 +85,7 @@
     75%{ opacity:1; }
     100%{ opacity:0; transform:translate(-50%,-75%) scale(1); }
   }
-  .over{ position:absolute; inset:0; display:flex; align-items:center; justify-content:center; background:rgba(10,12,25,.35); z-index:5; }
+  .over{ position:fixed; inset:0; display:flex; align-items:center; justify-content:center; background:rgba(10,12,25,.35); z-index:5; padding:var(--sat) var(--sar) var(--sab) var(--sal); box-sizing:border-box; }
   .over[hidden]{ display:none; }
   .card{ position:relative; text-align:center; padding:26px 28px; max-width:26em; margin:16px; border-radius:18px; background:rgba(18,16,30,.78); box-shadow:0 12px 40px rgba(0,0,0,.5); }
   .card h1{ font-family:'Russo One',Impact,sans-serif; font-weight:400; font-size:clamp(28px,6.5vw,48px); line-height:1.1; margin:0 0 14px; }
@@ -77,16 +94,17 @@
   .card button.alt{ background:rgba(255,244,224,.14); color:var(--ink); }
   #menu{ background:rgba(10,12,25,.72); }
   #menu .card{ background:rgba(18,16,30,.94); }
-  .card.wide{ max-width:34em; width:calc(100% - 32px); max-height:calc(100% - 32px); overflow:auto; box-sizing:border-box; padding:22px 20px; }
+  .card.wide{ max-width:34em; width:calc(100% - 24px); max-height:calc(100% - 24px); overflow:auto; box-sizing:border-box; padding:22px 16px; touch-action:pan-y; overscroll-behavior:contain; -webkit-overflow-scrolling:touch; }
+  .card:not(.wide){ max-height:calc(100% - 24px); overflow:auto; box-sizing:border-box; touch-action:pan-y; overscroll-behavior:contain; }
   .tabs{ display:flex; gap:6px; justify-content:center; margin:0 0 14px; flex-wrap:wrap; }
-  .card .tabs button{ font:700 16px 'PT Sans',system-ui,sans-serif; padding:8px 14px; border-radius:10px; background:rgba(255,244,224,.12); color:var(--ink); box-shadow:none; }
+  .card .tabs button{ font:700 16px 'PT Sans',system-ui,sans-serif; min-height:44px; padding:8px 14px; border-radius:10px; background:rgba(255,244,224,.12); color:var(--ink); box-shadow:none; }
   .card .tabs button[aria-selected="true"]{ background:var(--ok); color:#2a1a08; }
   .list{ text-align:left; display:flex; flex-direction:column; gap:8px; margin:0 0 16px; }
   .item{ display:flex; align-items:center; gap:12px; padding:10px 12px; border-radius:12px; background:rgba(255,244,224,.07); }
   .item .txt{ flex:1; min-width:0; }
   .item b{ display:block; font-size:17px; }
   .item small{ display:block; font-size:14px; color:var(--muted); line-height:1.35; }
-  .card .item button{ font:700 15px 'PT Sans',system-ui,sans-serif; padding:9px 12px; border-radius:10px; white-space:nowrap; box-shadow:none; }
+  .card .item button{ font:700 15px 'PT Sans',system-ui,sans-serif; min-height:44px; padding:9px 12px; border-radius:10px; white-space:nowrap; box-shadow:none; }
   .card .item button:disabled{ opacity:.45; cursor:default; }
   .item.locked{ opacity:.55; }
   .item .medal{ width:34px; height:34px; border-radius:50%; flex:none; display:grid; place-items:center; font:16px 'Russo One',Impact,sans-serif; background:rgba(255,244,224,.12); color:var(--muted); }
@@ -94,8 +112,9 @@
   .stats{ display:grid; grid-template-columns:1fr auto; gap:6px 16px; text-align:left; font-size:17px; margin:0 0 16px; }
   .stats span:nth-child(2n){ font-family:'Russo One',Impact,sans-serif; text-align:right; }
   .wallet{ font-family:'Russo One',Impact,sans-serif; font-size:20px; margin:-6px 0 12px; display:flex; gap:8px; align-items:center; justify-content:center; }
-  .toast{ position:absolute; left:50%; top:max(14px, env(safe-area-inset-top,0px)); transform:translate(-50%,-140%); z-index:6; display:flex; gap:10px; align-items:center; padding:10px 16px; border-radius:14px; background:rgba(18,16,30,.85); box-shadow:0 8px 24px rgba(0,0,0,.45); transition:transform .45s cubic-bezier(.2,1.4,.4,1); pointer-events:none; max-width:calc(100% - 32px); box-sizing:border-box; }
+  .toast{ position:absolute; left:50%; top:calc(var(--sat) + 8px); transform:translate(-50%,-140%); z-index:6; display:flex; gap:10px; align-items:center; padding:10px 16px; border-radius:14px; background:rgba(18,16,30,.85); box-shadow:0 8px 24px rgba(0,0,0,.45); transition:transform .45s cubic-bezier(.2,1.4,.4,1); pointer-events:none; max-width:calc(100% - 32px); box-sizing:border-box; }
   .toast.show{ transform:translate(-50%,0); }
+  .toast:not(.show){ transform:translate(-50%, calc(-100% - var(--sat) - 20px)); }
   .toast b{ display:block; font-family:'Russo One',Impact,sans-serif; font-weight:400; font-size:17px; color:#ffd35a; }
   .toast small{ font-size:14px; color:var(--muted); }
   .floaty{ position:absolute; pointer-events:none; font-family:'Russo One',Impact,sans-serif; font-size:20px; color:#ffd35a; text-shadow:0 2px 4px rgba(0,0,0,.7); animation:floaty 1s ease-out forwards; }
@@ -106,9 +125,17 @@
     .stove{ font-size:14px; padding:8px 10px; max-width:150px; }
     .card{ padding:20px 18px; } .card p{ font-size:16px; }
   }
-  .card button{ font-family:'Russo One',Impact,sans-serif; font-size:20px; padding:14px 28px; border:none; border-radius:12px; background:var(--ok); color:#2a1a08; cursor:pointer; box-shadow:0 6px 18px rgba(0,0,0,.4); }
+  .card button{ font-family:'Russo One',Impact,sans-serif; font-size:20px; min-height:48px; padding:14px 28px; border:none; border-radius:12px; background:var(--ok); color:#2a1a08; cursor:pointer; box-shadow:0 6px 18px rgba(0,0,0,.4); }
   .card button:focus-visible{ outline:3px solid var(--ink); outline-offset:3px; }
+  /* Portrait only: phones turned sideways get a rotate prompt (the game is paused while it shows). */
+  #rotate{ position:fixed; inset:0; z-index:50; display:none; flex-direction:column; align-items:center; justify-content:center; gap:18px; padding:24px; text-align:center; background:var(--bg); color:var(--ink); font:700 20px 'PT Sans',system-ui,sans-serif; }
+  #rotate b{ font:400 26px 'Russo One',Impact,sans-serif; }
+  #rotate svg{ width:72px; height:72px; animation:tilt 2.4s ease-in-out infinite; }
+  @keyframes tilt{ 0%,20%{ transform:rotate(-90deg);} 50%,100%{ transform:rotate(0deg);} }
+  @media (orientation: landscape) and (pointer: coarse) and (max-height: 540px){ #rotate{ display:flex; } }
+  #glLost .card p{ margin-bottom:18px; }
   @media (prefers-reduced-motion: reduce){
+    #rotate svg{ animation:none; }
     .pop.show{ animation:fade .9s linear; }
     .pop.show.long{ animation-duration:3s; }
     .toast{ transition:none; } .floaty{ animation-duration:.01s; } .coins.bump{ animation:none; }
@@ -163,6 +190,18 @@
     <div class="row"><button id="resume">Продолжить</button></div>
   </div>
 </div>
+<div class="over" id="glLost" hidden>
+  <div class="card" role="alertdialog" aria-labelledby="glLostT">
+    <h1 id="glLostT">Графика отключилась</h1>
+    <p>iPhone освободил видеопамять. Прогресс сохранён — перезапустите игру.</p>
+    <div class="row"><button id="glReload">Перезапустить</button></div>
+  </div>
+</div>
+<div id="rotate" role="alert">
+  <svg viewBox="0 0 48 48" aria-hidden="true"><rect x="14" y="4" width="20" height="40" rx="4" fill="none" stroke="currentColor" stroke-width="3"/><circle cx="24" cy="38" r="2" fill="currentColor"/></svg>
+  <b>Поверните телефон вертикально</b>
+  <span style="font-weight:400;color:var(--muted)">Дровосек играется только в портретной ориентации</span>
+</div>
 
 <div id="errlog" style="position:fixed;left:8px;right:8px;top:calc(env(safe-area-inset-top,0px) + 70px);z-index:99;max-height:40vh;overflow:auto;font:12px/1.35 ui-monospace,Menlo,monospace;color:#ffd6d6;background:rgba(80,0,0,.85);border-radius:8px;padding:8px 10px;white-space:pre-wrap;display:none;pointer-events:auto"></div>
 <script>
@@ -199,17 +238,23 @@ const $ = id => document.getElementById(id);
 const stage = $('stage');
 
 /* ================= renderer ================= */
-// Phones and weak GPUs get a lighter scene; ?low / ?high force it.
+// Target: iPhone 15/16 family (A16–A18, DPR 3, 60/120 Hz) in portrait. The lighter scene is the default;
+// ?high opts into the heavier one, ?low caps the resolution harder.
 const QS = new URLSearchParams(location.search);
-const COARSE = window.matchMedia && matchMedia('(pointer: coarse)').matches;
-const LOW = QS.has('low') || (!QS.has('high') && window.matchMedia && matchMedia('(pointer: coarse)').matches);
-const MAX_DPR = Math.min(window.devicePixelRatio || 1, LOW ? 1.5 : 2);
+const COARSE = true; // touch-only UI (hints, aiming)
+const LOW = !QS.has('high');
+const DPR_MIN = 1.25;
+const MAX_DPR = Math.max(1, Math.min(window.devicePixelRatio || 1, QS.has('low') ? 1.5 : 2));
 let dpr = MAX_DPR;
-const renderer = new THREE.WebGLRenderer({ antialias:!LOW || (window.devicePixelRatio||1) < 2 });
+const renderer = new THREE.WebGLRenderer({ antialias:(window.devicePixelRatio || 1) < 2, powerPreference:'high-performance', stencil:false });
 renderer.setPixelRatio(dpr);
 renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = LOW ? THREE.PCFShadowMap : THREE.PCFSoftShadowMap;
+renderer.shadowMap.type = THREE.PCFShadowMap;
 stage.prepend(renderer.domElement);
+// iOS drops the WebGL context under memory pressure (backgrounded tab, other apps); offer a restart.
+renderer.domElement.addEventListener('webglcontextlost', e => { e.preventDefault(); const g = $('glLost'); if(g) g.hidden = false; }, false);
+renderer.domElement.addEventListener('webglcontextrestored', () => location.reload(), false);
+$('glReload').addEventListener('click', () => location.reload());
 const maxAniso = renderer.capabilities.getMaxAnisotropy();
 
 const scene = new THREE.Scene();
@@ -754,18 +799,26 @@ const silentEl = (() => {
   el.loop = true; el.setAttribute('playsinline',''); el.preload = 'auto';
   return el;
 })();
-let audioUnlocked = false;
+// Retried on every gesture until both the AudioContext runs and the silent loop plays: on iOS a
+// pointerup may not count as a user activation, while the touchend that follows it does
+// (e.g. the first tap on the start card).
+let audioUnlocked = false, silentPlaying = false, unlockWarned = false;
 function unlockAudio(){
+  if(audioUnlocked) return;
   try{ if(navigator.audioSession) navigator.audioSession.type = 'playback'; }catch(e){}
   const a = audio(); if(!a) return;
-  if(!audioUnlocked){
-    audioUnlocked = true;
-    try{ const b = a.createBuffer(1,1,22050), s = a.createBufferSource(); s.buffer = b; s.connect(master); s.start(0); }catch(e){ console.error('unlock: ' + e); }
-    try{ const p = silentEl.play(); if(p && p.catch) p.catch(e => console.error('silent audio: ' + e)); }catch(e){}
-    setTimeout(() => { if(ac && ac.state !== 'running') console.error('Звук не запустился, состояние: ' + ac.state); }, 800);
+  try{ const b = a.createBuffer(1,1,22050), s = a.createBufferSource(); s.buffer = b; s.connect(master); s.start(0); }catch(e){}
+  if(!silentPlaying){
+    try{ const p = silentEl.play(); if(p && p.then) p.then(() => { silentPlaying = true; }, () => {}); else silentPlaying = true; }catch(e){}
   }
+  if(a.state === 'running' && silentPlaying){ audioUnlocked = true; return; }
+  setTimeout(() => {
+    if(ac && ac.state === 'running' && silentPlaying) audioUnlocked = true;
+    else if(!unlockWarned && ac && ac.state !== 'running' && !document.hidden){ unlockWarned = true; console.error('Звук не запустился, состояние: ' + ac.state); }
+  }, 800);
 }
-['pointerup','touchend','click','keydown'].forEach(ev => window.addEventListener(ev, unlockAudio, { capture:true, passive:true }));
+['touchend','pointerup','click','keydown'].forEach(ev => window.addEventListener(ev, unlockAudio, { capture:true, passive:true }));
+silentEl.addEventListener('pause', () => { silentPlaying = false; audioUnlocked = false; });
 document.addEventListener('visibilitychange', () => {
   if(document.hidden){ if(ac && ac.state === 'running') ac.suspend().catch(()=>{}); keys.left = keys.right = false; if(!paused && !gameOver && started) openMenu(); }
   else if(ac) audio();
@@ -1659,59 +1712,63 @@ $('menuBtn').addEventListener('click', e => { e.stopPropagation(); audio(); open
 $('soundBtn').addEventListener('click', e => { e.stopPropagation(); audio(); setMuted(!muted); });
 
 /* ================= input ================= */
-// Mouse: hover aims, click strikes, drag orbits. Touch: press on the log, slide to aim, release to strike;
-// a drag that starts off the log orbits the block. Keyboard: ← → orbit, Q/E aim, Space/Enter strike.
+// Touch (iPhone): press on the log, slide to aim, release to strike; a swipe that starts off the log
+// walks around the block. The aim ray is lifted a little above the fingertip so the line stays visible.
+// A mouse behaves like a finger. Keyboard: only Esc/P for the menu.
 let drag = null;
+const AIM_LIFT = 34; // px above the touch point
 const canRotate = () => !gameOver && !paused && state !== 'down';
 function onLog(p){
   if(!p || !cur || cur.falling) return false;
   const ext = pieceExtent(cur);
   return p.x > ext.min - .12 && p.x < ext.max + .12 && Math.abs(p.z) < 1.1;
 }
+const aimAt = (e, lift) => aimFrom({ clientX:e.clientX, clientY:e.clientY - (lift ? AIM_LIFT : 0) });
+function dropDrag(){ drag = null; hoverX = null; stage.classList.remove('dragging'); }
 stage.addEventListener('pointerdown', e => {
   if(e.target.closest('button')) return;
   e.preventDefault(); audio();
-  if(paused) return;
-  const p = aimFrom(e);
-  const aim = e.pointerType !== 'mouse' && onLog(p) && state === 'idle' && !gameOver;
-  drag = { id:e.pointerId, x0:e.clientX, y0:e.clientY, last:e.clientX, moved:false, aim, type:e.pointerType };
-  if(aim) hoverX = p.x;
+  if(paused || drag) return;
+  const touch = e.pointerType !== 'mouse';
+  const p0 = aimFrom(e), p1 = touch ? aimAt(e, true) : p0;
+  const aim = state === 'idle' && !gameOver && (onLog(p0) || onLog(p1));
+  drag = { id:e.pointerId, x0:e.clientX, y0:e.clientY, last:e.clientX, moved:false, aim, lift:touch, type:e.pointerType };
+  if(aim){ const p = onLog(p1) ? p1 : p0; hoverX = p.x; }
   try{ stage.setPointerCapture(e.pointerId); }catch(_){}
 });
 stage.addEventListener('pointermove', e => {
-  if(paused) return;
-  if(drag && e.pointerId === drag.id){
-    if(drag.aim){
-      const p = aimFrom(e); if(p) hoverX = p.x;
-      return;
-    }
-    const dx = e.clientX - drag.last; drag.last = e.clientX;
-    if(!drag.moved && Math.hypot(e.clientX-drag.x0, e.clientY-drag.y0) > 10){ drag.moved = true; stage.classList.add('dragging'); }
-    if(drag.moved && canRotate()) yawTarget -= dx*.008;
+  if(paused || !drag || e.pointerId !== drag.id) return;
+  if(drag.aim){
+    const p = aimAt(e, drag.lift); if(p) hoverX = p.x;
+    return;
   }
-  if(e.pointerType === 'mouse' && !(drag && drag.moved)){
-    const p = aimFrom(e);
-    hoverX = onLog(p) ? p.x : null;
-  } else if(drag && drag.moved) hoverX = null;
+  const dx = e.clientX - drag.last; drag.last = e.clientX;
+  if(!drag.moved && Math.hypot(e.clientX-drag.x0, e.clientY-drag.y0) > 10){ drag.moved = true; stage.classList.add('dragging'); }
+  if(drag.moved && canRotate()) yawTarget -= dx*.008;
 });
 stage.addEventListener('pointerup', e => {
   if(!drag || e.pointerId !== drag.id) return;
   const d = drag; drag = null; stage.classList.remove('dragging');
-  if(paused) return;
+  if(paused){ hoverX = null; return; }
   if(d.aim){
     const x = hoverX; hoverX = null;
     if(x !== null && cur && !cur.falling) strike(x);
     return;
   }
   if(d.moved) return;
-  const p = aimFrom(e);
-  if(onLog(p)) strike(p.x);
-  else if(cur && !cur.falling && state === 'idle' && !gameOver) popup(d.type === 'mouse' ? 'Цельтесь в полено' : 'Прижмите палец к полену', 'ok');
+  if(cur && !cur.falling && state === 'idle' && !gameOver) popup('Прижмите палец к полену', 'ok');
 });
-stage.addEventListener('pointercancel', () => { drag = null; hoverX = null; stage.classList.remove('dragging'); });
-stage.addEventListener('pointerleave', e => { if(e.pointerType === 'mouse') hoverX = null; });
+stage.addEventListener('pointercancel', dropDrag);
+// No page zoom / callouts on iOS: pinch (gesture*), double-tap and stray scrolling outside the menu lists.
+['gesturestart','gesturechange','gestureend'].forEach(ev => document.addEventListener(ev, e => e.preventDefault(), { passive:false }));
+document.addEventListener('dblclick', e => e.preventDefault(), { passive:false });
+document.addEventListener('contextmenu', e => e.preventDefault());
+document.addEventListener('touchmove', e => {
+  if(e.touches.length > 1 || !(e.target.closest && e.target.closest('.card'))) e.preventDefault();
+}, { passive:false });
 const keys = { left:false, right:false };
 window.addEventListener('blur', () => { keys.left = keys.right = false; });
+// Keyboard is not part of the iPhone UI; kept for desktop smoke tests and automation.
 window.addEventListener('keydown', e => {
   if(e.code === 'Escape' || e.code === 'KeyP'){
     e.preventDefault();
@@ -1719,7 +1776,6 @@ window.addEventListener('keydown', e => {
     return;
   }
   if(e.code === 'KeyM'){ setMuted(!muted); return; }
-  // Buttons and dialogs handle their own Space/Enter; don't swing the axe underneath them.
   const btn = e.target && e.target.closest && e.target.closest('button');
   if(!$('menu').hidden || (btn && btn.offsetParent && (e.code === 'Space' || e.code === 'Enter'))) return;
   if(e.code==='ArrowLeft' || e.code==='KeyA'){ keys.left = true; e.preventDefault(); }
@@ -1739,15 +1795,37 @@ window.addEventListener('keyup', e => {
   if(e.code==='ArrowLeft' || e.code==='KeyA') keys.left = false;
   if(e.code==='ArrowRight' || e.code==='KeyD') keys.right = false;
 });
+// Portrait only: while the phone is sideways the rotate overlay (CSS) covers the game, so pause under it.
+const landscapeMQ = window.matchMedia && matchMedia('(orientation: landscape) and (pointer: coarse) and (max-height: 540px)');
+let rotatePaused = false;
+function onOrientation(){
+  if(landscapeMQ.matches){
+    if(!paused){ paused = true; rotatePaused = true; dropDrag(); keys.left = keys.right = false; }
+  } else if(rotatePaused){
+    rotatePaused = false;
+    if($('menu').hidden && !document.hidden){ paused = false; clock.getDelta(); }
+  }
+}
+if(landscapeMQ){
+  if(landscapeMQ.addEventListener) landscapeMQ.addEventListener('change', onOrientation);
+  else if(landscapeMQ.addListener) landscapeMQ.addListener(onOrientation);
+  onOrientation();
+}
 
 function resize(){
-  const w = stage.clientWidth, h = stage.clientHeight;
+  const vv = window.visualViewport;
+  const w = Math.max(1, stage.clientWidth || (vv ? Math.round(vv.width) : innerWidth));
+  const h = Math.max(1, stage.clientHeight || (vv ? Math.round(vv.height) : innerHeight));
   renderer.setPixelRatio(dpr);
   renderer.setSize(w, h, false);
   camera.aspect = w/h; camera.fov = camera.aspect < .8 ? 82 : 70;
   camera.updateProjectionMatrix();
 }
-window.addEventListener('resize', resize); resize();
+window.addEventListener('resize', resize);
+if(window.visualViewport) visualViewport.addEventListener('resize', resize);
+// iOS reports the new size a moment after the rotation event.
+window.addEventListener('orientationchange', () => { resize(); setTimeout(resize, 350); });
+resize();
 // Adaptive resolution: drop the pixel ratio when frames run slow, creep back up when there is headroom.
 const perf = { t:0, n:0, cool:3 };
 function adaptQuality(rawDt){
@@ -1755,7 +1833,8 @@ function adaptQuality(rawDt){
   if(perf.t < 2) return;
   const avg = perf.t/perf.n; perf.t = 0; perf.n = 0;
   if(perf.cool > 0 || document.hidden) return;
-  if(avg > 1/40 && dpr > 1){ dpr = Math.max(1, dpr - .25); resize(); perf.cool = 4; }
+  // Frame-time based, so 60 Hz and 120 Hz ProMotion screens behave alike: 2 → 1.75 → 1.5 → 1.25.
+  if(avg > 1/40 && dpr > DPR_MIN){ dpr = Math.max(DPR_MIN, dpr - .25); resize(); perf.cool = 4; }
   else if(avg < 1/58 && dpr < MAX_DPR){ dpr = Math.min(MAX_DPR, dpr + .25); resize(); perf.cool = 8; }
 }
 if(document.fonts && document.fonts.ready) document.fonts.ready.then(() => hosp.signTex.redraw());
