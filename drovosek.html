@@ -610,9 +610,6 @@ function variant(sp, kind){
   delete v.v;
   return sp.v[kind] = v;
 }
-const knotMat = std({ color:0x2e1f12, roughness:.75 });
-const knotGeo = new THREE.SphereGeometry(.065,16,12), knotRingGeo = new THREE.TorusGeometry(.075,.02,10,24);
-SHARED.add(knotGeo); SHARED.add(knotRingGeo);
 
 /* ================= stump, props, trees ================= */
 const STUMP_TOP = 0.55;
@@ -620,16 +617,159 @@ const STUMP_TOP = 0.55;
 const stumpTop = photoTex('stumptop', 2, 2);
 const stumpBarkMap = photoTex('stumpbark', 4, 1);
 const stumpBark = std({ map:stumpBarkMap, bumpMap:stumpBarkMap, bumpScale:.05, roughness:.95, color:0xf2e6da });
-const stump = new THREE.Mesh(new THREE.CylinderGeometry(.6,.7,STUMP_TOP,48),
-  [stumpBark, std({ map:stumpTop, bumpMap:stumpTop, bumpScale:.01 }), stumpBark]);
-stump.position.y = STUMP_TOP/2; stump.castShadow = stump.receiveShadow = true; scene.add(stump);
-for(let i=0;i<5;i++){
-  const a = i/5*TAU + R(-.3,.3);
-  const root = new THREE.Mesh(new THREE.ConeGeometry(.14,.75,12), stumpBark);
-  root.position.set(Math.cos(a)*.68, .06, Math.sin(a)*.68);
-  root.lookAt(Math.cos(a)*2, -.2, Math.sin(a)*2); root.rotateX(Math.PI/2);
-  root.castShadow = root.receiveShadow = true; scene.add(root);
+// The chopping stump: an old sawn-off trunk built procedurally. Wobbly outline, flared foot and roots that run
+// into the ground, a ragged bark rim sitting just below the flat sawn top, drying checks and axe marks on it.
+// Vertex colours carry ambient occlusion towards the ground and weathering of the top.
+const STUMP_R = .61;   // nominal radius of the sawn top; chips inside it land on the stump
+function buildStump(){
+  const TOP = STUMP_TOP, NA = 96, NY = 12, Y0 = -.05, NR = 6;
+  const rootA = [.35, 1.6, 2.7, 3.95, 5.15].map(a => a + R(-.2,.2));
+  const wob = th => .034*Math.sin(2*th+1) + .024*Math.sin(3*th+2.2) + .015*Math.sin(5*th+.4) + .008*Math.sin(9*th+3) + .004*Math.sin(17*th+1.1);
+  const rootBulge = (th, y) => { let s = 0; for(const a of rootA){ const d = wrap(th-a); s += Math.exp(-d*d/.07); } return s*.15*Math.exp(-Math.max(0,y)/.11); };
+  const ridge = (th, y) => .003*Math.sin(th*23 + Math.sin(y*9+th*3)*1.5) + .0015*Math.sin(th*41 + y*5);
+  const barkTop = th => TOP - .013 - .009*(.5+.5*Math.sin(th*3+.5)) - .005*Math.abs(Math.sin(th*11+1)) - .002*Math.abs(Math.sin(th*29));
+  const barkT = th => .042 + .01*Math.sin(th*5+2) + .006*Math.sin(th*13) + .003*Math.sin(th*31);
+  const rSide = (th, y) => (STUMP_R+.035)*(1+wob(th))*(1 + .06*(TOP-y)/TOP) + .08*Math.exp(-Math.max(0,y)/.07) + rootBulge(th,y) + ridge(th,y);
+  const ao = y => .42 + .58*clamp((y+.03)/.32, 0, 1);
+
+  const pos = [], uv = [], col = [], part = [], idx = [[],[]];
+  const vert = (x, y, z, u, v, c, pt) => { pos.push(x,y,z); uv.push(u,v); col.push(c[0],c[1],c[2]); part.push(pt); return part.length-1; };
+  // triangle wound so that its face normal points along (wx,wy,wz)
+  const tri = (g, a, b, c, wx, wy, wz) => {
+    const ax=pos[a*3], ay=pos[a*3+1], az=pos[a*3+2];
+    const ux=pos[b*3]-ax, uy=pos[b*3+1]-ay, uz=pos[b*3+2]-az, vx=pos[c*3]-ax, vy=pos[c*3+1]-ay, vz=pos[c*3+2]-az;
+    const d = (uy*vz-uz*vy)*wx + (uz*vx-ux*vz)*wy + (ux*vy-uy*vx)*wz;
+    idx[g].push(...(d < 0 ? [a,c,b] : [a,b,c]));
+  };
+  const at = th => [Math.sin(th), Math.cos(th)];
+
+  // side wall, rows packed towards the flared foot
+  const side = [];
+  for(let i=0;i<=NA;i++){
+    const th = i/NA*TAU, [sx,cz] = at(th), yt = barkTop(th), row = [];
+    for(let j=0;j<=NY;j++){
+      const y = Y0 + (yt-Y0)*Math.pow(j/NY, 1.35), r = rSide(th, y), a = ao(y)*R(.9,1.04);
+      const moss = clamp(1 - y/.3, 0, 1)*.12;
+      row.push(vert(sx*r, y, cz*r, i/NA, y/TOP, [a*(1-moss), a, a*(1-moss*1.6)], 0));
+    }
+    side.push(row);
+  }
+  for(let i=0;i<NA;i++) for(let j=0;j<NY;j++){
+    const th = (i+.5)/NA*TAU, [wx,wz] = at(th), a = side[i][j], b = side[i+1][j], c = side[i+1][j+1], d = side[i][j+1];
+    tri(0,a,b,c,wx,0,wz); tri(0,a,c,d,wx,0,wz);
+  }
+  // bark rim seen from above, then the thin dark cambium step up to the sawn wood
+  const rim = [];
+  for(let i=0;i<=NA;i++){
+    const th = i/NA*TAU, [sx,cz] = at(th), yt = barkTop(th), ro = rSide(th, yt), bt = barkT(th), rw = ro - bt, u = i/NA;
+    const c0 = ao(yt), c1 = [c0*.8, c0*.72, c0*.66], c2 = [.3,.23,.18];
+    rim.push([
+      vert(sx*ro, yt, cz*ro, u, .9, [c0,c0,c0], 1),
+      vert(sx*(ro-bt*.45), yt+.004, cz*(ro-bt*.45), u, .95, c1, 1),
+      vert(sx*rw, yt+.001, cz*rw, u, 1, c1, 1),
+      vert(sx*rw, yt, cz*rw, u, .99, c2, 2),
+      vert(sx*(rw-.003), TOP, cz*(rw-.003), u, 1, c2, 2),
+    ]);
+  }
+  for(let i=0;i<NA;i++){
+    const th = (i+.5)/NA*TAU, [wx,wz] = at(th), A = rim[i], B = rim[i+1];
+    for(const k of [0,1]){ tri(0,A[k],B[k],B[k+1],0,1,0); tri(0,A[k],B[k+1],A[k+1],0,1,0); }
+    tri(0,A[3],B[3],B[4],wx,0,wz); tri(0,A[3],B[4],A[4],wx,0,wz);
+  }
+  // sawn top: rings from the edge to the pith, greyer and darker towards the weathered edge
+  const UVR = STUMP_R + .06, top = [];
+  for(let k=0;k<=NR;k++){
+    const row = [];
+    for(let i=0;i<=NA;i++){
+      const th = i/NA*TAU, [sx,cz] = at(th), rw = rSide(th, barkTop(th)) - barkT(th) - .003, r = rw*(1 - k/NR);
+      const e = k === 0 ? .72 : k === 1 ? .86 : R(.95,1.02);
+      row.push(vert(sx*r, TOP, cz*r, sx*r/(2*UVR)+.5, cz*r/(2*UVR)+.5, [e,e*.99,e*.97], 3));
+    }
+    top.push(row);
+  }
+  for(let k=0;k<NR;k++) for(let i=0;i<NA;i++){
+    const a = top[k][i], b = top[k][i+1], c = top[k+1][i+1], d = top[k+1][i];
+    tri(1,a,b,c,0,1,0); if(k < NR-1) tri(1,a,c,d,0,1,0);
+  }
+  // roots: tapered, flattened tubes from inside the trunk down into the ground
+  rootA.forEach((a0, ri) => {
+    const bend = R(-.25,.25), len = R(1,1.3), pts = [];
+    for(let k=0;k<5;k++){ const t = k/4, a = a0 + bend*t*t, r = .3 + t*len, y = .2 - .4*Math.pow(t,1.3); pts.push(new V3(Math.sin(a)*r, y, Math.cos(a)*r)); }
+    const curve = new THREE.CatmullRomCurve3(pts), TS = 14, RS = 8;
+    const tube = new THREE.TubeGeometry(curve, TS, 1, RS, false), tp = tube.attributes.position, base = part.length, c = new V3();
+    for(let i=0;i<=TS;i++){
+      const t = i/TS; curve.getPointAt(t, c);
+      const rad = lerp(.16, .05, t)*(1 + .12*Math.sin(t*9 + ri));
+      for(let j=0;j<=RS;j++){
+        const n = i*(RS+1)+j;
+        const x = c.x + (tp.getX(n)-c.x)*rad, y = c.y + (tp.getY(n)-c.y)*rad*.6, z = c.z + (tp.getZ(n)-c.z)*rad;
+        const s = ao(y)*R(.9,1.04);
+        vert(x, y, z, j/RS*.12, t*len/TOP, [s*.95, s, s*.9], 4+ri);
+      }
+    }
+    const ti = tube.index.array;
+    for(let n=0;n<ti.length;n+=3) idx[0].push(base+ti[n], base+ti[n+1], base+ti[n+2]);
+    tube.dispose();
+  });
+
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos,3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(uv,2));
+  g.setAttribute('color', new THREE.Float32BufferAttribute(col,3));
+  g.setIndex([...idx[0], ...idx[1]]);
+  g.addGroup(0, idx[0].length, 0); g.addGroup(idx[0].length, idx[1].length, 1);
+  g.computeVertexNormals();
+  // weld normals across the seams of each surface
+  const nor = g.attributes.normal.array, seen = new Map();
+  for(let i=0;i<part.length;i++){
+    const k = part[i] + '|' + Math.round(pos[i*3]*1e4) + '|' + Math.round(pos[i*3+1]*1e4) + '|' + Math.round(pos[i*3+2]*1e4);
+    const l = seen.get(k); if(l) l.push(i); else seen.set(k, [i]);
+  }
+  seen.forEach(l => {
+    if(l.length < 2) return;
+    let x=0, y=0, z=0; l.forEach(i => { x+=nor[i*3]; y+=nor[i*3+1]; z+=nor[i*3+2]; });
+    const m = Math.hypot(x,y,z)||1; l.forEach(i => { nor[i*3]=x/m; nor[i*3+1]=y/m; nor[i*3+2]=z/m; });
+  });
+  stumpBark.vertexColors = true;
+  const mesh = new THREE.Mesh(g, [stumpBark, std({ map:stumpTop, bumpMap:stumpTop, bumpScale:.01, vertexColors:true })]);
+  mesh.castShadow = mesh.receiveShadow = true;
+
+  // drying checks from the rim inwards and old axe marks, as one thin decal layer on the sawn top
+  const dp = [], dc = [], di = [];
+  const quadStrip = (L, Rt, c) => {   // L, Rt: points [x,z] on either side of a centreline
+    const b = dp.length/3;
+    for(let i=0;i<L.length;i++){ dp.push(L[i][0], TOP+.0006, L[i][1], Rt[i][0], TOP+.0006, Rt[i][1]); dc.push(...c(i,0), ...c(i,1)); }
+    // wind upwards: y of (L1-L0) x (R0-L0) must be positive for the order L0, L1, R0
+    const up = (L[1][1]-L[0][1])*(Rt[0][0]-L[0][0]) - (L[1][0]-L[0][0])*(Rt[0][1]-L[0][1]) > 0;
+    for(let i=0;i<L.length-1;i++){ const a = b+i*2; di.push(...(up ? [a,a+2,a+1, a+1,a+2,a+3] : [a,a+1,a+2, a+1,a+3,a+2])); }
+  };
+  for(let n=0;n<8;n++){
+    const th0 = n/8*TAU + R(-.3,.3), r0 = rSide(th0, barkTop(th0)) - barkT(th0) + .004, r1 = r0*R(.25,.62), S = 8;
+    const L = [], Rt = []; let th = th0;
+    for(let i=0;i<=S;i++){
+      const t = i/S, r = lerp(r0, r1, t); th += i ? R(-.035,.035) : 0;
+      const w = .012*Math.pow(1-t,1.3) + .0008, [sx,cz] = at(th), px = sx*r, pz = cz*r, ox = cz*w, oz = -sx*w;
+      L.push([px-ox, pz-oz]); Rt.push([px+ox, pz+oz]);
+    }
+    quadStrip(L, Rt, i => { const d = .08 + .12*i/S; return [d*1.15, d, d*.85]; });
+  }
+  for(let n=0;n<12;n++){
+    const r = Math.sqrt(Math.random())*.42, a = R(0,TAU), cx = Math.sin(a)*r, cz = Math.cos(a)*r;
+    const d = R(0,Math.PI), l = R(.05,.13), w = R(.003,.006), ex = Math.cos(d), ez = Math.sin(d);
+    const L = [], Rt = [];
+    for(let i=0;i<=4;i++){ const t = i/4-.5, ww = w*Math.cos(t*Math.PI)+.0004, px = cx+ex*l*t, pz = cz+ez*l*t; L.push([px+ez*ww, pz-ex*ww]); Rt.push([px-ez*ww, pz+ex*ww]); }
+    quadStrip(L, Rt, (i,sd) => sd ? [.6,.56,.5] : [.2,.17,.14]);
+  }
+  const dg = new THREE.BufferGeometry();
+  dg.setAttribute('position', new THREE.Float32BufferAttribute(dp,3));
+  dg.setAttribute('color', new THREE.Float32BufferAttribute(dc,3));
+  dg.setAttribute('normal', new THREE.Float32BufferAttribute(dp.map((v,i) => i%3===1 ? 1 : 0),3));
+  dg.setIndex(di);
+  const marks = new THREE.Mesh(dg, std({ vertexColors:true, roughness:1, polygonOffset:true, polygonOffsetFactor:-2, polygonOffsetUnits:-2 }));
+  marks.receiveShadow = true; mesh.add(marks);
+  return mesh;
 }
+const stump = buildStump(); scene.add(stump);
 {
   const lantern = new THREE.Group();
   const lb = new THREE.Mesh(new THREE.BoxGeometry(.16,.22,.16), std({ color:0x2b2521, roughness:.5, metalness:.4 })); lb.position.y = .11;
@@ -867,8 +1007,33 @@ function flatFit(poly){
   }
   return best;
 }
+// Rendering only: the collision polygon stays a convex 64-gon, but drawn vertices are pushed a little in and out
+// (s.seed makes each log's outline unique) and split faces get a torn, fibrous relief. Both are pure functions of
+// the position in the log's frame, so the two halves of a split still meet exactly.
+function logWob(s, th, y){
+  const k = s.seed || 0;
+  return .014*Math.sin(2*th + k) + .011*Math.sin(3*th + k*1.7) + .007*Math.sin(5*th + k*2.3) + .004*Math.sin(8*th + k*3.1) + .008*Math.sin(y*4 + th + k*.7);
+}
+function logWarp(s, x, y, z, o){
+  const w = Math.min(1, Math.hypot(x,z)/s.R), w3 = w*w*w, f = 1 + w3*w3*logWob(s, Math.atan2(x,z), y);
+  o[0] = x*f; o[1] = y; o[2] = z*f; return o;
+}
+// fibres run along the log, so the relief changes fast across the face and slowly along it
+function tearAt(u, y, c){ return .007*Math.sin(u*41 + c*31 + y*1.7) + .005*Math.sin(u*89 + c*11 - y*3.3) + .006*Math.sin(u*13 + y*7 + c*23) + .004*Math.sin(y*11 - u*29 + c*5); }
+function splitPos(s, e, t, y, o){
+  const bx = e.A.x + (e.B.x-e.A.x)*t, bz = e.A.z + (e.B.z-e.A.z)*t;
+  const off = tearAt(bx*e.dx + bz*e.dz, y, e.c) * Math.min(1, 3*Math.sin(Math.PI*clamp(t,0,1)));
+  return logWarp(s, bx + e.nx*off, y, bz + e.nz*off, o);
+}
+function surfNormal(f, want){   // f(du, dv) → point; normal of the surface, facing along want
+  const a = f(-1,0), b = f(1,0), c = f(0,-1), d = f(0,1);
+  const u = [b[0]-a[0], b[1]-a[1], b[2]-a[2]], v = [d[0]-c[0], d[1]-c[1], d[2]-c[2]];
+  let n = [u[1]*v[2]-u[2]*v[1], u[2]*v[0]-u[0]*v[2], u[0]*v[1]-u[1]*v[0]];
+  const l = Math.hypot(n[0],n[1],n[2]) || 1, sg = n[0]*want[0]+n[1]*want[1]+n[2]*want[2] < 0 ? -1 : 1;
+  return [n[0]/l*sg, n[1]/l*sg, n[2]/l*sg];
+}
 function pieceGeometry(s){
-  const P = s.poly, N = P.length, h = s.h, R = s.R, c = polyCentroid(P);
+  const P = s.poly, N = P.length, h = s.h, R = s.R, c = polyCentroid(P), K = 6, EPS = 1e-3;
   const buf = [[],[],[]];
   const push = (mat, v, want) => {
     const [a,b,cc] = v;
@@ -876,31 +1041,72 @@ function pieceGeometry(s){
     const cr = [ab[1]*ac[2]-ab[2]*ac[1], ab[2]*ac[0]-ab[0]*ac[2], ab[0]*ac[1]-ab[1]*ac[0]];
     buf[mat].push(...(cr[0]*want[0]+cr[1]*want[1]+cr[2]*want[2] < 0 ? [a,cc,b] : [a,b,cc]));
   };
+  const quad = (mat, a, b, cc, d, want) => { push(mat,[a,b,cc],want); push(mat,[a,cc,d],want); };
+  // outline: every polygon vertex, plus extra points along split edges so the torn relief has somewhere to live
+  const O = [];
   for(let i=0;i<N;i++){
     const A = P[i], B = P[(i+1)%N];
-    let ox = B.z-A.z, oz = -(B.x-A.x);
-    if(ox*((A.x+B.x)/2-c.x) + oz*((A.z+B.z)/2-c.z) < 0){ ox=-ox; oz=-oz; }
-    const ol = Math.hypot(ox,oz) || 1; ox/=ol; oz/=ol;
-    let nA, nB, uA, uB;
-    if(A.bark){
-      const la = Math.hypot(A.x,A.z)||1, lb = Math.hypot(B.x,B.z)||1;
-      nA = [A.x/la,0,A.z/la]; nB = [B.x/lb,0,B.z/lb];
-      uA = Math.atan2(A.x,A.z)/TAU; uB = Math.atan2(B.x,B.z)/TAU;
-      if(uB-uA > .5) uB -= 1; if(uA-uB > .5) uB += 1;
-    } else {
-      nA = nB = [ox,0,oz];
-      const L = Math.hypot(B.x-A.x, B.z-A.z)||1, ex = (B.x-A.x)/L, ez = (B.z-A.z)/L;
-      uA = .5 + (A.x*ex + A.z*ez)/(2*R); uB = .5 + (B.x*ex + B.z*ez)/(2*R);
-    }
-    const a0={p:[A.x,-h/2,A.z],n:nA,uv:[uA,0]}, b0={p:[B.x,-h/2,B.z],n:nB,uv:[uB,0]};
-    const a1={p:[A.x,h/2,A.z],n:nA,uv:[uA,1]}, b1={p:[B.x,h/2,B.z],n:nB,uv:[uB,1]};
-    const mat = A.bark ? 0 : 2, want = [ox,0,oz];
-    push(mat,[a0,b0,b1],want); push(mat,[a0,b1,a1],want);
+    if(A.bark){ O.push({ x:A.x, z:A.z, bark:true }); continue; }
+    let dx = B.x-A.x, dz = B.z-A.z; const L = Math.hypot(dx,dz) || 1; dx /= L; dz /= L;
+    let ox = dz, oz = -dx;
+    if(ox*((A.x+B.x)/2-c.x) + oz*((A.z+B.z)/2-c.z) < 0){ ox = -ox; oz = -oz; }
+    const flip = dx < 0 || (dx === 0 && dz < 0), cdx = flip ? -dx : dx, cdz = flip ? -dz : dz;   // same for both halves
+    const e = { A, B, dx:cdx, dz:cdz, nx:-cdz, nz:cdx, c:A.x*-cdz + A.z*cdx, M:clamp(Math.ceil(L/.018), 2, 24), ex:dx, ez:dz, want:[ox,0,oz] };
+    for(let j=0;j<e.M;j++) O.push({ x:lerp(A.x,B.x,j/e.M), z:lerp(A.z,B.z,j/e.M), bark:false, e, t:j/e.M });
   }
+  const NO = O.length, at = (o, y) => o.e ? splitPos(s, o.e, o.t, y, [0,0,0]) : logWarp(s, o.x, y, o.z, [0,0,0]);
+  const barkU = o => Math.atan2(o.x, o.z)/TAU;
+  // side walls: bark strips and torn split faces, K rows along the log
+  for(let j=0;j<NO;j++){
+    const o = O[j], on = O[(j+1)%NO];
+    if(o.bark){
+      let uA = barkU(o), uB = barkU(on); if(uB-uA > .5) uB -= 1; if(uA-uB > .5) uB += 1;
+      const col = (q, u, y) => {
+        const th = Math.atan2(q.x, q.z), r = Math.hypot(q.x, q.z);
+        const n = surfNormal((du,dv) => logWarp(s, Math.sin(th+du*EPS)*r, y+dv*EPS, Math.cos(th+du*EPS)*r, [0,0,0]), [q.x,0,q.z]);
+        return { p:at(q, y), n, uv:[u, y/h+.5] };
+      };
+      for(let k=0;k<K;k++){
+        const y0 = -h/2 + k*h/K, y1 = y0 + h/K, want = [o.x+on.x, 0, o.z+on.z];
+        quad(0, col(o,uA,y0), col(on,uB,y0), col(on,uB,y1), col(o,uA,y1), want);
+      }
+    } else {
+      const e = o.e, t0 = o.t, t1 = t0 + 1/e.M;
+      const pt = (t, y) => {
+        const bx = lerp(e.A.x,e.B.x,t), bz = lerp(e.A.z,e.B.z,t);
+        return { p:splitPos(s, e, t, y, [0,0,0]), n:surfNormal((du,dv) => splitPos(s, e, t+du*EPS, y+dv*EPS, [0,0,0]), e.want),
+          uv:[.5 + (bx*e.ex + bz*e.ez)/(2*R), y/h+.5] };
+      };
+      for(let k=0;k<K;k++){
+        const y0 = -h/2 + k*h/K, y1 = y0 + h/K;
+        quad(2, pt(t0,y0), pt(t1,y0), pt(t1,y1), pt(t0,y1), e.want);
+      }
+    }
+  }
+  // end faces: a ring of bark around the rim, then the end grain inside it
+  const bt = clamp(R*.075, .012, .028);
   for(const sg of [1,-1]){
     const y = sg*h/2, n = [0,sg,0];
-    const v = q => ({ p:[q.x,y,q.z], n, uv:[q.x/(2*R)+.5, q.z/(2*R)+.5] });
-    for(let i=1;i<N-1;i++) push(1,[v(P[0]),v(P[i]),v(P[i+1])],n);
+    const OP = O.map(o => at(o, y));
+    const slide = (p, q) => { const dx = q[0]-p[0], dz = q[2]-p[2], l = Math.hypot(dx,dz) || 1, k = Math.min(bt, l*.45)/l; return [p[0]+dx*k, y, p[2]+dz*k]; };
+    const IP = OP.map((p, j) => {
+      const nb = O[j].bark, pb = O[(j-1+NO)%NO].bark;
+      if(nb && pb){ const r = Math.hypot(p[0],p[2]) || 1, f = Math.max(0, 1 - bt/r); return [p[0]*f, y, p[2]*f]; }
+      if(nb) return slide(p, OP[(j-1+NO)%NO]);
+      if(pb) return slide(p, OP[(j+1)%NO]);
+      return p;
+    });
+    const ev = p => ({ p, n, uv:[p[0]/(2*R)+.5, p[2]/(2*R)+.5] });
+    const C = ev([c.x, y, c.z]);
+    for(let j=0;j<NO;j++){
+      const jn = (j+1)%NO;
+      if(O[j].bark){
+        let uA = barkU(O[j]), uB = barkU(O[jn]); if(uB-uA > .5) uB -= 1; if(uA-uB > .5) uB += 1;
+        quad(0, { p:OP[j], n, uv:[uA,0] }, { p:OP[jn], n, uv:[uB,0] }, { p:IP[jn], n, uv:[uB,.05] }, { p:IP[j], n, uv:[uA,.05] }, n);
+      }
+      const a = IP[j], b = IP[jn];
+      if(Math.hypot(a[0]-b[0], a[2]-b[2]) > 1e-6) push(1, [C, ev(a), ev(b)], n);
+    }
   }
   const g = new THREE.BufferGeometry(), pos = [], nor = [], uv = [];
   let start = 0;
@@ -910,16 +1116,72 @@ function pieceGeometry(s){
   g.setAttribute('uv', new THREE.Float32BufferAttribute(uv,2));
   return g;
 }
+// Knot: a sawn-off branch stub (bark collar round a cut face with its own rings and a dark heart) sitting in an
+// "eye" where the bark fibres swirl around it.
+const knotEyeTex = canvasTex(112,208,(x,w,h)=>{   // 1 px ≈ 1.25 mm on the bark
+  x.clearRect(0,0,w,h);
+  const cx = w/2, cy = h/2;
+  const sh = x.createRadialGradient(cx,cy,34,cx,cy,54); sh.addColorStop(0,'rgba(22,13,6,.75)'); sh.addColorStop(1,'rgba(22,13,6,0)');
+  x.fillStyle = sh; x.fillRect(0,0,w,h);
+  for(let k=0;k<8;k++){
+    const rx = 40 + k*2.2, ry = 46 + k*7, a = .55 - k*.055;
+    x.strokeStyle = `rgba(${34+k*4},${22+k*3},${12+k*2},${a})`; x.lineWidth = R(1.4,2.6);
+    for(const sd of [-1,1]){
+      const ox = sd*R(4,12);
+      x.beginPath(); x.moveTo(cx + ox, cy - ry - 20);
+      x.bezierCurveTo(cx + sd*rx*1.2, cy - ry*.5, cx + sd*rx*1.2, cy + ry*.5, cx + ox*.8, cy + ry + 20); x.stroke();
+    }
+  }
+  x.globalCompositeOperation = 'destination-in';
+  x.save(); x.translate(cx, cy); x.scale(1, 1.8);
+  const m = x.createRadialGradient(0,0,36,0,0,56); m.addColorStop(0,'rgba(0,0,0,1)'); m.addColorStop(1,'rgba(0,0,0,0)');
+  x.fillStyle = m; x.fillRect(-cx, -cy/1.8, w, h/1.8); x.restore();
+  x.globalCompositeOperation = 'source-over';
+});
+const knotFaceTex = canvasTex(64,64,(x,w,h)=>{
+  const c = w/2;
+  x.fillStyle = '#80603e'; x.fillRect(0,0,w,h);
+  for(let r=4;r<30;r+=R(2.5,4.5)){ x.strokeStyle = `rgba(70,44,22,${R(.35,.7)})`; x.lineWidth = R(.8,1.8); x.beginPath(); x.ellipse(c+R(-.6,.6), c+R(-.6,.6), r, r*R(.94,1.04), 0, 0, TAU); x.stroke(); }
+  const g = x.createRadialGradient(c,c,0,c,c,11); g.addColorStop(0,'#1a0f07'); g.addColorStop(.6,'#3a2412'); g.addColorStop(1,'rgba(58,36,18,0)');
+  x.fillStyle = g; x.beginPath(); x.arc(c,c,11,0,TAU); x.fill();
+  x.strokeStyle = 'rgba(18,10,5,.9)'; x.lineWidth = 1.2;
+  for(let i=0;i<4;i++){ const a = i/4*TAU + R(-.4,.4), l = R(12,26); x.beginPath(); x.moveTo(c,c); x.lineTo(c+Math.cos(a)*l, c+Math.sin(a)*l); x.stroke(); }
+  x.strokeStyle = '#3a2614'; x.lineWidth = 5; x.beginPath(); x.arc(c,c,c-2.5,0,TAU); x.stroke();
+});
+const knotDecalMat = std({ map:knotEyeTex, transparent:true, depthWrite:false, roughness:.9, side:THREE.DoubleSide, polygonOffset:true, polygonOffsetFactor:-2, polygonOffsetUnits:-2 });
+const knotFaceMat = std({ map:knotFaceTex, roughness:.8 });
+const knotCollarGeo = new THREE.LatheGeometry([[.05,-.014],[.047,-.002],[.041,.008],[.034,.013],[.029,.011],[.027,.006]].map(([r,y]) => new THREE.Vector2(r,y)), 14);
+const knotFaceGeo = new THREE.CircleGeometry(.0285, 16);
+[knotEyeTex, knotFaceTex, knotDecalMat, knotFaceMat, knotCollarGeo, knotFaceGeo].forEach(o => SHARED.add(o));
 function pieceMesh(s){
   const g = new THREE.Group();
   const m = new THREE.Mesh(pieceGeometry(s), [s.sp.bark, s.sp.end, s.sp.inner]);
   m.castShadow = m.receiveShadow = true; g.add(m);
   if(s.knot){
-    const k = new THREE.Mesh(knotGeo, knotMat);
-    k.scale.set(1,1.4,.55); k.position.set(s.knot.x, s.knot.y, s.knot.z); k.rotation.y = s.knot.a;
-    k.castShadow = true; g.add(k);
-    const ring = new THREE.Mesh(knotRingGeo, knotMat);
-    ring.position.copy(k.position); ring.rotation.y = s.knot.a; g.add(ring);
+    const K = s.knot, o = [0,0,0], r0 = Math.hypot(K.x, K.z) || s.R;
+    const onBark = (th, y, lift) => { logWarp(s, Math.sin(th)*s.R, y, Math.cos(th)*s.R, o); const f = 1 + lift/Math.hypot(o[0],o[2]); return [o[0]*f, y, o[2]*f]; };
+    const kg = new THREE.Group(), p = onBark(K.a, K.y, -.003);
+    kg.position.set(p[0], p[1], p[2]); kg.rotation.y = K.a;
+    const collar = new THREE.Mesh(knotCollarGeo, s.sp.bark); collar.rotation.x = Math.PI/2; collar.castShadow = true;
+    const face = new THREE.Mesh(knotFaceGeo, knotFaceMat); face.position.z = .0075;
+    kg.add(collar, face); g.add(kg);
+    // decal hugging the bark; dropped on a half whose split face would cut through it
+    const NU = 5, NV = 8, hw = .07/r0, hh = .13, splits = [];
+    for(let i=0;i<s.poly.length;i++){ const A = s.poly[i], B = s.poly[(i+1)%s.poly.length]; if(!A.bark) splits.push([A, B]); }
+    const cc = polyCentroid(s.poly);
+    const inside = th => splits.every(([A,B]) => {
+      const x = Math.sin(th)*s.R, z = Math.cos(th)*s.R, cr = (B.x-A.x)*(z-A.z) - (B.z-A.z)*(x-A.x), cc0 = (B.x-A.x)*(cc.z-A.z) - (B.z-A.z)*(cc.x-A.x);
+      return cr*cc0 > 0;
+    });
+    if(inside(K.a-hw) && inside(K.a+hw)){
+      const pos = [], uv = [], idx = [];
+      for(let j=0;j<=NV;j++) for(let i=0;i<=NU;i++){ pos.push(...onBark(K.a + (i/NU-.5)*2*hw, K.y + (j/NV-.5)*2*hh, .0015)); uv.push(1-i/NU, j/NV); }
+      for(let j=0;j<NV;j++) for(let i=0;i<NU;i++){ const a = j*(NU+1)+i; idx.push(a,a+1,a+NU+1, a+1,a+NU+2,a+NU+1); }
+      const dg = new THREE.BufferGeometry();
+      dg.setAttribute('position', new THREE.Float32BufferAttribute(pos,3)); dg.setAttribute('uv', new THREE.Float32BufferAttribute(uv,2));
+      dg.setIndex(idx); dg.computeVertexNormals();
+      const d = new THREE.Mesh(dg, knotDecalMat); d.receiveShadow = true; d.renderOrder = 1; g.add(d);
+    }
   }
   return g;
 }
@@ -1342,7 +1604,7 @@ function spawnLog(){
   const Rr = first ? .3 : R(.2,.38), h = first ? .7 : R(.5,.85);
   let knot = null;
   if(!first && Math.random() < .4){ const a = R(0,TAU); knot = { a, x:Math.sin(a)*Rr, z:Math.cos(a)*Rr, y:R(-.28,.28)*h }; }
-  const s = { poly:circlePoly(Rr), h, R:Rr, sp, round:true, knot, kind };
+  const s = { poly:circlePoly(Rr), h, R:Rr, sp, round:true, knot, kind, seed:R(0,100) };
   sp.bark.map.offset.set(Math.random(), Math.random());
   const phi = R(0,TAU), g = new THREE.Group();
   g.quaternion.copy(qAxis(Y, phi));
@@ -2285,7 +2547,7 @@ function tick(){
   for(let i=chips.length-1;i>=0;i--){
     const c = chips[i]; c.life -= sdt;
     c.v.y -= 9.8*sdt; c.m.position.addScaledVector(c.v, sdt);
-    const floor = (Math.hypot(c.m.position.x, c.m.position.z) < .62 ? STUMP_TOP : 0) + .01;
+    const floor = (Math.hypot(c.m.position.x, c.m.position.z) < STUMP_R ? STUMP_TOP : 0) + .01;
     if(c.m.position.y < floor){ c.m.position.y = floor; c.v.set(c.v.x*.3, 0, c.v.z*.3); c.s.multiplyScalar(.3); }
     c.m.rotation.x += c.s.x*sdt; c.m.rotation.y += c.s.y*sdt; c.m.rotation.z += c.s.z*sdt;
     if(c.life < .3) c.m.scale.multiplyScalar(Math.max(0, 1 - sdt*6));
