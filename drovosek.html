@@ -536,35 +536,176 @@ const pileZ = s => -2.55 - s*1.0;
 }
 
 /* ================= hospital next door ================= */
+// Rural hospital. Static parts are merged per material (about 15 draw calls for the whole building incl. the woodshed);
+// no new lights: glow comes from emissive materials, the single porch PointLight is the old hosp.lamp.
+function mergeGeos(list, uvScale){
+  const parts = list.map(g => g.index ? g.toNonIndexed() : g);
+  let n = 0; for(const q of parts) n += q.attributes.position.count;
+  const pos = new Float32Array(n*3), nor = new Float32Array(n*3), uv = new Float32Array(n*2);
+  let o = 0;
+  for(const q of parts){
+    const P = q.attributes.position.array, N = q.attributes.normal.array, c = q.attributes.position.count;
+    pos.set(P, o*3); nor.set(N, o*3);
+    if(uvScale){ // box projection in metres, so every texture keeps one scale across merged pieces
+      for(let i=0;i<c;i++){ const ax = Math.abs(N[i*3]), ay = Math.abs(N[i*3+1]);
+        uv[(o+i)*2] = (ax > .5 ? P[i*3+2] : P[i*3])*uvScale; uv[(o+i)*2+1] = (ay > .7 ? P[i*3+2] : P[i*3+1])*uvScale; }
+    } else if(q.attributes.uv) uv.set(q.attributes.uv.array, o*2);
+    o += c;
+  }
+  new Set([...list, ...parts]).forEach(g => g.dispose());
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos,3)); g.setAttribute('normal', new THREE.BufferAttribute(nor,3)); g.setAttribute('uv', new THREE.BufferAttribute(uv,2));
+  g.computeBoundingSphere(); return g;
+}
 const hosp = (() => {
   const g = new THREE.Group();
-  const wall = std({ color:0xe9e1cc, roughness:.85 }), base = std({ color:0x8a857c }), trim = std({ color:0xb04a3a }), wood = std({ color:0x5a3a24 });
-  const roofMat = std({ color:0x3f6b4c, roughness:.55, metalness:.2 }), brick = std({ color:0x8a3b2a });
-  const mk = (geo, mat, x, y, z) => { const m = new THREE.Mesh(geo, mat); m.position.set(x,y,z); m.castShadow = m.receiveShadow = true; g.add(m); return m; };
-  mk(new THREE.BoxGeometry(9.4,.45,5.4), base, 0,.225,0);
-  mk(new THREE.BoxGeometry(9,3.2,5), wall, 0,1.8,0);
-  const rs = new THREE.Shape(); rs.moveTo(-2.9,0); rs.lineTo(2.9,0); rs.lineTo(0,1.7); rs.closePath();
-  const rg = new THREE.ExtrudeGeometry(rs, { depth:9.6, bevelEnabled:false }); rg.rotateY(Math.PI/2); rg.translate(-4.8,0,0);
-  mk(rg, roofMat, 0,3.4,0);
-  mk(new THREE.BoxGeometry(.6,1.9,.6), brick, 2.4,4.3,-.6);
+  const P = { wall:[], stone:[], trim:[], wood:[], roof:[], metal:[], brick:[], glass:[], frost:[], ice:[], cross:[] };
+  const B = (w,h,d,x,y,z) => new THREE.BoxGeometry(w,h,d).translate(x,y,z);
+  const at = (geo, ry, x, y, z) => { if(ry) geo.rotateY(ry); return geo.translate(x,y,z); };
+  const repTex = (w, h, draw) => { const t = canvasTex(w, h, draw); t.wrapS = t.wrapT = THREE.RepeatWrapping; return t; };
+  // textures: 1 texture unit = 1 m (walls, roof) or 0.5 m (bricks)
+  const clapTex = repTex(128,128,(x,w,h)=>{ x.fillStyle='#ecdcb4'; x.fillRect(0,0,w,h);
+    for(let i=0;i<5;i++){ const y=i*h/5; x.fillStyle='rgba(120,90,50,.35)'; x.fillRect(0,y+h/5-4,w,4); x.fillStyle='rgba(255,255,255,.25)'; x.fillRect(0,y,w,2); }
+    for(let i=0;i<300;i++){ x.fillStyle=`rgba(140,110,70,${R(.03,.1)})`; x.fillRect(R(0,w),R(0,h),R(6,30),1); } });
+  const roofTex = repTex(128,128,(x,w,h)=>{ x.fillStyle='#d8dcd8'; x.fillRect(0,0,w,h);
+    for(let i=0;i<2;i++){ x.fillStyle='rgba(40,50,45,.45)'; x.fillRect(i*w/2+w/2-5,0,3,h); x.fillStyle='rgba(255,255,255,.5)'; x.fillRect(i*w/2+w/2-2,0,2,h); } });
+  const brickTex = repTex(128,128,(x,w,h)=>{ x.fillStyle='#d9cfc0'; x.fillRect(0,0,w,h);
+    for(let r=0;r<8;r++) for(let c=-1;c<2;c++){ const bx = c*w/2 + (r%2)*w/4; x.fillStyle=`rgb(${R(125,160)|0},${R(52,70)|0},${R(38,50)|0})`; x.fillRect(bx+2, r*h/8+2, w/2-4, h/8-4); } });
+  const frostTex = canvasTex(128,160,(x,w,h)=>{ x.clearRect(0,0,w,h);
+    const rg = x.createRadialGradient(w/2,h/2,h*.18,w/2,h/2,h*.62); rg.addColorStop(0,'rgba(235,245,255,0)'); rg.addColorStop(1,'rgba(235,245,255,.95)'); x.fillStyle=rg; x.fillRect(0,0,w,h);
+    x.strokeStyle='rgba(255,255,255,.8)'; x.lineWidth=1;
+    for(let i=0;i<70;i++){ const e=i%4, px = e<2 ? R(0,w) : e===2 ? R(0,18) : w-R(0,18), py = e===0 ? R(0,18) : e===1 ? h-R(0,18) : R(0,h), l=R(6,22), a=R(0,TAU);
+      for(let k=0;k<3;k++){ const b=a+k*TAU/3; x.beginPath(); x.moveTo(px,py); x.lineTo(px+Math.cos(b)*l, py+Math.sin(b)*l); x.stroke(); } } });
+  const wall = std({ map:clapTex, roughness:.85 }), stone = std({ color:0x8e8981, roughness:.95 }), trim = std({ color:0xf3f0e8, roughness:.6 }), wood = std({ color:0x5d3d26 });
+  const roofMat = std({ map:roofTex, color:0x3f6b4c, roughness:.55, metalness:.2 }), metal = std({ color:0x6f777c, roughness:.4, metalness:.6 }), brick = std({ map:brickTex });
   const winMat = new THREE.MeshStandardMaterial({ color:0x223040, emissive:0xffb060, emissiveIntensity:1, roughness:.2, metalness:.3 });
-  for(const x of [-3.4,-2.1,2.1,3.4]){ mk(new THREE.BoxGeometry(1.05,1.25,.06), wood, x,1.9,2.5); const w = mk(new THREE.PlaneGeometry(.9,1.1), winMat, x,1.9,2.54); w.castShadow = false; }
-  for(const sx of [-1,1]) for(const z of [-1.2,1.2]){ const w = mk(new THREE.PlaneGeometry(.9,1.1), winMat, sx*4.52,1.9,z); w.rotation.y = sx*Math.PI/2; w.castShadow = false; }
-  mk(new THREE.BoxGeometry(1.3,2.2,.08), wood, 0,1.35,2.52);
-  mk(new THREE.BoxGeometry(2.2,.2,.9), base, 0,.1,2.95);
-  mk(new THREE.BoxGeometry(2.3,.1,1.1), trim, 0,2.6,2.95);
+  const frostMat = std({ map:frostTex, transparent:true, opacity:0, depthWrite:false, roughness:.4 });
+  const iceMat = std({ color:0xe2f4ff, roughness:.12, metalness:.1, transparent:true, opacity:.82, envMapIntensity:1 });
+  const crossMat = std({ color:0xc62828, emissive:0xff2a2a, emissiveIntensity:.8, roughness:.4 });
+
+  // body: stone plinth, clapboard walls with gables, trim
+  P.stone.push(B(9.4,.5,5.4, 0,.25,0));
+  P.wall.push(B(9,3.2,5, 0,2.1,0));
+  const gs = new THREE.Shape(); gs.moveTo(-2.5,0); gs.lineTo(2.5,0); gs.lineTo(0,1.7); gs.closePath();
+  P.wall.push(new THREE.ExtrudeGeometry(gs, { depth:9, bevelEnabled:false }).rotateY(Math.PI/2).translate(-4.5,3.7,0));
+  P.trim.push(B(9.5,.08,5.5, 0,.52,0));
+  for(const sx of [-1,1]) for(const sz of [-1,1]) P.trim.push(B(.16,3.2,.16, sx*4.5,2.1,sz*2.5));
+  for(const sz of [-1,1]) P.trim.push(B(9.1,.12,.06, 0,3.62,sz*2.53));
+  // pitched roof with overhang, fascia, barge boards, gutters and downpipes
+  const RA = Math.atan(1.7/2.5), RL = 3.05/Math.cos(RA);
+  for(const side of [0, Math.PI]){
+    P.roof.push(new THREE.BoxGeometry(10.2,.12,RL).translate(0,.06,RL/2).rotateX(RA).rotateY(side).translate(0,5.4,0));
+    for(const sx of [-1,1]) P.trim.push(new THREE.BoxGeometry(.06,.24,RL+.02).translate(0,-.04,RL/2).rotateX(RA).rotateY(side).translate(sx*5.1,5.4,0));
+    const s = side ? -1 : 1;
+    P.trim.push(B(10.2,.22,.05, 0,3.27,s*3.08));
+    P.metal.push(B(10.2,.12,.14, 0,3.16,s*3.18));
+    for(const sx of [-1,1]){ P.metal.push(B(.1,.1,.62, sx*4.62,3.1,s*2.9)); P.metal.push(new THREE.CylinderGeometry(.05,.05,2.8,8).translate(sx*4.62,1.7,s*2.62)); }
+  }
+  P.roof.push(B(10.3,.1,.3, 0,5.45,0));
+  // brick chimneys: the stove flue (right) and the kitchen one (left)
+  const CH = [[2.4,-.6],[-2.7,-.9]];
+  for(const [cx,cz] of CH){ P.brick.push(B(.62,1.95,.62, cx,5.2,cz)); P.brick.push(B(.74,.12,.74, cx,6.1,cz)); P.metal.push(B(.84,.06,.84, cx,6.35,cz)); for(const d of [-.3,.3]) P.metal.push(B(.05,.2,.05, cx+d,6.24,cz+d)); }
+  // windows with frames, T-mullions, sills and carved lintels (наличники); frost overlay just in front of the glass
+  const win = (x, z, ry) => {
+    const w = .95, h = 1.25, y = 2.1;
+    P.glass.push(at(new THREE.PlaneGeometry(w,h).translate(0,0,.02), ry, x,y,z));
+    P.frost.push(at(new THREE.PlaneGeometry(w,h).translate(0,0,.03), ry, x,y,z));
+    for(const gg of [B(w+.16,.08,.08, 0,h/2+.04,.04), B(w+.3,.07,.18, 0,-h/2-.035,.09), B(.08,h,.08, -w/2-.04,0,.04), B(.08,h,.08, w/2+.04,0,.04),
+      B(.05,h,.05, 0,-.06,.045), B(w,.05,.05, 0,h*.22,.045), B(w+.3,.14,.06, 0,h/2+.16,.03), B(w-.1,.07,.07, 0,h/2+.27,.03)])
+      P.trim.push(at(gg, ry, x,y,z));
+  };
+  for(const x of [-3.75,-2.25,2.25,3.75]){ win(x, 2.5, 0); win(x, -2.5, Math.PI); }
+  for(const sx of [-1,1]) for(const z of [-1.2,1.2]) win(sx*4.5, z, sx*Math.PI/2);
+  // door
+  P.wood.push(B(1.1,2.05,.08, 0,1.55,2.54));
+  P.trim.push(B(1.35,.1,.1, 0,2.62,2.55), B(.1,2.1,.1, -.6,1.57,2.55), B(.1,2.1,.1, .6,1.57,2.55), B(.08,.5,.05, 0,2.02,2.6), B(.5,.06,.05, 0,2.02,2.6));
+  P.glass.push(new THREE.PlaneGeometry(.46,.46).translate(0,2.02,2.585));
+  P.metal.push(B(.12,.04,.06, .38,1.5,2.6));
+  // porch: deck, steps, posts, railing with balusters, gable roof, lit red cross
+  P.stone.push(B(3.2,.44,1.8, 0,.22,3.45), B(1.8,.33,.32, 0,.165,4.56), B(1.8,.17,.32, 0,.085,4.88));
+  P.wood.push(B(3.3,.12,1.9, 0,.5,3.45));
+  for(const sx of [-1,1]){
+    for(const z of [2.62,4.25]) P.trim.push(B(.14,2.2,.14, sx*1.5,1.66,z));
+    P.trim.push(B(.08,.07,1.6, sx*1.5,1.35,3.45), B(.06,.06,1.6, sx*1.5,.78,3.45), B(.55,.07,.08, sx*1.22,1.35,4.25), B(.55,.06,.06, sx*1.22,.78,4.25));
+    for(let z=2.8;z<4.2;z+=.2) P.trim.push(B(.04,.55,.04, sx*1.5,1.06,z));
+    for(const x of [1.05,1.25]) P.trim.push(B(.04,.55,.04, sx*x,1.06,4.25));
+  }
+  const PA = Math.atan(.73/1.85), PL = 1.85/Math.cos(PA) + .12;
+  for(const side of [0, Math.PI]) P.roof.push(new THREE.BoxGeometry(PL,.09,2.3).translate(PL/2,.045,0).rotateZ(-PA).rotateY(side).translate(0,3.45,3.5));
+  const ps = new THREE.Shape(); ps.moveTo(-1.8,0); ps.lineTo(1.8,0); ps.lineTo(0,.72); ps.closePath();
+  P.wall.push(new THREE.ExtrudeGeometry(ps, { depth:.06, bevelEnabled:false }).translate(0,2.72,4.52));
+  P.trim.push(B(3.8,.14,.14, 0,2.66,4.52));
+  P.trim.push(new THREE.CylinderGeometry(.3,.3,.04,24).rotateX(Math.PI/2).translate(0,3.02,4.61));
+  P.cross.push(B(.42,.13,.05, 0,3.02,4.64), B(.13,.42,.05, 0,3.02,4.64));
+  P.wood.push(B(2.75,.52,.05, 0,2.35,4.54));
+  P.glass.push(new THREE.SphereGeometry(.07,10,8).translate(0,2.95,3.6)); // porch lamp bulb glows with the windows
+  // icicles along both eaves (mesh origin sits at the gutter so scale.y grows them downwards)
+  for(const s of [-1,1]) for(let x=-4.9;x<4.9;x+=R(.18,.42)){ const l = R(.15,.6); P.ice.push(new THREE.ConeGeometry(R(.035,.07), l, 5).rotateX(Math.PI).translate(x,-l/2,s*3.2)); }
+  // woodshed (дровяник) beside the hospital: the stock of logs inside is the stove's fuel
+  const SH = new V3(-6.7, 0, .6);
+  const sh = geo => geo.translate(SH.x, SH.y, SH.z);
+  for(const sx of [-1,1]){ P.wood.push(sh(B(.1,2.0,.1, sx*1.2,1.0,.55)), sh(B(.1,1.72,.1, sx*1.2,.86,-.55)), sh(B(.04,1.5,1.1, sx*1.2,.9,0))); }
+  P.wood.push(sh(B(2.4,1.6,.04, 0,.85,-.55)), sh(B(2.4,.08,1.1, 0,.08,0)));
+  P.roof.push(sh(new THREE.BoxGeometry(2.8,.07,1.55).rotateX(Math.atan(.28/1.1)).translate(0,1.9,0)));
+  const SLOTS = 70, logGeo = new THREE.CylinderGeometry(.095,.1,.8,7).rotateX(Math.PI/2);
+  { const gr = logGeo.groups; logGeo.clearGroups(); logGeo.addGroup(0, gr[0].count, 0); logGeo.addGroup(gr[1].start, gr[1].count + gr[2].count, 1); }
+  const logs = new THREE.InstancedMesh(logGeo, [SPECIES[0].bark, SPECIES[0].end], SLOTS);
+  { const m = new THREE.Matrix4(), q = new THREE.Quaternion(), c = new THREE.Color(), one = new V3(1,1,1);
+    for(let i=0;i<SLOTS;i++){ const r = Math.floor(i/10), col = i%10;
+      m.compose(new V3(SH.x - .95 + col*.21 + (r%2)*.05, .22 + r*.18, SH.z + R(-.06,.06)), q.setFromEuler(new THREE.Euler(R(-.05,.05), R(-.05,.05), R(0,TAU))), one);
+      logs.setMatrixAt(i, m); logs.setColorAt(i, c.setHSL(.08, .3, R(.7,1))); } }
+  logs.count = 0; g.add(logs);
+
+  const meshes = {};
+  for(const [k, mat] of Object.entries({ wall, stone, trim, wood, roof:roofMat, metal, brick, glass:winMat, frost:frostMat, ice:iceMat, cross:crossMat })){
+    const tiled = k==='wall' || k==='roof' ? 1 : k==='brick' ? 2 : 0;
+    const m = new THREE.Mesh(mergeGeos(P[k], tiled), mat); g.add(m); meshes[k] = m;
+  }
+  meshes.ice.position.y = 3.12; meshes.ice.visible = false;
+  meshes.frost.renderOrder = 1;
+  // sign on the porch beam; texture doubles as emissive map so the letters read at night
   const signTex = canvasTex(512,96,(x,w,h)=>{ x.fillStyle='#f4f1e8'; x.fillRect(0,0,w,h); x.fillStyle='#c62828'; x.fillRect(22,34,52,28); x.fillRect(34,22,28,52);
     x.font='bold 58px "PT Sans", Arial, sans-serif'; x.textAlign='center'; x.textBaseline='middle'; x.fillText('БОЛЬНИЦА', w/2+30, h/2+3); });
-  const sign = new THREE.Mesh(new THREE.PlaneGeometry(3.4,.64), std({ map:signTex, roughness:.5 })); sign.position.set(0,3.05,2.53); g.add(sign);
-  const lampH = new THREE.PointLight(0xffb060, 1, 9, 2); lampH.position.set(0,2.3,3.4); g.add(lampH);
+  const signMat = std({ map:signTex, emissiveMap:signTex, emissive:0xffffff, emissiveIntensity:.1, roughness:.5 });
+  const sign = new THREE.Mesh(new THREE.PlaneGeometry(2.6,.44), signMat); sign.position.set(0,2.35,4.57); g.add(sign);
+  // wall thermometer showing hospH; redrawn only when the rounded value changes
+  const th = { v:20 };
+  const thermoTex = canvasTex(96,320,(x,w,h)=>{
+    const v = th.v, warmT = 12; x.clearRect(0,0,w,h); x.fillStyle='#f6f3ea'; x.beginPath(); x.moveTo(12,0); x.arcTo(w,0,w,h,12); x.arcTo(w,h,0,h,12); x.arcTo(0,h,0,0,12); x.arcTo(0,0,w,0,12); x.fill();
+    x.fillStyle = v >= warmT ? '#c62828' : '#2a6fd6'; x.font='bold 34px Arial, sans-serif'; x.textAlign='center'; x.textBaseline='middle';
+    x.fillText((v >= 0 ? '+' : '−') + Math.abs(v), w/2, 28);
+    const top = 62, bot = 262, yOf = t => bot - (clamp(t,-40,40)+40)/80*(bot-top);
+    x.fillStyle='#ddd'; x.fillRect(w/2-7, top, 14, bot-top);
+    x.strokeStyle='#555'; x.lineWidth=2; for(let t=-40;t<=40;t+=10){ const y = yOf(t); x.beginPath(); x.moveTo(w/2+10,y); x.lineTo(w/2+(t%20?18:26),y); x.stroke(); }
+    x.strokeStyle='rgba(198,40,40,.6)'; x.lineWidth=3; x.beginPath(); x.moveTo(w/2-24,yOf(warmT)); x.lineTo(w/2-10,yOf(warmT)); x.stroke();
+    x.fillStyle='#d32020'; x.fillRect(w/2-5, yOf(v), 10, bot - yOf(v)); x.beginPath(); x.arc(w/2, bot+20, 17, 0, TAU); x.fill(); });
+  const thermo = new THREE.Mesh(new THREE.PlaneGeometry(.3,1), std({ map:thermoTex, transparent:true, roughness:.5, emissiveMap:thermoTex, emissive:0xffffff, emissiveIntensity:.15 }));
+  thermo.position.set(-3,2.05,2.54); g.add(thermo);
+  const lampH = new THREE.PointLight(0xffb060, 1, 9, 2); lampH.position.set(0,2.8,3.9); g.add(lampH);
   g.position.copy(HOSP_POS); g.lookAt(0,0,0); scene.add(g); g.updateMatrixWorld(true);
   const out = new V3(-HOSP_POS.x, 0, -HOSP_POS.z).normalize();
-  return { g, roofMat, winMat, signTex, lamp:lampH, chimney:g.localToWorld(new V3(2.4,5.3,-.6)), exit:HOSP_POS.clone().addScaledVector(out, 6.5) };
+  const chimneys = CH.map(([cx,cz]) => g.localToWorld(new V3(cx,6.45,cz)));
+  return { g, roofMat, winMat, signTex, signMat, crossMat, frostMat, ice:meshes.ice, logs, lamp:lampH, chimney:chimneys[0], chimneys, exit:HOSP_POS.clone().addScaledVector(out, 6.5),
+    thermo(v){ v = Math.round(v); if(v !== th.v){ th.v = v; thermoTex.redraw(); } },
+    stock(k){ logs.count = Math.round(clamp(k,0,1)*SLOTS); } };
 })();
+// Fuel reaches the hospital: the pieces go to the woodshed stock that the stove burns over time (see updateWeather).
+function hospitalDelivered(n){
+  if(n <= 0) return;
+  hospFuel += n; burned += n; save.stats.burned += n; fuelOutWarned = false; persist();
+  hosp.stock(hospFuel/HOSP_FUEL_MAX);
+}
+function hospitalReset(){
+  const W = climate === 'winter';
+  hospFuel = W ? HOSP_FUEL0 : 0; hospBurn = 0; fuelOutWarned = coldWarned = false;
+  hosp.stock(W ? hospFuel/HOSP_FUEL_MAX : .6);
+  hosp.ice.visible = W; hosp.ice.scale.y = lerp(.45, 1.25, clamp(-tempOut/40, 0, 1));
+  hosp.frostMat.opacity = 0; hosp.thermo(hospH);
+}
 const softDot = canvasTex(64,64,(x,w,h)=>{ const rg = x.createRadialGradient(32,32,0,32,32,32); rg.addColorStop(0,'rgba(255,255,255,1)'); rg.addColorStop(1,'rgba(255,255,255,0)'); x.fillStyle = rg; x.fillRect(0,0,w,h); });
 const smoke = [];
-for(let i=0;i<44;i++){ const m = new THREE.Sprite(new THREE.SpriteMaterial({ map:softDot, color:0x9c9ca4, transparent:true, opacity:0, depthWrite:false })); m.visible = false; scene.add(m); smoke.push({ m, life:0, max:1, on:false }); }
-let smokeT = 0;
+for(let i=0;i<48;i++){ const m = new THREE.Sprite(new THREE.SpriteMaterial({ map:softDot, color:0x9c9ca4, transparent:true, opacity:0, depthWrite:false })); m.visible = false; scene.add(m); smoke.push({ m, life:0, max:1, on:false }); }
+const smokeT = [0, .5];
 const SNOW_N = 4000;
 const snowGeo = new THREE.BufferGeometry();
 { const a = new Float32Array(SNOW_N*3); for(let i=0;i<SNOW_N;i++){ a[i*3]=R(-14,14); a[i*3+1]=R(0,12); a[i*3+2]=R(-14,14); } snowGeo.setAttribute('position', new THREE.BufferAttribute(a,3)); }
@@ -1761,9 +1902,18 @@ function adaptQuality(rawDt){
 if(document.fonts && document.fonts.ready) document.fonts.ready.then(() => hosp.signTex.redraw());
 
 /* ================= weather, hospital heating ================= */
-const HOSP_WARM = 12, HOSP_MAX = 26;
+/* Heating (winter only). Trips carry pieces into the woodshed stock (hospFuel); the stove burns it by itself:
+     loss  = (hospH − tempOut)·HOSP_LOSS·(1 + 0.5·night)        °C/s, Newton cooling, faster at night
+     stove = HOSP_POWER while fuel lasts and hospH < HOSP_MAX (at the cap it idles, only matching the loss)
+     fuel −= stove·dt / hospPer()                               one piece = +2°C of heat, +3°C with the sled
+   so upkeep ≈ loss/hospPer() pieces/s: −8°C ≈ 2 pieces/min, −40°C ≈ 4.5/min by day, 6.5/min at night (sled: ×2/3).
+   The stove (24°C/min) outruns even −50°C at night, and the stock holds HOSP_FUEL_MAX pieces (≈2 min of a harsh
+   frost), so a mild frost needs a trip or two per shift and a harsh one a trip every couple of minutes. */
+const HOSP_WARM = 12, HOSP_MAX = 26, HOSP_LOSS = 1/400, HOSP_POWER = .4, HOSP_FUEL_MAX = 10, HOSP_FUEL0 = 3;
 const hospPer = () => gearLvl('sled') ? 3 : 2;
 let tempOut = 10, climate = 'mild', hospH = 20, burned = 0, tripDone = false;
+let hospFuel = 0, hospBurn = 0, fuelOutWarned = false, coldWarned = false;
+if(QS.has('debug')) window.__hosp = o => { if(o) ({ tod, hospH, hospFuel } = { tod, hospH, hospFuel, ...o }); return { hospH:+hospH.toFixed(1), fuel:+hospFuel.toFixed(2), burn:+hospBurn.toFixed(2), tempOut, climate, burned }; };
 // Campaign: the first three shifts introduce one climate each, later ones are seeded per shift and get harsher.
 function shiftWeather(day){
   if(day === 1) return 14;
@@ -1797,14 +1947,14 @@ function newWeather(){
   for(let i=0;i<GRASS_N;i++){ H ? col.setHSL(R(.1,.17), R(.35,.5), R(.3,.45)) : col.setHSL(R(.19,.29), R(.35,.55), R(.24,.4)); grass.setColorAt(i, col); }
   grass.instanceColor.needsUpdate = true;
   forest.snowCap.visible = W;
-  hosp.roofMat.color.setHex(W ? 0xeef2f6 : 0x3f6b4c);
+  hosp.roofMat.color.setHex(W ? 0xeef2f6 : 0x3f6b4c); hospitalReset();
   snow.visible = W; snowGeo.setDrawRange(0, Math.round(SNOW_N*clamp(-tempOut/35, .2, 1)));
   const te = $('temp');
   te.textContent = (W ? 'Мороз ' : H ? 'Жара ' : '') + fmtT(tempOut);
   te.className = 'temp' + (W ? ' cold' : H ? ' hot' : '');
   $('hosp').hidden = !W; $('stove').hidden = !W; $('heatRow').hidden = !H;
   $('hintClimate').textContent = W
-    ? `Больница топится вашими дровами: остывает на ${(Math.abs(tempOut)/5).toFixed(0)}°C в минуту, ночью быстрее; полено даёт +${hospPer()}°C. Ниже +12°C лечить не смогут.`
+    ? `Больница топится вашими дровами: носите поленья в дровяник, печь сжигает их сама, полено даёт +${hospPer()}°C. Без дров остывает на ${Math.max(1, Math.round((20 - tempOut)*HOSP_LOSS*60))}°C в минуту, ночью быстрее. Ниже +${HOSP_WARM}°C лечить не смогут.`
     : H ? 'В жару не рубите часто: при перегреве можно получить солнечный удар.' : 'Погода хорошая — самое время заработать на лавку.';
   $('hintAim').textContent = COARSE
     ? 'Прижмите палец к полену и ведите — это линия удара, отпустите — удар. Смахните в стороне, чтобы обойти колоду.'
@@ -1840,24 +1990,49 @@ let hudCache = '';
 function updateWeather(dt, t){
   const W = climate === 'winter';
   updateSky(dt);
-  if(W) hospH = Math.max(tempOut, hospH - dt*Math.abs(tempOut)/300*(1 + .5*night));
+  // hospital heating, see the formula above HOSP_WARM
+  if(W && dt > 0){
+    const loss = Math.max(0, hospH - tempOut)*HOSP_LOSS*(1 + .5*night);
+    let pw = 0;
+    if(hospFuel > 0){
+      pw = hospH < HOSP_MAX - .3 ? HOSP_POWER : Math.min(HOSP_POWER, loss);
+      const use = Math.min(hospFuel, pw*dt/hospPer());
+      hospFuel -= use; pw = use*hospPer()/dt;
+      if(hospFuel < 1e-4) hospFuel = 0;
+      hosp.stock(hospFuel/HOSP_FUEL_MAX);
+      if(hospFuel === 0 && !fuelOutWarned && !gameOver){ fuelOutWarned = true; popup('В больнице кончились дрова: несите ещё', 'bad', true); }
+    }
+    hospBurn += (pw/HOSP_POWER - hospBurn)*Math.min(1, dt*2);
+    hospH = clamp(hospH + (pw - loss)*dt, tempOut, HOSP_MAX);
+    if(hospH < HOSP_WARM + 2 && !coldWarned && !gameOver && state !== 'down'){ coldWarned = true; popup(`В больнице ${fmtT(hospH)}, скоро будет не до лечения`, 'bad', true); }
+    if(hospH > HOSP_WARM + 5) coldWarned = false;
+  }
   if(climate === 'hot') heat = Math.max(0, heat - dt/(1.3 + (tempOut-30)*.06));
-  const warmth = W ? clamp((hospH-4)/16, 0, 1) : 1;
+  // look: windows go from dim blue to warm orange (flickering with the fire), frost creeps in as it cools
+  const warmth = W ? clamp((hospH-4)/16, 0, 1) : 1, fire = W ? hospBurn : .4;
   hosp.winMat.emissive.setRGB(lerp(.25,1,warmth), lerp(.35,.69,warmth), lerp(.5,.38,warmth));
-  hosp.winMat.emissiveIntensity = lerp(.25, 1.3, warmth);
-  hosp.lamp.intensity = warmth*1.1;
-  smokeT -= dt;
-  if(smokeT <= 0){
-    smokeT = (W ? lerp(1.6, .14, warmth) : .9)*R(.7,1.3);
+  hosp.winMat.emissiveIntensity = lerp(.25, 1.3, warmth)*lerp(.6, 1, night)*(1 + fire*.08*Math.sin(t*11)*Math.sin(t*7.3));
+  hosp.lamp.intensity = warmth*(.25 + .85*night);
+  hosp.crossMat.emissiveIntensity = .6 + night*1.4;
+  hosp.signMat.emissiveIntensity = .08 + night*.45;
+  if(W){ hosp.frostMat.opacity = clamp((HOSP_WARM + 8 - hospH)/14, .12, .9); hosp.thermo(hospH); }
+  // smoke: in winter both flues follow the stove (none when the woodshed is empty), otherwise a lazy kitchen wisp
+  for(let c=0;c<2;c++){
+    smokeT[c] -= dt;
+    if(smokeT[c] > 0) continue;
+    const k = W ? hospBurn : c ? 0 : .3;
+    smokeT[c] = (k > .05 ? lerp(1.4, .16, k) : .5)*R(.7,1.3);
+    if(k <= .05) continue;
     const sp = smoke.find(q => !q.on);
-    if(sp){ sp.on = true; sp.life = 0; sp.max = R(4,6); sp.m.visible = true; sp.m.position.copy(hosp.chimney); sp.a = W ? .35 + .4*warmth : .35; }
+    if(sp){ sp.on = true; sp.life = 0; sp.max = R(4,6); sp.m.visible = true; sp.m.position.copy(hosp.chimneys[c]); sp.a = .25 + .45*k; sp.s = .5 + .4*k;
+      sp.m.material.color.setScalar(lerp(.66, .47, k)); }
   }
   for(const sp of smoke){
     if(!sp.on) continue;
     sp.life += dt;
     sp.m.position.y += dt*.7; sp.m.position.x += dt*.35;
-    sp.m.scale.setScalar(.6 + sp.life*.55);
-    sp.m.material.opacity = Math.max(0, 1 - sp.life/sp.max)*sp.a;
+    sp.m.scale.setScalar(sp.s + sp.life*.55);
+    sp.m.material.opacity = Math.max(0, 1 - sp.life/sp.max)*sp.a*Math.min(1, sp.life*3);
     if(sp.life >= sp.max){ sp.on = false; sp.m.visible = false; }
   }
   if(snow.visible){
@@ -1871,12 +2046,12 @@ function updateWeather(dt, t){
     snowGeo.attributes.position.needsUpdate = true;
     camera.getWorldPosition(tmpV); snow.position.set(tmpV.x, 0, tmpV.z);
   }
-  const key = W ? Math.round(hospH) + '|' + pileCount + '|' + state : climate==='hot' ? (heat*20|0) + '' : '';
+  const key = W ? Math.round(hospH) + '|' + Math.ceil(hospFuel) + '|' + pileCount + '|' + state : climate==='hot' ? (heat*20|0) + '' : '';
   if(key !== hudCache){
     hudCache = key;
     if(W){
-      const b = $('hospT'); b.textContent = fmtT(hospH); b.className = hospH >= HOSP_WARM ? 'warm' : 'cold';
-      $('stove').disabled = !(state === 'idle' && pileCount > 0 && hospH < HOSP_MAX - 1 && !gameOver);
+      const b = $('hospT'); b.textContent = `${fmtT(hospH)} · дров ${Math.ceil(hospFuel)}`; b.className = hospH >= HOSP_WARM ? 'warm' : 'cold';
+      $('stove').disabled = !(state === 'idle' && pileCount > 0 && hospFuel <= HOSP_FUEL_MAX - 1 && !gameOver);
     }
     if(climate === 'hot'){ const hb = $('heatBar'); hb.style.width = Math.min(100, heat/5*100) + '%'; }
   }
@@ -1885,6 +2060,7 @@ $('stove').addEventListener('click', e => {
   e.stopPropagation();
   if(state !== 'idle' || gameOver || paused || pileCount === 0) return;
   if(pileItems.length && !pileItems[pileItems.length-1].landed){ popup('Подождите, полено ещё летит','ok'); return; }
+  if(hospFuel > HOSP_FUEL_MAX - 1){ popup('Дровяник больницы и так полон','ok'); return; }
   audio(); state = 'trip'; st = 0; tripDone = false; marker.visible = false;
   fadeEl.style.opacity = 1;
   popup('Несёте дрова в больницу…','ok');
@@ -1962,10 +2138,9 @@ function tick(){
       st += dt;
       if(st > .85 && !tripDone){
         tripDone = true;
-        const want = Math.max(1, Math.ceil((HOSP_MAX - hospH)/hospPer()));
-        const n = removeFromPile(want);
-        hospH = Math.min(HOSP_MAX, hospH + n*hospPer()); burned += n; save.stats.burned += n; persist();
-        popup(`Сожгли ${n} ${plural(n,'полено','полена','поленьев')}. В больнице ${fmtT(hospH)}`, 'good', true);
+        const n = removeFromPile(Math.max(1, Math.floor(HOSP_FUEL_MAX - hospFuel)));
+        hospitalDelivered(n);
+        popup(`Отнесли ${n} ${plural(n,'полено','полена','поленьев')} в дровяник: там ${Math.ceil(hospFuel)}, в больнице ${fmtT(hospH)}`, 'good', true);
         for(let i=0;i<Math.min(n,5);i++) later(sfx.stack, i*120);
       }
       if(st > 2.1) fadeEl.style.opacity = 0;
