@@ -1,0 +1,725 @@
+<!doctype html><html><head><meta charset="utf-8"><style></style></head><body><canvas id="game"></canvas><script>(function(){
+'use strict';
+/* ---- 00_core.js ---- */
+/* =====================================================================
+ * 00_core.js — constants, RNG, event bus, log, FX queue, global state S
+ * OWNER: architect. Other modules must NOT edit this file (see docs/CONTRACT.md).
+ * ===================================================================== */
+
+const Const = (() => {
+  const T = { DEEP: 0, SHALLOW: 1, SAND: 2, GRASS: 3, FOREST: 4, HILL: 5, MOUNTAIN: 6, SNOW: 7, LAVA: 8 };
+  return {
+    TICKS_PER_SEC: 10,
+    TICKS_PER_YEAR: 60,      // 1 world year = 6 s at x1
+    START_YEAR: 1,
+    DEFAULT_W: 96,
+    DEFAULT_H: 96,
+    TILE_PX: 16,             // native sprite / atlas tile size in pixels
+    MAX_UNITS: 1500,
+    CITY_MIN_DIST: 10,       // min distance between city centers (tiles)
+    T,                       // tile ids
+    TILE_COUNT: 9,
+    RACE: { HUMAN: 0, ORC: 1, ELF: 2 },
+    RACE_COUNT: 3,
+    SEX: { M: 0, F: 1 },
+    // resource kinds living in S.res (FOREST tiles hold wood implicitly)
+    RES: { NONE: 0, TREE: 1, ROCK: 2, IRON: 3, GOLD: 4, BERRY: 5, FISH: 6 /* virtual: land tile next to shallow water */ },
+    // building types
+    B: { HOUSE: 1, FARM: 2, STORAGE: 3, BARRACKS: 4, TOWNHALL: 5, TEMPLE: 6, MARKET: 7 },
+    BUILDING_TYPES: [1, 2, 3, 4, 5, 6, 7],
+    GOODS: ['food', 'wood', 'stone', 'iron', 'gold'],
+    // diplomacy relation state
+    REL: { PEACE: 0, ALLIANCE: 1, WAR: 2 },
+    // map render modes
+    MODE: { NORMAL: 0, BORDERS: 1, CULTURE: 2 },
+    // unit AI states (strings, JSON-safe). UI maps them to Russian labels.
+    STATES: ['idle', 'wander', 'walk', 'gather', 'carry', 'build', 'farm', 'eat', 'sleep', 'flee', 'fight', 'army', 'mate', 'settle'],
+    // log kinds (feed colors in UI)
+    LOG: { INFO: 'info', WAR: 'war', PEACE: 'peace', BIRTH: 'birth', DEATH: 'death', DISASTER: 'disaster', CITY: 'city', KINGDOM: 'kingdom', REBEL: 'rebel', GOD: 'god' },
+    SAVE_VERSION: 1,
+  };
+})();
+
+/* ---------- Seeded RNG (mulberry32). State is saved with the world. ---------- */
+const R = (() => {
+  let s = 1;
+  function next() {
+    s = (s + 0x6D2B79F5) | 0;
+    let t = Math.imul(s ^ (s >>> 15), 1 | s);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  }
+  return {
+    seed(n) { s = (n | 0) || 1; },
+    getState() { return s; },
+    setState(v) { s = v | 0; },
+    f: next,                                         // [0,1)
+    i(n) { return (next() * n) | 0; },               // int in [0,n)
+    int(a, b) { return a + ((next() * (b - a + 1)) | 0); },   // int in [a,b] inclusive
+    between(a, b) { return a + next() * (b - a); },  // float in [a,b)
+    chance(p) { return next() < p; },
+    pick(arr) { return arr[(next() * arr.length) | 0]; },
+    gauss() { return (next() + next() + next() + next() - 2) * 0.8660254; }, // ~N(0,~0.58)... bell-ish in [-1.7,1.7]
+    shuffle(arr) { for (let i = arr.length - 1; i > 0; i--) { const j = (next() * (i + 1)) | 0; const t = arr[i]; arr[i] = arr[j]; arr[j] = t; } return arr; },
+  };
+})();
+
+/* ---------- Utilities ---------- */
+const Util = (() => {
+  return {
+    clamp(v, a, b) { return v < a ? a : v > b ? b : v; },
+    lerp(a, b, t) { return a + (b - a) * t; },
+    dist(x0, y0, x1, y1) { const dx = x1 - x0, dy = y1 - y0; return Math.sqrt(dx * dx + dy * dy); },
+    dist2(x0, y0, x1, y1) { const dx = x1 - x0, dy = y1 - y0; return dx * dx + dy * dy; },
+    cheb(x0, y0, x1, y1) { return Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0)); },
+    manh(x0, y0, x1, y1) { return Math.abs(x1 - x0) + Math.abs(y1 - y0); },
+    /** current world year (integer, starts at Const.START_YEAR) */
+    year() { return Const.START_YEAR + Math.floor(S.tick / Const.TICKS_PER_YEAR); },
+    /** age in years (float) of anything having `born` (tick). */
+    age(e) { return (S.tick - e.born) / Const.TICKS_PER_YEAR; },
+    /** deterministic hash of 2 ints -> uint32 (for per-tile visual variants etc.) */
+    hash2(x, y, seed) {
+      let h = Math.imul(x | 0, 374761393) + Math.imul(y | 0, 668265263) + Math.imul(seed | 0, 2147483647);
+      h = Math.imul(h ^ (h >>> 13), 1274126177);
+      return (h ^ (h >>> 16)) >>> 0;
+    },
+    hsl(h, s, l) { return `hsl(${h | 0},${s | 0}%,${l | 0}%)`; },
+    /** 'rgb' array [r,g,b] -> '#rrggbb' */
+    hex(rgb) { return '#' + rgb.map(v => (v | 0).toString(16).padStart(2, '0')).join(''); },
+    plural(n, one, few, many) {            // Russian plural: 1 год, 2 года, 5 лет
+      n = Math.abs(n) % 100; const n1 = n % 10;
+      if (n > 10 && n < 20) return many;
+      if (n1 > 1 && n1 < 5) return few;
+      if (n1 === 1) return one;
+      return many;
+    },
+  };
+})();
+
+/* ---------- Event bus (synchronous) ---------- */
+const Bus = (() => {
+  const m = new Map();
+  return {
+    on(ev, fn) { let a = m.get(ev); if (!a) { a = []; m.set(ev, a); } a.push(fn); return fn; },
+    off(ev, fn) { const a = m.get(ev); if (!a) return; const i = a.indexOf(fn); if (i >= 0) a.splice(i, 1); },
+    emit(ev, a, b, c, d) { const l = m.get(ev); if (!l) return; for (let i = 0; i < l.length; i++) { try { l[i](a, b, c, d); } catch (e) { if (typeof console !== 'undefined') console.error('Bus handler error', ev, e); } } },
+    clear() { m.clear(); },
+  };
+})();
+
+/* ---------- Event feed ("лента событий") ---------- */
+const Log = {
+  /** Log.add('Королевство «Аран» объявило войну «Дорвену»', Const.LOG.WAR, x, y, kingdomId) */
+  add(msg, kind, x, y, kid) {
+    const e = { id: S.nextLogId++, tick: S.tick, year: Util.year(), msg, kind: kind || 'info', x: x === undefined ? -1 : x, y: y === undefined ? -1 : y, kid: kid || 0 };
+    S.log.push(e);
+    if (S.log.length > 300) S.log.splice(0, S.log.length - 300);
+    Bus.emit('log', e);
+    return e;
+  },
+};
+
+/* ---------- Entity history helper ("история" in the inspector) ---------- */
+const Hist = {
+  add(ent, text) {
+    if (!ent) return;
+    if (!ent.hist) ent.hist = [];
+    ent.hist.push({ y: Util.year(), t: text });
+    if (ent.hist.length > 24) ent.hist.shift();
+  },
+};
+
+/* ---------- Visual effect queue (data only; Render draws it, real-time seconds) ---------- */
+const Fx = {
+  list: [],
+  /** types: 'lightning','explosion','fire','smoke','heal','bless','plague','quake','dust','spark','splash','blood','rain_drop','whisper','ash'
+   *  opts: {ttl (sec, default 0.8), r (radius tiles), color, dx, dy, n, ...}. x,y in float tile coords. */
+  add(type, x, y, opts) {
+    if (this.list.length > 400) return null;
+    const f = Object.assign({ type, x, y, ttl: 0.8, age: 0 }, opts || {});
+    this.list.push(f);
+    return f;
+  },
+  /** advance real-time by dt seconds, drop expired. Called once per rendered frame by Main. */
+  update(dt) {
+    const l = this.list;
+    let w = 0;
+    for (let i = 0; i < l.length; i++) { const f = l[i]; f.age += dt; if (f.age < f.ttl) l[w++] = f; }
+    l.length = w;
+  },
+  clear() { this.list.length = 0; },
+};
+
+/* ---------- Global mutable game state ---------- */
+const S = {
+  w: 0, h: 0, seed: 1, tick: 0,
+  // ---- terrain layers (length w*h, index = y*w + x) ----
+  tile: null,   // Uint8Array  Const.T ids
+  elev: null,   // Uint8Array  0..255 height (shading + raise/lower)
+  res: null,    // Uint8Array  Const.RES kind on tile (0 none). FOREST tiles are implicitly wood.
+  amt: null,    // Uint8Array  remaining amount of the resource (FOREST: wood density 1..255)
+  owner: null,  // Int32Array  city id owning the tile (0 none)
+  bld: null,    // Int32Array  building id on tile (0 none)
+  fire: null,   // Uint8Array  remaining burn ticks (0 none)
+  // ---- render dirty tracking (see S.markDirty) ----
+  dirty: null, dirtyList: [], allDirty: true,
+  ownerVer: 0,    // bump when S.owner or city→kingdom/culture mapping changes (border overlay rebuild)
+  landDirty: true, // landmass labels need recompute (World)
+  // ---- entities (all JSON-safe plain objects; refer to each other by id) ----
+  units: new Map(), cities: new Map(), kingdoms: new Map(), buildings: new Map(), armies: new Map(), wars: new Map(),
+  rels: new Map(),       // diplomacy: key "a_b" (a<b) -> relation object (Diplomacy owns format)
+  cultures: [],          // [{id,name,color:'#rrggbb',race}] (Kingdoms owns)
+  nextId: 1, nextLogId: 1,
+  log: [],               // event feed entries (see Log.add)
+  eff: { meteors: [], tornados: [], rains: [], quakes: [] },   // persistent god-power effects (Powers owns; Render draws)
+  mod: {},               // per-module persistent scratch: S.mod.units = {...} (JSON-safe, saved automatically)
+  stats: { year: 1, pop: [0, 0, 0], popTotal: 0, kingdoms: 0, cities: 0, wars: 0, buildings: 0 },
+  perf: { thinkEvery: 3, lod: 0, unitCap: Const.MAX_UNITS, stepMs: 0 }, // Sim updates; Units must respect
+
+  reset(w, h, seed) {
+    this.w = w | 0; this.h = h | 0; this.seed = (seed | 0) || 1; this.tick = 0;
+    const n = this.w * this.h;
+    this.tile = new Uint8Array(n); this.elev = new Uint8Array(n);
+    this.res = new Uint8Array(n); this.amt = new Uint8Array(n);
+    this.owner = new Int32Array(n); this.bld = new Int32Array(n); this.fire = new Uint8Array(n);
+    this.dirty = new Uint8Array(n); this.dirtyList = []; this.allDirty = true; this.ownerVer = 1; this.landDirty = true;
+    this.units = new Map(); this.cities = new Map(); this.kingdoms = new Map(); this.buildings = new Map();
+    this.armies = new Map(); this.wars = new Map(); this.rels = new Map();
+    this.cultures = []; this.nextId = 1; this.nextLogId = 1; this.log = [];
+    this.eff = { meteors: [], tornados: [], rains: [], quakes: [] };
+    this.mod = {};
+    this.stats = { year: Const.START_YEAR, pop: [0, 0, 0], popTotal: 0, kingdoms: 0, cities: 0, wars: 0, buildings: 0 };
+    this.perf = { thinkEvery: 3, lod: 0, unitCap: Const.MAX_UNITS, stepMs: 0 };
+    Fx.clear();
+    R.seed(this.seed);
+  },
+  /** new unique id (shared counter for units/cities/kingdoms/buildings/armies/wars) */
+  id() { return this.nextId++; },
+  idx(x, y) { return y * this.w + x; },
+  inBounds(x, y) { return x >= 0 && y >= 0 && x < this.w && y < this.h; },
+  /** flag a tile for re-baking in the terrain cache. Safe to call anywhere (x,y ints, bounds-checked). */
+  markDirty(x, y) {
+    if (x < 0 || y < 0 || x >= this.w || y >= this.h) return;
+    const i = y * this.w + x;
+    if (!this.dirty[i]) { this.dirty[i] = 1; this.dirtyList.push(i); }
+  },
+  /** call after changing S.owner / city ownership / culture so the border overlay is rebuilt */
+  touchOwner() { this.ownerVer++; },
+};
+
+
+/* ---- 01_tiles.js ---- */
+/* =====================================================================
+ * 01_tiles.js — static tile definitions (data + tiny helpers)
+ * OWNER: architect. Read-only for other modules.
+ * ===================================================================== */
+
+const Tiles = (() => {
+  const T = Const.T;
+  const defs = [];
+  function def(id, key, name, o) { defs[id] = Object.assign({ id, key, name }, o); }
+
+  // elev: [lo, hi) height band used when terrain is derived from S.elev; mid = representative height
+  // speed: walking speed multiplier (0 = impassable); build: buildings allowed; fert: farm/forage fertility 0..1
+  // flam: fire spread chance factor 0..1; color: average RGB (minimap / fallback)
+  def(T.DEEP,     'deep',     'Глубокая вода', { color: [18, 54, 112],  lo: 0,   hi: 70,  mid: 40,  water: true,  speed: 0,    build: false, fert: 0,   flam: 0 });
+  def(T.SHALLOW,  'shallow',  'Мелководье',    { color: [46, 120, 190], lo: 70,  hi: 100, mid: 86,  water: true,  speed: 0.45, build: false, fert: 0,   flam: 0 });
+  def(T.SAND,     'sand',     'Песок',         { color: [222, 205, 140], lo: 100, hi: 112, mid: 106, water: false, speed: 0.85, build: true,  fert: 0.1, flam: 0 });
+  def(T.GRASS,    'grass',    'Трава',         { color: [88, 160, 62],  lo: 112, hi: 160, mid: 134, water: false, speed: 1,    build: true,  fert: 1,   flam: 0.22 });
+  def(T.FOREST,   'forest',   'Лес',           { color: [38, 104, 48],  lo: 112, hi: 160, mid: 136, water: false, speed: 0.6,  build: false, fert: 0.5, flam: 1 });
+  def(T.HILL,     'hill',     'Холмы',         { color: [140, 128, 84], lo: 160, hi: 192, mid: 176, water: false, speed: 0.7,  build: true,  fert: 0.3, flam: 0.08 });
+  def(T.MOUNTAIN, 'mountain', 'Горы',          { color: [112, 108, 108], lo: 192, hi: 228, mid: 210, water: false, speed: 0.35, build: false, fert: 0,   flam: 0 });
+  def(T.SNOW,     'snow',     'Снег',          { color: [236, 242, 250], lo: 228, hi: 256, mid: 242, water: false, speed: 0.5,  build: false, fert: 0,   flam: 0 });
+  def(T.LAVA,     'lava',     'Лава',          { color: [226, 84, 24],  lo: 192, hi: 228, mid: 200, water: false, speed: 0,    build: false, fert: 0,   flam: 0, lava: true });
+
+  /** Terrain implied by a height value (never returns FOREST / LAVA). */
+  function fromElev(e) {
+    if (e < 70) return T.DEEP;
+    if (e < 100) return T.SHALLOW;
+    if (e < 112) return T.SAND;
+    if (e < 160) return T.GRASS;
+    if (e < 192) return T.HILL;
+    if (e < 228) return T.MOUNTAIN;
+    return T.SNOW;
+  }
+
+  return {
+    defs,
+    def(t) { return defs[t]; },
+    fromElev,
+    midElev(t) { return defs[t].mid; },
+    isWater(t) { return t === T.DEEP || t === T.SHALLOW; },
+    isLand(t) { return t !== T.DEEP && t !== T.SHALLOW && t !== T.LAVA; },
+    /** generic walkability (race-specific cost lives in World.moveCost) */
+    walkable(t) { return defs[t].speed > 0; },
+    buildable(t) { return defs[t].build; },
+  };
+})();
+
+
+/* ---- 02_data.js ---- */
+/* =====================================================================
+ * 02_data.js — shared static game data: Races, Traits, Gear, palettes, God tools
+ * OWNER: architect. Read-only for other modules (propose changes in docs/REQUESTS.md).
+ * ===================================================================== */
+
+const Races = (() => {
+  const T = Const.T;
+  const list = [
+    {
+      id: 0, key: 'human', name: 'Люди', one: 'Человек', color: '#4aa3ff',
+      lifespan: [62, 88],      // natural death window, years
+      maturity: 16,            // adulthood age (years)
+      fertAge: [16, 45],       // fertile window
+      birthCooldown: 3,        // years between births for a mother (before modifiers)
+      hp: 20, atk: 3, def: 1,
+      speed: 1.6,              // tiles/second on a speed=1 tile
+      work: 1.0,               // gathering/building efficiency
+      fertility: 1.0,          // birth chance multiplier
+      range: 1.2,              // attack reach in tiles (melee); elves get range from Gear.range()
+      aggression: 0.30,        // 0..1 baseline for hostility toward foreign-race wanderers / king war propensity
+      expansion: 1.0,          // how eagerly the race founds new villages
+      cityRadius: 7,           // base territory radius (tiles) of a village
+      // extra speed multiplier by terrain (default 1)
+      terrain: { [T.GRASS]: 1.1, [T.SAND]: 1, [T.FOREST]: 0.9, [T.HILL]: 0.9, [T.MOUNTAIN]: 0.7, [T.SNOW]: 0.8, [T.SHALLOW]: 0.9 },
+      // preference weights for choosing a village site (higher better); nearWater/nearForest/nearMountain 0..1 weights
+      habitat: { [T.GRASS]: 1.0, [T.SAND]: 0.3, [T.FOREST]: 0.4, [T.HILL]: 0.5, nearWater: 0.6, nearForest: 0.4, nearMountain: 0.2 },
+    },
+    {
+      id: 1, key: 'orc', name: 'Орки', one: 'Орк', color: '#6fbf3a',
+      lifespan: [45, 65], maturity: 12, fertAge: [12, 38], birthCooldown: 4.5,
+      hp: 30, atk: 5, def: 2, speed: 1.6, work: 0.9, fertility: 0.6, range: 1.2,
+      aggression: 0.75, expansion: 0.8, cityRadius: 7,
+      terrain: { [T.GRASS]: 1, [T.SAND]: 1, [T.FOREST]: 0.8, [T.HILL]: 1.15, [T.MOUNTAIN]: 1.0, [T.SNOW]: 0.9, [T.SHALLOW]: 0.8 },
+      habitat: { [T.GRASS]: 0.5, [T.SAND]: 0.2, [T.FOREST]: 0.2, [T.HILL]: 1.0, nearWater: 0.2, nearForest: 0.1, nearMountain: 1.0, nearLava: 0.8 },
+    },
+    {
+      id: 2, key: 'elf', name: 'Эльфы', one: 'Эльф', color: '#c78bff',
+      lifespan: [140, 220], maturity: 24, fertAge: [24, 120], birthCooldown: 9,
+      hp: 16, atk: 3, def: 1, speed: 1.8, work: 1.0, fertility: 0.35, range: 1.2,
+      aggression: 0.25, expansion: 0.6, cityRadius: 8,
+      terrain: { [T.GRASS]: 1, [T.SAND]: 0.9, [T.FOREST]: 1.4, [T.HILL]: 0.9, [T.MOUNTAIN]: 0.6, [T.SNOW]: 0.7, [T.SHALLOW]: 0.8 },
+      habitat: { [T.GRASS]: 0.5, [T.SAND]: 0.1, [T.FOREST]: 1.0, [T.HILL]: 0.2, nearWater: 0.4, nearForest: 1.0, nearMountain: 0.0 },
+    },
+  ];
+  // Base inter-race opinion, -100..100. rel[a][b] = how race a feels about race b.
+  const rel = [
+    /* human */ [30, -30, 40],
+    /* orc   */ [-30, 20, -70],
+    /* elf   */ [40, -70, 50],
+  ];
+  return {
+    list, rel,
+    get(r) { return list[r]; },
+    isHostileBase(a, b) { return rel[a][b] <= -50; },
+  };
+})();
+
+/* ---------- Character traits (2–3 per unit) ---------- */
+const Traits = (() => {
+  // mul keys (default 1): atk hp work fertility xp speed sick
+  // add keys (default 0): flee war peace greed loyalty
+  const list = [
+    { key: 'brave',       name: 'Храбрый',        atk: 1.1, flee: -0.3, war: 0.15 },
+    { key: 'coward',      name: 'Трусливый',      atk: 0.9, flee: 0.4, war: -0.2 },
+    { key: 'greedy',      name: 'Жадный',         greed: 1, war: 0.1 },
+    { key: 'wise',        name: 'Мудрый',         xp: 1.3, peace: 0.25, war: -0.1 },
+    { key: 'aggressive',  name: 'Агрессивный',    atk: 1.15, war: 0.3, peace: -0.2 },
+    { key: 'peaceful',    name: 'Миролюбивый',    atk: 0.95, war: -0.3, peace: 0.3 },
+    { key: 'strong',      name: 'Сильный',        hp: 1.2, atk: 1.1 },
+    { key: 'lazy',        name: 'Ленивый',        work: 0.75 },
+    { key: 'diligent',    name: 'Трудолюбивый',   work: 1.25 },
+    { key: 'fertile',     name: 'Плодовитый',     fertility: 1.4 },
+    { key: 'sickly',      name: 'Болезненный',    hp: 0.8, sick: 1.5 },
+    { key: 'charismatic', name: 'Харизматичный',  loyalty: 10 },
+    { key: 'cruel',       name: 'Жестокий',       loyalty: -10, war: 0.1 },
+    { key: 'kind',        name: 'Добрый',         loyalty: 8, peace: 0.1 },
+    { key: 'fast',        name: 'Быстрый',        speed: 1.2 },
+    { key: 'curious',     name: 'Любознательный', xp: 1.15 },
+  ];
+  const byKey = {};
+  list.forEach((t, i) => { t.id = i; byKey[t.key] = t; });
+  return {
+    list, byKey,
+    get(id) { return list[id]; },
+    /** product of multiplicative modifiers `key` over unit/ruler traits (u.traits = [ids]) */
+    mul(u, key) { let m = 1; const a = u.traits; if (a) for (let i = 0; i < a.length; i++) { const v = list[a[i]][key]; if (v !== undefined) m *= v; } return m; },
+    /** sum of additive modifiers `key` */
+    sum(u, key) { let m = 0; const a = u.traits; if (a) for (let i = 0; i < a.length; i++) { const v = list[a[i]][key]; if (v !== undefined) m += v; } return m; },
+    has(u, key) { const a = u.traits; if (!a) return false; const id = byKey[key].id; return a.indexOf(id) >= 0; },
+    /** pick 2-3 distinct random trait ids, avoiding contradictory pairs. Uses R. */
+    roll() {
+      const n = R.chance(0.45) ? 3 : 2;
+      const bad = [[0, 1], [4, 5], [7, 8]];
+      const out = [];
+      let guard = 0;
+      while (out.length < n && guard++ < 30) {
+        const id = R.i(list.length);
+        if (out.indexOf(id) >= 0) continue;
+        if (bad.some(p => (p[0] === id && out.indexOf(p[1]) >= 0) || (p[1] === id && out.indexOf(p[0]) >= 0))) continue;
+        out.push(id);
+      }
+      return out;
+    },
+  };
+})();
+
+/* ---------- Equipment tiers (weapon / armor 0..3) ---------- */
+const Gear = {
+  weaponAtk: [0, 2, 4, 7],
+  armorDef: [0, 1, 3, 5],
+  weaponNames: {
+    human: ['Кулаки', 'Дубина', 'Меч', 'Стальной меч'],
+    orc: ['Кулаки', 'Дубина', 'Топор', 'Боевой топор'],
+    elf: ['Кулаки', 'Короткий лук', 'Длинный лук', 'Эльфийский лук'],
+  },
+  armorNames: ['Нет', 'Кожаная', 'Кольчуга', 'Латы'],
+  // resources a city spends to equip one unit with the tier (tier 0 is free)
+  weaponCost: [{}, { wood: 2 }, { iron: 2 }, { iron: 4, gold: 1 }],
+  armorCost: [{}, { wood: 1 }, { iron: 3 }, { iron: 6, gold: 1 }],
+  /** attack reach in tiles */
+  range(race, weaponTier) { return race === Const.RACE.ELF && weaponTier >= 1 ? 3 + weaponTier : 1.2; },
+  isRanged(race, weaponTier) { return race === Const.RACE.ELF && weaponTier >= 1; },
+};
+
+/* ---------- Palettes ---------- */
+const Palette = {
+  kingdom: ['#e53935', '#1e88e5', '#43a047', '#fdd835', '#8e24aa', '#fb8c00', '#00acc1', '#d81b60',
+            '#6d4c41', '#7cb342', '#3949ab', '#f4511e', '#00897b', '#c0ca33', '#5e35b1', '#ec407a'],
+  // culture colors (12 cultures); Kingdoms assigns S.cultures entries using these
+  culture: ['#ef9a9a', '#90caf9', '#a5d6a7', '#fff59d', '#ce93d8', '#ffcc80', '#80deea', '#f48fb1', '#bcaaa4', '#c5e1a5', '#9fa8da', '#b0bec5'],
+};
+
+/* ---------- God tools (single source of truth for UI + Powers) ----------
+ * brush: radius slider applies; drag: may be applied continuously while painting
+ * Powers.apply(id, tx, ty, radius, phase) implements every id.
+ * `icon` keys must be drawable by Sprites.icon(key, size).
+ */
+const Tabs = [
+  { id: 'land',     name: 'Ландшафт',   icon: 'tab_land' },
+  { id: 'life',     name: 'Существа',   icon: 'tab_life' },
+  { id: 'powers',   name: 'Силы',       icon: 'tab_powers' },
+  { id: 'kingdoms', name: 'Королевства', icon: 'tab_kingdoms' },
+  { id: 'info',     name: 'Инфо',       icon: 'tab_info' },
+];
+
+const ToolDefs = [
+  // ---- land ----
+  { id: 'raise',    tab: 'land', group: 'terrain', name: 'Поднять',  icon: 'raise',    brush: true, drag: true, hint: 'Поднять землю' },
+  { id: 'lower',    tab: 'land', group: 'terrain', name: 'Опустить', icon: 'lower',    brush: true, drag: true, hint: 'Опустить землю (вода)' },
+  { id: 'grass',    tab: 'land', group: 'terrain', name: 'Трава',    icon: 'grass',    brush: true, drag: true, hint: 'Покрыть травой' },
+  { id: 'sand',     tab: 'land', group: 'terrain', name: 'Песок',    icon: 'sand',     brush: true, drag: true, hint: 'Насыпать песок' },
+  { id: 'forest',   tab: 'land', group: 'terrain', name: 'Лес',      icon: 'forest',   brush: true, drag: true, hint: 'Посадить лес' },
+  { id: 'hill',     tab: 'land', group: 'terrain', name: 'Холмы',    icon: 'hill',     brush: true, drag: true, hint: 'Создать холмы' },
+  { id: 'mountain', tab: 'land', group: 'terrain', name: 'Гора',     icon: 'mountain', brush: true, drag: true, hint: 'Поднять гору' },
+  { id: 'snow',     tab: 'land', group: 'terrain', name: 'Снег',     icon: 'snow',     brush: true, drag: true, hint: 'Покрыть снегом' },
+  { id: 'lava',     tab: 'land', group: 'terrain', name: 'Лава',     icon: 'lava',     brush: true, drag: true, hint: 'Пролить лаву' },
+  // ---- life ----
+  { id: 'human',    tab: 'life', group: 'creatures', name: 'Человек', icon: 'human', brush: true, drag: true, hint: 'Создать людей' },
+  { id: 'orc',      tab: 'life', group: 'creatures', name: 'Орк',     icon: 'orc',   brush: true, drag: true, hint: 'Создать орков' },
+  { id: 'elf',      tab: 'life', group: 'creatures', name: 'Эльф',    icon: 'elf',   brush: true, drag: true, hint: 'Создать эльфов' },
+  { id: 'erase',    tab: 'life', group: 'creatures', name: 'Стереть', icon: 'erase', brush: true, drag: true, hint: 'Стереть существ' },
+  // ---- powers: destruction ----
+  { id: 'lightning',  tab: 'powers', group: 'destroy', name: 'Молния',      icon: 'lightning',  brush: false, drag: false, hint: 'Удар молнии' },
+  { id: 'meteor',     tab: 'powers', group: 'destroy', name: 'Метеорит',    icon: 'meteor',     brush: true,  drag: false, hint: 'Метеорит (радиус = кисть)' },
+  { id: 'fire',       tab: 'powers', group: 'destroy', name: 'Огонь',       icon: 'fire',       brush: true,  drag: true,  hint: 'Поджечь' },
+  { id: 'earthquake', tab: 'powers', group: 'destroy', name: 'Землетрясение', icon: 'earthquake', brush: true, drag: false, hint: 'Трещины и лава' },
+  { id: 'plague',     tab: 'powers', group: 'destroy', name: 'Чума',        icon: 'plague',     brush: true,  drag: false, hint: 'Заразная болезнь' },
+  { id: 'tornado',    tab: 'powers', group: 'destroy', name: 'Торнадо',     icon: 'tornado',    brush: false, drag: false, hint: 'Выпустить торнадо' },
+  // ---- powers: blessings ----
+  { id: 'rain',  tab: 'powers', group: 'bless', name: 'Дождь',       icon: 'rain',  brush: true, drag: true,  hint: 'Дождь: тушит огонь, растит лес' },
+  { id: 'heal',  tab: 'powers', group: 'bless', name: 'Исцеление',   icon: 'heal',  brush: true, drag: true,  hint: 'Исцелить' },
+  { id: 'bless', tab: 'powers', group: 'bless', name: 'Благословение', icon: 'bless', brush: true, drag: false, hint: 'Временный буст' },
+  // ---- kingdoms: diplomacy powers (single tap on a king / unit / city / territory) ----
+  { id: 'war_whisper', tab: 'kingdoms', group: 'diplomacy', name: 'Шёпот войны', icon: 'war_whisper', brush: false, drag: false, hint: 'Тапните по королю: королевство объявит войну соседу' },
+  { id: 'peace',       tab: 'kingdoms', group: 'diplomacy', name: 'Мир',         icon: 'peace',       brush: false, drag: false, hint: 'Тапните по королевству: прекратить войны' },
+  { id: 'split',       tab: 'kingdoms', group: 'diplomacy', name: 'Разделить',   icon: 'split',       brush: false, drag: false, hint: 'Тапните по городу: он станет независимым' },
+  // ---- info ----
+  { id: 'inspect', tab: 'info', group: 'info', name: 'Осмотр', icon: 'inspect', brush: false, drag: false, hint: 'Тап по существу, городу или королевству' },
+];
+ToolDefs.byId = {};
+ToolDefs.forEach(t => { ToolDefs.byId[t.id] = t; });
+
+
+/* ---- 03_names.js ---- */
+/* =====================================================================
+ * 03_names.js — procedural name generators (Russian transliteration style)
+ * OWNER: architect. Read-only for other modules.
+ * Names are bare proper nouns; UI/Log wrap kingdoms/cities in «guillemets» so no declension is needed.
+ * ===================================================================== */
+
+const Names = (() => {
+  const P = {
+    human: {
+      mA: ['Альд', 'Бер', 'Вил', 'Гар', 'Дор', 'Эд', 'Ив', 'Кай', 'Лот', 'Мор', 'Нор', 'Осв', 'Рол', 'Сэр', 'Тор', 'Ульф', 'Хар', 'Ярл', 'Бран', 'Годв'],
+      mB: ['рик', 'вин', 'мунд', 'берт', 'ольд', 'ан', 'ек', 'ас', 'ар', 'он', 'ий', 'мар', 'ред'],
+      fA: ['Ал', 'Бел', 'Вер', 'Гел', 'Дар', 'Эл', 'Ив', 'Лил', 'Мар', 'Нин', 'Ор', 'Роз', 'Сиб', 'Тал', 'Фрей', 'Яр', 'Ада', 'Мил'],
+      fB: ['а', 'ена', 'ина', 'лия', 'ра', 'ета', 'ана', 'мила', 'ея', 'берта', 'гунда', 'ейна'],
+      pA: ['Вест', 'Ост', 'Нор', 'Эльд', 'Брен', 'Кал', 'Дар', 'Лун', 'Мир', 'Тар', 'Вир', 'Стар', 'Хол', 'Зем', 'Рив', 'Аран', 'Дорв', 'Сильв', 'Грен', 'Тир'],
+      pB: ['град', 'холм', 'бург', 'ворд', 'ли', 'ин', 'стон', 'мар', 'дор', 'ия', 'тон', 'вик', 'берг', 'ейн'],
+      cA: ['Кам', 'Бел', 'Сер', 'Ржан', 'Чёрн', 'Вол', 'Ор', 'Кров', 'Зла', 'Мед'], cB: ['ых', 'ов', 'ины', 'ичи', 'ские'],
+    },
+    orc: {
+      mA: ['Гр', 'Мог', 'Ург', 'Заг', 'Брак', 'Тук', 'Шак', 'Дрог', 'Нагр', 'Горб', 'Кур', 'Лаз', 'Хруш', 'Мур', 'Кагр'],
+      mB: ['ак', 'ук', 'аш', 'ог', 'ун', 'гар', 'мок', 'зуг', 'рак', 'ош', 'ург'],
+      fA: ['Уш', 'Гр', 'Мог', 'Баз', 'Шар', 'Лур', 'Яг', 'Дра'],
+      fB: ['та', 'азза', 'ашка', 'уга', 'ога', 'ула', 'ага', 'ыка'],
+      pA: ['Груш', 'Кра', 'Мор', 'Баг', 'Гор', 'Драк', 'Зур', 'Рог', 'Тар', 'Хаг', 'Ург', 'Чар'],
+      pB: ['гор', 'мок', 'нак', 'раш', 'дум', 'зуг', 'тар', 'баш', 'гаш', 'ног'],
+      cA: ['Чёрн', 'Кров', 'Желез', 'Кост', 'Гнил', 'Рван', 'Тёмн'], cB: ['ый Клык', 'ый Коготь', 'ый Кулак', 'ая Пасть', 'ый Череп'],
+    },
+    elf: {
+      mA: ['Эл', 'Ти', 'Ла', 'Аэ', 'Ил', 'Фэ', 'Сил', 'Ар', 'Кэ', 'Мэ', 'Лэ', 'Ни', 'Ва', 'Эр'],
+      mB: ['ариэн', 'андил', 'ион', 'орин', 'иэль', 'эрин', 'вэн', 'алас', 'ондиль', 'ильмар'],
+      fA: ['Эл', 'Ти', 'Ла', 'Ни', 'Ар', 'Ли', 'Ми', 'Си', 'Ва', 'Аэ'],
+      fB: ['ариэль', 'ана', 'илия', 'эриэль', 'ивэн', 'уриэль', 'елла', 'ианна', 'энвэ'],
+      pA: ['Лот', 'Эрил', 'Сил', 'Тал', 'Лаур', 'Аэл', 'Ил', 'Фэн', 'Мирил', 'Нэр', 'Кэл', 'Элл'],
+      pB: ['лориэн', 'ариэль', 'ондор', 'иллон', 'эрин', 'ания', 'ивэль', 'аланд', 'орин'],
+      cA: ['Звёздн', 'Лунн', 'Лист', 'Серебрян', 'Тенист', 'Рассвет'], cB: ['ые', 'ая Ветвь', 'ый Дом', 'ые Ветры'],
+    },
+  };
+  const KEYS = ['human', 'orc', 'elf'];
+  const TITLES = ['Королевство', 'Орда', 'Лесное княжество'];
+
+  function cap(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
+  function used() { const m = S.mod.names || (S.mod.names = { used: {} }); return m.used; }
+
+  function make(a, b) { return cap(R.pick(a) + R.pick(b)); }
+
+  return {
+    /** first name. sex: Const.SEX.M / F */
+    person(race, sex) {
+      const p = P[KEYS[race]];
+      return sex === Const.SEX.F ? make(p.fA, p.fB) : make(p.mA, p.mB);
+    },
+    /** family / clan name (a short word) */
+    clan(race) {
+      const p = P[KEYS[race]];
+      return cap(R.pick(p.cA) + R.pick(p.cB));
+    },
+    /** place name root, unique within the world while possible. Used for cities AND kingdoms. */
+    place(race) {
+      const p = P[KEYS[race]];
+      const u = used();
+      let n = '';
+      for (let i = 0; i < 12; i++) {
+        n = make(p.pA, p.pB);
+        if (!u[n]) break;
+      }
+      u[n] = 1;
+      return n;
+    },
+    /** kingdom proper name (bare) */
+    kingdom(race) { return this.place(race); },
+    /** word for a state of the race: Королевство / Орда / Лесное княжество */
+    title(race) { return TITLES[race] || 'Королевство'; },
+    /** Log-friendly reference «Name». Accepts a kingdom or city object (or null). */
+    ref(ent) { return ent ? '«' + ent.name + '»' : '«?»'; },
+    /** simple city size word by population */
+    cityWord(pop) { return pop < 8 ? 'Деревня' : pop < 25 ? 'Посёлок' : pop < 60 ? 'Город' : 'Крупный город'; },
+    /** Russian unit title: "Король"/"Королева"/"Вождь"/"Вожак"/"Князь"/"Княгиня" */
+    ruler(race, sex) {
+      if (race === Const.RACE.ORC) return sex === Const.SEX.F ? 'Вождиха' : 'Вождь';
+      if (race === Const.RACE.ELF) return sex === Const.SEX.F ? 'Княгиня' : 'Князь';
+      return sex === Const.SEX.F ? 'Королева' : 'Король';
+    },
+  };
+})();
+
+
+/* ---- 08_kingdoms.js ---- */
+/* =====================================================================
+ * 08_kingdoms.js — STAGE-1 STUB (minimal but functional). Replaced by the full module in stage 2.
+ * Keep the public API shape; see docs/CONTRACT.md §Kingdoms.
+ * ===================================================================== */
+
+const Kingdoms = (() => {
+  function get(id) { return S.kingdoms.get(id) || null; }
+
+  function newCulture(race) {
+    const id = S.cultures.length;
+    S.cultures.push({ id, name: 'Культура ' + (id + 1), color: Palette.culture[id % Palette.culture.length], race });
+    return id;
+  }
+
+  function pickColor() {
+    const usedC = new Set();
+    for (const k of S.kingdoms.values()) usedC.add(k.color);
+    for (const c of Palette.kingdom) if (!usedC.has(c)) return c;
+    return Palette.kingdom[S.kingdoms.size % Palette.kingdom.length];
+  }
+
+  function randomFlag() {
+    return { pattern: R.i(6), symbol: R.i(10), c1: pickColor(), c2: R.pick(['#ffffff', '#222222', '#f2c230', '#d0d0d0']), c3: R.pick(['#ffffff', '#111111', '#f2c230']) };
+  }
+
+  function create(race, capitalCity) {
+    const id = S.id();
+    const flag = randomFlag();
+    const k = {
+      id, name: Names.kingdom(race), race, color: flag.c1, flag, capitalId: capitalCity ? capitalCity.id : 0,
+      rulerId: 0, cities: [], culture: newCulture(race), stability: 70, born: S.tick, alive: true, hist: [], clan: Names.clan(race),
+    };
+    S.kingdoms.set(id, k);
+    Hist.add(k, 'Основано');
+    S.touchOwner();
+    Bus.emit('kingdomCreated', k);
+    return k;
+  }
+
+  function addCity(k, city) {
+    if (k.cities.indexOf(city.id) < 0) k.cities.push(city.id);
+    city.kingdomId = k.id;
+    if (!k.capitalId || !S.cities.has(k.capitalId)) k.capitalId = city.id;
+    S.touchOwner();
+  }
+
+  function chooseRuler(k) {
+    const cap = S.cities.get(k.capitalId);
+    let best = null, bs = -1;
+    for (const u of S.units.values()) {
+      if (u.kingdomId !== k.id) continue;
+      if (Util.age(u) < Races.list[u.race].maturity) continue;
+      const sc = u.level * 3 + Util.age(u) * 0.1 + (cap && u.cityId === cap.id ? 5 : 0);
+      if (sc > bs) { bs = sc; best = u; }
+    }
+    return best;
+  }
+
+  function setRuler(kid, u) {
+    const k = get(kid); if (!k) return;
+    const old = S.units.get(k.rulerId);
+    if (old) old.isRuler = false;
+    k.rulerId = u ? u.id : 0;
+    if (u) {
+      u.isRuler = true;
+      Hist.add(u, Names.ruler(u.race, u.sex) + ' «' + k.name + '»');
+      Hist.add(k, 'Правит ' + u.name);
+      Bus.emit('kingCrowned', k, u);
+    }
+  }
+
+  return {
+    get, newCulture,
+    ruler(kid) { const k = get(kid); return k ? (S.units.get(k.rulerId) || null) : null; },
+    /** Called by Cities.found after the city object exists in S.cities. */
+    onCityFounded(city, parentCityId) {
+      let k = null;
+      const parent = parentCityId ? S.cities.get(parentCityId) : null;
+      if (parent && S.kingdoms.has(parent.kingdomId)) k = S.kingdoms.get(parent.kingdomId);
+      if (!k) {
+        // join nearest same-race kingdom within 28 tiles, else found a new one
+        let bd = 28;
+        for (const c of S.cities.values()) {
+          if (c.id === city.id || !c.kingdomId) continue;
+          const kk = S.kingdoms.get(c.kingdomId);
+          if (!kk || kk.race !== city.race) continue;
+          const d = Util.dist(c.x, c.y, city.x, city.y);
+          if (d < bd) { bd = d; k = kk; }
+        }
+      }
+      let created = false;
+      if (!k) { k = create(city.race, city); created = true; }
+      addCity(k, city);
+      city.culture = k.culture;
+      if (created || !S.units.has(k.rulerId)) { const r = chooseRuler(k); if (r) setRuler(k.id, r); }
+      return k;
+    },
+    onCityLost(city, oldKid) {
+      const k = get(oldKid); if (!k) return;
+      const i = k.cities.indexOf(city.id); if (i >= 0) k.cities.splice(i, 1);
+      if (k.capitalId === city.id) k.capitalId = k.cities[0] || 0;
+      if (!k.cities.length) this.destroy(k.id, 'cities lost');
+      S.touchOwner();
+    },
+    destroy(kid, cause) {
+      const k = get(kid); if (!k) return;
+      k.alive = false;
+      S.kingdoms.delete(kid);
+      for (const u of S.units.values()) { if (u.kingdomId === kid) u.kingdomId = 0; }
+      Log.add('Королевство «' + k.name + '» пало', Const.LOG.KINGDOM, -1, -1, kid);
+      Bus.emit('kingdomDestroyed', k);
+      S.touchOwner();
+    },
+    setRuler,
+    cities(kid) { const k = get(kid); return k ? k.cities.map(id => S.cities.get(id)).filter(Boolean) : []; },
+    pop(kid) { let n = 0; for (const c of this.cities(kid)) n += c.pop || 0; return n; },
+    ofUnit(u) { return u.kingdomId ? get(u.kingdomId) : null; },
+    at(x, y) { const c = S.cities.get(S.owner[S.idx(x, y)]); return c ? get(c.kingdomId) : null; },
+    transferCity(cityId, toKid, cause) {
+      const c = S.cities.get(cityId); if (!c) return false;
+      const old = get(c.kingdomId); if (old) this.onCityLost(c, old.id);
+      const nk = get(toKid); if (!nk) return false;
+      addCity(nk, c); c.culture = c.culture === undefined ? nk.culture : c.culture;
+      for (const u of S.units.values()) if (u.cityId === c.id) u.kingdomId = nk.id;
+      return true;
+    },
+    splitCity(cityId) {
+      const c = S.cities.get(cityId); if (!c) return 0;
+      const old = get(c.kingdomId);
+      if (old && old.cities.length <= 1) return 0;
+      if (old) this.onCityLost(c, old.id);
+      const k = create(c.race, c);
+      addCity(k, c); c.culture = k.culture;
+      for (const u of S.units.values()) if (u.cityId === c.id) u.kingdomId = k.id;
+      const r = chooseRuler(k); if (r) setRuler(k.id, r);
+      return k.id;
+    },
+    annex() { return false; },
+    rebel() { return 0; },
+    step(tick) {
+      if (tick % 30 !== 0) return;
+      for (const k of S.kingdoms.values()) {
+        if (!S.units.has(k.rulerId)) { const r = chooseRuler(k); if (r) setRuler(k.id, r); }
+      }
+    },
+    newWorld() {}, afterLoad() {},
+  };
+})();
+
+
+/* ---- 09_diplomacy.js ---- */
+/* =====================================================================
+ * 09_diplomacy.js — STAGE-1 STUB (no-ops). Replaced in stage 2. API: docs/CONTRACT.md §Diplomacy
+ * ===================================================================== */
+
+const Diplomacy = (() => {
+  return {
+    get(a, b) { return { a: Math.min(a, b), b: Math.max(a, b), opinion: 0, state: Const.REL.PEACE, since: 0, truceUntil: 0, causes: [] }; },
+    opinion(a, b) { return 0; },
+    state(a, b) { return Const.REL.PEACE; },
+    atWar(a, b) { return false; },
+    allied(a, b) { return false; },
+    addOpinion(a, b, delta, why) {},
+    declareWar(aggressor, defender, casus) { return null; },
+    makeAlliance(a, b) { return false; },
+    breakAlliance(a, b) { return false; },
+    godWhisperWar(kid) { return false; },
+    godPeace(kid) { return false; },
+    neighbors(kid) { return []; },
+    relationsOf(kid) { return []; },
+    onKingdomCreated(k) {}, onKingdomDestroyed(kid) {},
+    step(tick) {}, newWorld() {}, afterLoad() {},
+  };
+})();
+
+
+/* ---- 10_war.js ---- */
+/* =====================================================================
+ * 10_war.js — STAGE-1 STUB (no-ops). Replaced in stage 2. API: docs/CONTRACT.md §War
+ * ===================================================================== */
+
+const War = (() => {
+  return {
+    start(attackerKid, defenderKid, casus) { return null; },
+    end(warId, how) {},
+    get(id) { return S.wars.get(id) || null; },
+    warsOf(kid) { return []; },
+    active() { return []; },
+    godPeace(kid) { return false; },
+    armyOf(armyId) { return S.armies.get(armyId) || null; },
+    step(tick) {}, newWorld() {}, afterLoad() {},
+  };
+})();
+
+})();</script></body></html>
