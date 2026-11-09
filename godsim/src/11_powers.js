@@ -9,7 +9,8 @@
  *    Returns true when the power took effect, false when it was throttled / had no target / failed.
  *    Powers.lastMessage = short Russian text about the last apply() (success text, or the reason of a failure for a toast);
  *    '' when the call was silently ignored (throttled move, 'end', move of a non-drag tool).
- *  - Powers.pick(tx, ty) -> {type:'unit'|'building'|'city'|'tile', id, x, y} | null (null = outside the map).
+ *  - Powers.pick(tx, ty) -> {type:'unit'|'building'|'city'|'region'|'tile', id, x, y} | null (null = outside the map).
+ *    Stage 2: empty LAND inside a region (owned or wild) is {type:'region', id: regionId}; water / specks without a region stay 'tile'.
  *  - Persistent effects live in S.eff (JSON-safe, saved with the world), advanced by Powers.step(tick):
  *      meteors [{x,y,r,eta,t0}]   tornados [{x,y,dx,dy,until,r, nt}]   rains [{x,y,r,until}]   quakes [{x,y,r,until, t0,b,n,m,h}]
  *    (extra fields are private to this module; Render only reads x,y,r,eta,t0).
@@ -633,6 +634,9 @@ const Powers = (() => {
     }
     if (!c && S.owner[i]) c = S.cities.get(S.owner[i]) || null;
     if (c) return { type: 'city', id: c.id, x: c.x, y: c.y };
+    // 4) stage 2: empty land belongs to a region (owned or wild)
+    const rid = S.region ? S.region[i] : 0;
+    if (rid && S.regions && S.regions.has(rid)) return { type: 'region', id: rid, x: xi, y: yi };
     return { type: 'tile', id: i, x: xi, y: yi };
   }
 
@@ -654,6 +658,12 @@ const Powers = (() => {
     } else if (p.type === 'city') {
       const c = S.cities.get(p.id);
       if (c) kid = c.kingdomId;
+    } else if (p.type === 'region') {
+      const r = S.regions ? S.regions.get(p.id) : null;               // an owned region: its owner (wild land has none)
+      if (r) kid = r.ownerId;
+    } else if (p.type === 'tile') {
+      const kk = Kingdoms.at(p.x, p.y);                               // shore / specks: whoever owns the ground
+      if (kk) kid = kk.id;
     }
     if (!kid || !S.kingdoms.has(kid)) return null;
     const k = S.kingdoms.get(kid), r = S.units.get(k.rulerId) || null;
@@ -675,7 +685,7 @@ const Powers = (() => {
   function warWhisper(x, y) {
     x = num(x, NaN); y = num(y, NaN);
     const t = kingdomAt(x, y);
-    if (!t) return msg('Тапните по королю или королевству', false);
+    if (!t) return msg('Тапните по королю, городу или земле королевства', false);
     const k = S.kingdoms.get(t.kid);
     fx('whisper', t.x, t.y, { ttl: 1.2 });
     const res = Diplomacy.godWhisperWar(t.kid);
@@ -708,7 +718,18 @@ const Powers = (() => {
     if (S.bld[i]) { const b = S.buildings.get(S.bld[i]); if (b && S.cities.has(b.cityId)) return S.cities.get(b.cityId); }
     const c = nearestCity(x, y, 1.5);
     if (c) return c;
-    return S.owner[i] ? (S.cities.get(S.owner[i]) || null) : null;
+    if (S.owner[i] && S.cities.has(S.owner[i])) return S.cities.get(S.owner[i]);
+    // stage 2: the biggest city of the tapped region
+    const rid = S.region ? S.region[i] : 0, r = rid && S.regions ? S.regions.get(rid) : null;
+    if (r) {
+      let best = null;
+      for (let k = 0; k < r.cityIds.length; k++) {
+        const cc = S.cities.get(r.cityIds[k]);
+        if (cc && (!best || cc.pop > best.pop)) best = cc;
+      }
+      if (best) return best;
+    }
+    return null;
   }
   function split(x, y) {
     x = num(x, NaN); y = num(y, NaN);
@@ -790,6 +811,7 @@ const Powers = (() => {
       case 'war_whisper': return warWhisper(x, y);
       case 'peace': return peace(x, y);
       case 'split': return split(x, y);
+      case 'command': return msg('', false);                 // command mode is handled by the UI (no god power behind it)
       case 'inspect': { const p = pick(x, y); return msg(p ? 'Осмотр' : 'Вне карты', !!p); }
     }
     return msg('Неизвестный инструмент', false);

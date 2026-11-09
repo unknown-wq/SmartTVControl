@@ -562,9 +562,10 @@ function mkWar(ctx, strongSoldiers) {
 }
 
 section('armies: gather at the rally point, march, fight enemies of a kingdom at war, release', () => {
-  const ctx = mkCtx(1);
+  const ctx = mkCtx(1, 96, ['War'])  // stage 2: hand-built armies / wars are not owned by the real War module;
   const { S, Units } = ctx;
   const { cA, cB, gB, soldiers, army } = mkWar(ctx, false);
+  for (const u of gB) { u.weapon = 2; u.armor = 2; }            // stage 2: unarmed villagers flee from soldiers instead of attacking them; armed defenders still fight
   run(ctx, 300);
   const d0 = soldiers.map(s => Math.hypot(s.x - army.rally.x, s.y - army.rally.y));
   note(`gathered: distances to rally ${d0.map(d => d.toFixed(1)).join(' ')}`);
@@ -587,7 +588,7 @@ section('armies: gather at the rally point, march, fight enemies of a kingdom at
 });
 
 section('armies: siege an undefended city (buildings of a kingdom at war are damaged / destroyed, neutral ones are not)', () => {
-  const ctx = mkCtx(1);
+  const ctx = mkCtx(1, 96, ['War'])  // (idem);
   const { S, Units, Buildings } = ctx;
   const { cA, cB, gB, soldiers, army } = mkWar(ctx, true);
   for (const u of gB) Units.kill(u, 'erase');                    // nobody defends
@@ -771,7 +772,7 @@ section('city destroyed / captured while citizens work: no deadlock, homeless re
   const pop0 = victim.pop;
   // capture: members keep living, kingdom ids follow
   const k2 = other.kingdomId;
-  if (victim.kingdomId !== k2) { Cities.capture(victim.id, k2, null); run(ctx, 50); for (const id of victim.members) assert.equal(S.units.get(id).kingdomId, k2); }
+  if (victim.kingdomId !== k2) { ctx.Kingdoms.transferCity(victim.id, k2, 'test'); run(ctx, 50);   /* stage 2: Cities.capture only occupies; ownership moves through Kingdoms */ for (const id of victim.members) assert.equal(S.units.get(id).kingdomId, k2); }
   Cities.destroy(victim.id, 'test');
   assert.ok(!S.cities.has(victim.id));
   const mon = mkMonitor(ctx);

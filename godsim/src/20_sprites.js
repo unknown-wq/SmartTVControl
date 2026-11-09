@@ -1548,6 +1548,139 @@ const Sprites = (() => {
       for (const q of [[7, 0], [7, 11], [0, 7], [11, 7]]) { if (q[0] === 7) b.rect(6, q[1], 2, 4, IP.W); else b.rect(q[0], 6, 4, 2, IP.W); }
       b.set(7, 7, IP.r); b.set(6, 6, IP.o);
     },
+    // ---- stage 2: command / region / war layer --------------------------------------------------
+    command(b) {                               // officer's peaked cap with a gold star badge
+      b.art([
+        '....bbbbbb....',
+        '..bbssbbbbbb..',
+        '.bbssbbbbbbbB.',
+        '.bbbbbbyybbbB.',
+        '.bbbbbyyyybbB.',
+        '.bbbbbbyybbbB.',
+        'bbbbbbbbbbbbbB',
+        'yYyYyYyYyYyYyY',
+        'BBBBBBBBBBBBBB',
+        '.kkkkkkkkkkkkkk',
+        '..kGGGGGGGGGkk.',
+      ], IP, 0, 1);
+      b.set(7, 4, IP.w); b.set(6, 5, IP.Y); b.set(8, 5, IP.Y);
+    },
+    region(b) {                                // a parcel of land with a dashed border and a capital marker
+      const inside = (x, y) => {
+        const a = (x - 6.6) / 6.4, c = (y - 6.8) / 5.4;
+        let d = a * a + c * c;
+        d += Math.sin(x * 1.7 + 0.6) * 0.07 + Math.cos(y * 1.9) * 0.07;
+        return d <= 1;
+      };
+      for (let y = 0; y < 14; y++) for (let x = 0; x < 14; x++) {
+        if (!inside(x, y)) continue;
+        const edge = !inside(x - 1, y) || !inside(x + 1, y) || !inside(x, y - 1) || !inside(x, y + 1);
+        const hi = !inside(x - 1, y) || !inside(x, y - 1);
+        b.set(x, y, edge ? ((x + y) & 1 ? IP.r : IP.R) : (h2(x, y, 41) > 0.82 ? IP.E : (x + y < 9 ? IP.l : IP.e)));
+        if (edge && hi && ((x + y) & 1) === 0) b.set(x, y, IP.o);
+      }
+      b.set(7, 6, IP.w); b.rect(6, 7, 3, 2, IP.y); b.set(6, 7, IP.w); b.hline(6, 9, 3, IP.Y);
+      b.vline(7, 3, 3, IP.N); b.rect(8, 3, 3, 2, IP.r); b.set(10, 3, IP.R);
+    },
+    army(b) {                                  // plumed helmet between two spears
+      b.vline(1, 2, 12, IP.n); b.vline(12, 2, 12, IP.n);
+      b.art(['.w.', 'www', '.W.'], IP, 0, 0); b.art(['.w.', 'www', '.W.'], IP, 11, 0);
+      b.set(1, 1, IP.w); b.set(12, 1, IP.w);
+      shadeDisc(b, 6.5, 8, 4.6, IP.g, IP.w, IP.G);
+      b.rect(2, 11, 9, 3, IP.G); b.hline(2, 11, 9, IP.g); b.hline(2, 13, 9, IP.d);
+      b.rect(4, 8, 6, 1, IP.k); b.vline(6, 8, 4, IP.k); b.set(7, 9, IP.k);
+      b.art(['.rr.', 'rrrr', 'rRrR', '.RR.'], IP, 5, 1); b.set(6, 2, IP.o);
+    },
+    shield(b) {                                // heater shield, white cross on blue, gold rim
+      b.art([
+        'YyyyyyyyyyY',
+        'ybbbbwbbbBy',
+        'ybsbbwbbbBy',
+        'ybssbwbbbBy',
+        'ywwwwwwwwwy',
+        'ybssbwbbbBy',
+        'ybsbbwbbbBy',
+        '.ybbbwbbBy.',
+        '.ybbbwbbBy.',
+        '..ybbwbBy..',
+        '...ybwBy...',
+        '....yBy....',
+        '.....y.....',
+      ], IP, 1, 0);
+    },
+    arrow(b) {                                 // HOI4-style attack arrow (pointing up-right, curved tail)
+      for (let y = 0; y < 14; y++) for (let x = 0; x < 14; x++) {
+        const head = x >= 6 + y && y <= 7;
+        const bend = x < 5 ? 13 + Math.round((5 - x) * (5 - x) * 0.09) : 13;     // tail bends down at the left
+        const d = x + y - bend, body = Math.abs(d) <= 1 && x <= 10 && y >= 2 - (x < 3 ? 0 : 0);
+        if (!head && !body) continue;
+        let c = IP.r;
+        if (head) c = (y === 0 || (x - y === 6 && y > 1)) ? (y === 0 ? IP.o : IP.R) : x === 13 ? IP.R : IP.r;
+        else c = d === -1 ? IP.o : d === 1 ? IP.R : IP.r;
+        b.set(x, y, c);
+      }
+      b.set(10, 1, IP.o); b.set(9, 2, IP.o);
+    },
+    star(b) {
+      b.art([
+        '......y......',
+        '.....yyy.....',
+        '.....ywy.....',
+        'yyyyyywyyyyyy',
+        '.yywwwwwyyyY.',
+        '..yywwwwyyY..',
+        '...yyyyyyY...',
+        '...yyyyyYY...',
+        '..yyyYyyYYY..',
+        '..yyY...YYY..',
+        '.yY.......YY.',
+      ], IP, 0, 1);
+    },
+    supply(b) {                                // wooden supply crate with a strap
+      b.rect(1, 4, 12, 9, IP.N);
+      b.rect(2, 5, 10, 7, IP.t);
+      b.hline(1, 3, 12, IP.T); b.hline(2, 4, 10, IP.t); b.hline(1, 4, 1, IP.T); b.hline(12, 4, 1, IP.T);
+      b.line(3, 6, 10, 11, IP.n); b.line(10, 6, 3, 11, IP.n);
+      b.vline(2, 5, 7, IP.T); b.vline(11, 5, 7, IP.T);
+      b.hline(2, 5, 10, IP.w); b.hline(2, 11, 10, IP.T);
+      b.rect(6, 4, 2, 9, IP.r); b.vline(6, 4, 9, IP.o); b.vline(7, 4, 9, IP.R);
+      b.set(2, 6, IP.y); b.set(11, 6, IP.y); b.set(2, 10, IP.y); b.set(11, 10, IP.y);
+    },
+    war(b) {                                   // crossed swords
+      const blade = (flip) => {
+        const X = x => flip ? 13 - x : x;
+        for (let t = 0; t < 9; t++) { b.set(X(1 + t), 1 + t, IP.w); b.set(X(2 + t), 1 + t, IP.W); b.set(X(1 + t), 2 + t, IP.g); }
+        b.set(X(0), 0, IP.w); b.set(X(1), 0, IP.W); b.set(X(0), 1, IP.W);
+        b.line(X(8), 12, X(12), 8, IP.y); b.line(X(8), 11, X(11), 8, IP.Y); b.line(X(9), 12, X(12), 9, IP.Y);
+        b.line(X(10), 10, X(13), 13, IP.n); b.line(X(10), 11, X(12), 13, IP.N);
+        b.set(X(13), 13, IP.y);
+      };
+      blade(false); blade(true);
+      b.set(6, 5, IP.w); b.set(7, 5, IP.w); b.set(6, 6, IP.W); b.set(7, 6, IP.W);
+    },
+    flag_goal(b) {                             // war-goal banner planted on a marked spot
+      b.ell(7, 13, 6, 1.6, IP.R); b.ell(7, 13, 4.2, 0.9, IP.r); b.ell(7, 13, 2, 0.4, IP.y);
+      b.vline(3, 1, 12, IP.n); b.vline(4, 1, 12, IP.N); b.set(3, 0, IP.y); b.set(4, 0, IP.Y);
+      b.art([
+        'rrrrrrrrrr',
+        'rrrrywrrrr',
+        'rrrryyrrrr',
+        'rRrrwyyrrr',
+        'rRRrryyrRr',
+        'rRRRrrrRR.',
+        '.RRRRRRR..',
+      ], IP, 5, 1);
+      b.hline(5, 1, 10, IP.o);
+    },
+    handshake(b) {                             // agreement: two sleeves clasping hands
+      b.rect(0, 3, 4, 8, IP.b); b.vline(0, 3, 8, IP.s); b.vline(3, 3, 8, IP.B); b.hline(0, 3, 4, IP.s); b.hline(0, 10, 4, IP.B);
+      b.rect(10, 3, 4, 8, IP.r); b.vline(13, 3, 8, IP.R); b.vline(10, 3, 8, IP.m); b.hline(10, 3, 4, IP.m); b.hline(10, 10, 4, IP.R);
+      b.rect(4, 4, 4, 5, IP.f); b.rect(6, 5, 4, 5, IP.F); b.hline(5, 3, 4, IP.f); b.hline(6, 2, 3, IP.f);
+      b.hline(4, 9, 3, IP.f); b.hline(6, 10, 4, IP.F);
+      for (const x of [5, 7, 9]) b.vline(x, 8, 3, IP.h);
+      b.set(9, 11, IP.h); b.set(7, 11, IP.h); b.set(5, 10, IP.h);
+      b.line(6, 4, 9, 7, IP.h); b.set(5, 5, IP.w); b.set(6, 3, IP.w); b.set(5, 4, IP.w);
+    },
   };
 
   const iconCache = new Map();

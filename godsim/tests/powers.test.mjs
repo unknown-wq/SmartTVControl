@@ -712,10 +712,19 @@ section('pick: unit (kings easier) > building > city > tile; outside = null', ()
   assert.ok(owned, 'territory exists');
   p = Powers.pick(owned[0] + 0.5, owned[1] + 0.5);
   assert.deepEqual([p.type, p.id], ['city', c.id], 'inside the borders -> city');
-  // free land
-  p = Powers.pick(80.5, 80.5);
-  assert.deepEqual([p.type, p.x, p.y], ['tile', 80, 80]);
-  assert.equal(typeof p.id, 'number');
+  // free land: stage 2 -> the region under the tap (owned or wild); water / specks outside every region stay 'tile'
+  let landSpot = null, waterSpot = null;
+  for (let i = 0; i < S.tile.length && !(landSpot && waterSpot); i++) {
+    if (S.owner[i] || S.bld[i]) continue;
+    const x = i % S.w, y = (i / S.w) | 0, near = Math.hypot(x - c.x, y - c.y) < 12;
+    if (S.region[i] && !near && !landSpot && x > 3 && y > 3 && x < S.w - 4 && y < S.h - 4 && !S.res[i]) landSpot = [x, y];
+    if (!S.region[i] && S.tile[i] === T.DEEP && !waterSpot) waterSpot = [x, y];
+  }
+  assert.ok(landSpot, 'there is some free land');
+  p = Powers.pick(landSpot[0] + 0.5, landSpot[1] + 0.5);
+  assert.deepEqual([p.type, p.id, p.x, p.y], ['region', S.region[landSpot[1] * S.w + landSpot[0]], landSpot[0], landSpot[1]], 'empty land -> its region');
+  assert.ok(S.regions.has(p.id));
+  if (waterSpot) { p = Powers.pick(waterSpot[0] + 0.5, waterSpot[1] + 0.5); assert.deepEqual([p.type, p.x, p.y], ['tile', waterSpot[0], waterSpot[1]]); assert.equal(typeof p.id, 'number'); }
   // dead units are never picked
   ctx.Units.kill(u, 'test');
   assert.notEqual(Powers.pick(45.5, 45.5).type, 'unit');
@@ -796,6 +805,76 @@ section('war_whisper / peace / split: resolve the kingdom, call the API, log, fa
     assert.deepEqual(calls.sp, [], 'no city, no call');
     assert.equal(Powers.errors, 0);
   } finally { restore.forEach((r) => r()); }
+});
+
+section('stage 2: war_whisper / peace / split resolve REGION taps; command is a silent UI-only tool; kingdomAt(region)', () => {
+  const ctx = village();
+  const { Powers, S, Diplomacy, War, Kingdoms, Const, ToolDefs } = ctx;
+  const k = [...S.kingdoms.values()][0];
+  const city = S.cities.get(k.cities[0]);
+  // the kingdom owns a far-away region (no city sphere reaches it): empty land there is a 'region' pick
+  let reg = null;
+  for (const r of S.regions.values()) if (!r.ownerId && !r.cityIds.length && Math.hypot(r.cx - city.x, r.cy - city.y) > 16 && (!reg || Math.hypot(r.cx - city.x, r.cy - city.y) < Math.hypot(reg.cx - city.x, reg.cy - city.y))) reg = r;
+  assert.ok(reg, 'a free region exists');
+  assert.equal(ctx.Regions.setOwner(reg.id, k.id, 'test'), true);
+  let spot = null;
+  for (let i = 0; i < S.region.length && !spot; i++) {
+    if (S.region[i] !== reg.id || S.owner[i] || S.bld[i]) continue;
+    const x = i % S.w, y = (i / S.w) | 0;
+    if (ctx.Units.nearest(x + 0.5, y + 0.5, 2, () => true)) continue;
+    spot = [x + 0.5, y + 0.5];
+  }
+  assert.ok(spot, 'a free tile of the owned region exists');
+  const calls = { ww: [], dp: [], wp: [], sp: [] };
+  const restore = [];
+  restore.push(patch(Diplomacy, 'godWhisperWar', (kid) => { calls.ww.push(kid); return true; }));
+  restore.push(patch(Diplomacy, 'godPeace', (kid) => { calls.dp.push(kid); return true; }));
+  restore.push(patch(War, 'godPeace', (kid) => { calls.wp.push(kid); return false; }));
+  restore.push(patch(Kingdoms, 'splitCity', (cid) => { calls.sp.push(cid); return 99; }));
+  try {
+    if (spot) {
+      const p = Powers.pick(spot[0], spot[1]);
+      assert.equal(p.type, 'region', 'empty land of an owned region');
+      {
+        assert.equal(p.id, reg.id);
+        assert.equal(Powers.kingdomAt(spot[0], spot[1]).kid, k.id, 'kingdomAt(region) = the owner');
+        assert.equal(Powers.apply('war_whisper', spot[0], spot[1], 1, 'tap'), true);
+        assert.deepEqual(calls.ww, [k.id], 'war_whisper on owned land');
+        assert.equal(Powers.apply('peace', spot[0], spot[1], 1, 'tap'), true);
+        assert.deepEqual(calls.dp, [k.id]);
+        assert.equal(Powers.apply('split', spot[0], spot[1], 1, 'tap'), false, 'a region without a city cannot be split');
+        assert.deepEqual(calls.sp, []);
+      }
+    }
+    // split by tapping empty land inside the region of a city = that city (the biggest one of the region)
+    let cs = null;
+    for (let i = 0; i < S.region.length && !cs; i++) {
+      if (S.region[i] !== city.regionId || S.bld[i] || Math.hypot((i % S.w) - city.x, ((i / S.w) | 0) - city.y) < 2.5) continue;
+      if (ctx.Units.nearest((i % S.w) + 0.5, ((i / S.w) | 0) + 0.5, 2, () => true)) continue;
+      cs = i;
+    }
+    assert.ok(cs !== null, 'a free tile in the region of the village');
+    S.owner[cs] = 0;                                                     // outside every city sphere (clipped / unclaimed ground)
+    const cx = (cs % S.w) + 0.5, cy = ((cs / S.w) | 0) + 0.5;
+    assert.equal(Powers.pick(cx, cy).type, 'region');
+    assert.equal(Powers.apply('split', cx, cy, 1, 'tap'), true);
+    assert.deepEqual(calls.sp, [city.id], 'split on empty land of a region = the biggest city of the region');
+    // wild land (a region nobody owns) has no kingdom: polite failure, nothing called
+    calls.ww.length = 0; calls.sp.length = 0;
+    let wild = null;
+    for (const r of S.regions.values()) if (!r.ownerId && !r.cityIds.length) { wild = r; break; }
+    if (wild) {
+      assert.equal(Powers.apply('war_whisper', wild.cx + 0.5, wild.cy + 0.5, 1, 'tap'), false);
+      assert.ok(Powers.lastMessage.length > 0); assert.deepEqual(calls.ww, []);
+      assert.equal(Powers.apply('split', wild.cx + 0.5, wild.cy + 0.5, 1, 'tap'), false); assert.deepEqual(calls.sp, []);
+      assert.equal(Powers.kingdomAt(wild.cx + 0.5, wild.cy + 0.5), null);
+    }
+    // the command tool is handled by the UI: apply never "succeeds" and stays silent
+    assert.ok(ToolDefs.byId.command, 'command tool exists');
+    for (const ph of ['tap', 'start', 'move', 'end']) { assert.equal(Powers.apply('command', city.x + 0.5, city.y + 0.5, 1, ph), false); assert.equal(Powers.lastMessage, '', 'silent'); }
+    assert.equal(Powers.errors, 0);
+  } finally { restore.forEach((r) => r()); }
+  void Const;
 });
 
 section('diplomacy tools with the real (or stub) Diplomacy / War / Kingdoms do not throw', () => {

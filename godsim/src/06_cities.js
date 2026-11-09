@@ -14,6 +14,15 @@
  *  HOMELESS     Cities.trySettle(u): join / found with >= 3 nearby homeless adults / return a {x,y} hint.
  *
  * Private persistent state: city.mod (plain data) and S.mod.cities = {exps:[...]}. Non-persistent caches: seekers, dirtyTerr.
+ *
+ * STAGE 2 (docs/CONTRACT.md §8): the land is split into regions (14_regions.js).
+ *  - city.regionId = region of the city centre (kept by Regions); city.occupierId = kingdom whose army holds the city (0 none).
+ *  - S.owner (the city's sphere) is clipped to regions OWNED by the city's kingdom; nearest centre still wins.
+ *  - canFound / findSite take an optional kingdom id: expeditions may only settle wild regions or regions of their own kingdom;
+ *    homeless wanderers (no kingdom) may settle anywhere and then join the owner of the region (Kingdoms.onCityFounded).
+ *  - occupy / liberate / isOccupied: an occupied city produces x0.4 (Cities.deposit scales every income, with a remainder
+ *    accumulator so stocks stay integral), loses loyalty (-0.5 per visit), launches no expeditions and builds no barracks.
+ *    Ownership never changes here (only Kingdoms.transferCity does); capture() is an alias of occupy().
  * ===================================================================== */
 
 const Cities = (() => {
@@ -45,6 +54,19 @@ const Cities = (() => {
   function isWaterT(t) { return t === T.DEEP || t === T.SHALLOW; }
   function jitter(x, y, salt) { return Util.hash2(x, y, salt) / 4294967296; }
   function fem(word) { return word === 'Деревня' ? 'а' : ''; }   // ending for "разрушен(а)"
+  const OCC_MUL = 0.4;                      // production multiplier of an occupied city
+  const OCC_LOYALTY = 0.5;                  // loyalty lost per visit (10 ticks) while occupied
+
+  /** region system built? (tests with a hand-made world may have none: everything then behaves like stage 1) */
+  function regionsOn() { return !!(S.region && S.regions && S.regions.size > 0); }
+  /** owner kingdom of the region under tile index i; -1 = no restriction (no region system / tile outside every region) */
+  function regionOwnerIdx(i) {
+    if (!S.region || !S.regions) return -1;
+    const rid = S.region[i];
+    if (rid === 0) return -1;
+    const r = S.regions.get(rid);
+    return r ? r.ownerId : -1;
+  }
 
   function initMod(c) {
     let m = c.mod;
@@ -73,9 +95,21 @@ const Cities = (() => {
     const v = c.stock[good];
     return v > 0 ? v : 0;
   }
+  /** income of a city. An occupied city only keeps OCC_MUL of it (remainders accumulate in city.mod.oa so stocks stay integral). */
   function deposit(cityId, good, amt) {
     const c = S.cities.get(cityId);
     if (!c || !(amt > 0) || !(good in c.stock)) return 0;
+    if (c.occupierId) {
+      const m = initMod(c);
+      const oa = m.oa || (m.oa = {});
+      const acc = (oa[good] || 0) + amt * OCC_MUL;
+      amt = Math.floor(acc + 1e-9);
+      oa[good] = acc - amt;
+      if (!(amt > 0)) return 0;
+    }
+    return depositRaw(c, good, amt);
+  }
+  function depositRaw(c, good, amt) {
     const cap = stockCap(c);
     const room = cap - c.stock[good];
     const add = amt < room ? amt : (room > 0 ? room : 0);
@@ -179,6 +213,8 @@ const Cities = (() => {
     if (!c) return false;
     c.kingdomId = kid | 0;
     for (let i = 0; i < c.members.length; i++) { const u = S.units.get(c.members[i]); if (u) u.kingdomId = c.kingdomId; }
+    if (c.occupierId && c.occupierId === c.kingdomId) liberate(cityId);
+    recomputeTerritory(cityId);
     S.touchOwner();
     return true;
   }
@@ -194,7 +230,10 @@ const Cities = (() => {
   }
 
   // ------------------------------------------------------------------ territory
-  /** S.owner within radius = Races.cityRadius + level; nearest centre wins; land tiles only. */
+  /**
+   * S.owner within radius = Races.cityRadius + level; nearest centre wins; land tiles only.
+   * Stage 2: clipped to the regions owned by the city's kingdom (a tile of a region owned by somebody else / by nobody is never in the sphere).
+   */
   function recomputeTerritory(cityId, noNeighbours) {
     const c = S.cities.get(cityId);
     if (!c || !S.owner) return false;
@@ -205,19 +244,29 @@ const Cities = (() => {
     c.radius = r; m.tr = r;
     const w = S.w, h = S.h, owner = S.owner, tile = S.tile, rr = r * r;
     const y0 = Math.max(0, c.y - R0), y1 = Math.min(h - 1, c.y + R0), x0 = Math.max(0, c.x - R0), x1 = Math.min(w - 1, c.x + R0);
+    const rgOn = regionsOn(), rg = S.region, regs = S.regions, kid = c.kingdomId;
+    let lastRid = -1, lastOwn = -1;
     let changed = false, released = false;
     for (let y = y0; y <= y1; y++) {
       for (let x = x0; x <= x1; x++) {
         const i = y * w + x;
         const dx = x - c.x, dy = y - c.y, d2 = dx * dx + dy * dy;
-        const inside = d2 <= rr && Tiles.isLand(tile[i]);
+        let ro = -1;                                         // owner of the tile's region (-1: unrestricted)
+        if (rgOn) {
+          const rid = rg[i];
+          if (rid !== 0) {
+            if (rid !== lastRid) { lastRid = rid; const rr0 = regs.get(rid); lastOwn = rr0 ? rr0.ownerId : -1; }
+            ro = lastOwn;
+          }
+        }
+        const inside = d2 <= rr && Tiles.isLand(tile[i]) && (ro < 0 || ro === kid);
         const o = owner[i];
         if (o === c.id) {
           if (!inside && !(S.bld[i] !== 0 && Tiles.isLand(tile[i]))) { owner[i] = 0; changed = true; released = true; }
         } else if (inside) {
           if (o === 0) { owner[i] = c.id; changed = true; continue; }
           const oc = S.cities.get(o);
-          if (!oc) { owner[i] = c.id; changed = true; continue; }
+          if (!oc || (ro >= 0 && oc.kingdomId !== ro)) { owner[i] = c.id; changed = true; continue; }   // free, or held by a city that no longer rules this region
           const ox = x - oc.x, oy = y - oc.y, od = ox * ox + oy * oy;
           if (d2 < od || (d2 === od && c.id < o)) { owner[i] = c.id; changed = true; }
         }
@@ -239,13 +288,25 @@ const Cities = (() => {
   function cityAt(x, y) { const id = ownerAt(x, y); return id ? (S.cities.get(id) || null) : null; }
 
   // ------------------------------------------------------------------ sites
-  function canFound(x, y, race) {
+  /**
+   * kid (optional): kingdom of the founding party. With a kingdom the region must be wild or owned by it; without (homeless
+   * wanderers) any region is fine — the village then joins the region's owner (Kingdoms.onCityFounded).
+   */
+  function canFound(x, y, race, kid) {
     x = Math.floor(x); y = Math.floor(y);
     if (!S.tile || !(x >= 1 && y >= 1 && x < S.w - 1 && y < S.h - 1)) return false;
     const i = y * S.w + x;
     const t = S.tile[i];
     if (!Tiles.isLand(t) || !Tiles.buildable(t)) return false;
     if (S.bld[i] || S.fire[i]) return false;
+    if (regionsOn()) {
+      if (S.region[i] === 0) {
+        // land raised by the god a moment ago may not be assigned yet: apply the queued edits now
+        if (typeof Regions !== 'undefined' && !Regions.__stub && Regions.flush) Regions.flush();
+        if (S.region[i] === 0) return false;                                   // specks outside every region are too small
+      }
+      if (kid > 0) { const ro = regionOwnerIdx(i); if (ro > 0 && ro !== kid) return false; }
+    }
     const rk = S.res[i];
     if (rk && rk !== RES.BERRY) return false;
     const D2 = Const.CITY_MIN_DIST * Const.CITY_MIN_DIST;
@@ -301,16 +362,23 @@ const Cities = (() => {
     maxR = Math.min(maxR, S.w + S.h);
     const step = maxR > 16 ? 3 : 2;
     const anyScore = !!(opts && opts.anyScore);
+    const kid = opts && opts.kid > 0 ? opts.kid | 0 : 0;
     const min2 = minR * minR, max2 = maxR * maxR;
+    const rgOn = regionsOn();
     const needLand = World.landId(x, y) > 0;          // an origin in deep water cannot share a landmass with anything
     let best = null, bs = -1e9;
     const consider = (xx, yy, step1) => {
       const dx = xx - x, dy = yy - y, d2 = dx * dx + dy * dy;
       if (d2 > max2 || d2 < min2) return;
-      if (!canFound(xx, yy, race)) return;
+      if (!canFound(xx, yy, race, kid)) return;
       if (needLand && !World.sameLand(x, y, xx, yy)) return;
       let sc = siteScore(race, xx, yy);
       if (sc < -50 && !(anyScore && step1)) return;
+      if (rgOn && !kid) {
+        // wanderers prefer unclaimed regions: settling a foreign one makes the village a subject of its owner
+        const ro = regionOwnerIdx(yy * S.w + xx);
+        if (ro > 0) { const ok = S.kingdoms.get(ro); sc -= (ok && ok.race === race) ? 0.6 : 3; }
+      }
       if (minR > 0) sc -= 0.03 * Math.abs(Math.sqrt(d2) - (minR + 8));
       else sc -= 0.02 * Math.sqrt(d2);
       if (S.owner[yy * S.w + xx] !== 0) sc -= 0.4;       // prefer unclaimed ground
@@ -334,18 +402,22 @@ const Cities = (() => {
     }
     return best;
   }
-  function findSite(race, x, y, maxR) { return findSiteRange(race, x, y, 0, maxR > 0 ? maxR : 30, null); }
+  function findSite(race, x, y, maxR, kid) { return findSiteRange(race, x, y, 0, maxR > 0 ? maxR : 30, kid > 0 ? { kid } : null); }
 
   // ------------------------------------------------------------------ founding
   function found(race, x, y, founders, opts) {
     opts = opts || {};
     x = Math.floor(x); y = Math.floor(y);
-    if (!canFound(x, y, race)) return null;
+    const parent = opts.parentCityId ? S.cities.get(opts.parentCityId) : null;
+    // settlers sent by a kingdom may only take wild land or land of their own kingdom; wanderers may settle anywhere
+    const fkid = parent ? parent.kingdomId : (opts.kid | 0);
+    if (!canFound(x, y, race, fkid)) return null;
     const id = S.id();
     const c = {
       id, name: opts.name || Names.place(race), race, kingdomId: 0, x, y, pop: 0, members: [],
       stock: { food: 12, wood: 20, stone: 4, iron: 0, gold: 0 },
       radius: rc(race).cityRadius + 1, level: 1, loyalty: 70, culture: 0, founded: S.tick, buildings: [], hist: [], mod: {},
+      regionId: S.region ? S.region[y * S.w + x] : 0, occupierId: 0,
     };
     S.cities.set(id, c);
     initMod(c);
@@ -361,11 +433,11 @@ const Cities = (() => {
       }
     }
     recalc(c);
-    recomputeTerritory(id);
-    const parent = opts.parentCityId ? S.cities.get(opts.parentCityId) : null;
     const k = Kingdoms.onCityFounded(c, parent ? parent.id : 0);
     if (k && typeof k === 'object' && k.id && c.kingdomId !== k.id) c.kingdomId = k.id;
-    setKingdom(id, c.kingdomId);
+    // the region of the village becomes its kingdom's (when still wild); then the sphere is cut to the kingdom's regions
+    if (typeof Regions !== 'undefined' && !Regions.__stub && Regions.onCityFounded) Regions.onCityFounded(c);
+    setKingdom(id, c.kingdomId);                       // members + territory
     c.mod.expCd = S.tick + 350;
     Hist.add(c, parent ? 'Основан переселенцами из «' + parent.name + '»' : 'Основан');
     Log.add('Основана деревня «' + c.name + '»', Const.LOG.CITY, x, y, c.kingdomId);
@@ -383,6 +455,7 @@ const Cities = (() => {
   /** pick a tile index for a new building of `type` around the city centre (or -1) */
   function findSpot(c, type) {
     const w = S.w, h = S.h, bld = S.bld, tile = S.tile, owner = S.owner;
+    const rgOn = regionsOn();
     const maxR = Math.max(5, c.radius - 1);
     const radii = [6, 9, 12];
     for (let ri = 0; ri < radii.length; ri++) {
@@ -398,6 +471,7 @@ const Cities = (() => {
           if (bld[i] !== 0) continue;
           const o = owner[i];
           if (o !== 0 && o !== c.id) continue;
+          if (rgOn) { const ro = regionOwnerIdx(i); if (ro >= 0 && ro !== c.kingdomId && S.region[i] !== c.regionId) continue; }   // build inside our own regions (and the home region) only
           if (bld[i - 1] || bld[i + 1] || bld[i - w] || bld[i + w]) continue;          // keep 1-tile walking lanes
           if (!World.isBuildable(x, y)) continue;
           const diag = (bld[i - w - 1] ? 1 : 0) + (bld[i - w + 1] ? 1 : 0) + (bld[i + w - 1] ? 1 : 0) + (bld[i + w + 1] ? 1 : 0);
@@ -469,7 +543,7 @@ const Cities = (() => {
     if (needFarm && st.food < pop * 3) { want.push(B.FARM); if (needHouse) want.push(B.HOUSE); }
     else { if (needHouse) want.push(B.HOUSE); if (needFarm) want.push(B.FARM); }
     if (pop >= 8 && bc[B.STORAGE] + pc[B.STORAGE] < 1 + Math.floor(pop / 30)) want.push(B.STORAGE);
-    if (pop >= 12 && bc[B.BARRACKS] + pc[B.BARRACKS] < 1 + Math.floor(pop / 60)) want.push(B.BARRACKS);
+    if (pop >= 12 && !c.occupierId && bc[B.BARRACKS] + pc[B.BARRACKS] < 1 + Math.floor(pop / 60)) want.push(B.BARRACKS);
     if (pop >= 20 && bc[B.TEMPLE] + pc[B.TEMPLE] < 1 + Math.floor(pop / 80)) want.push(B.TEMPLE);
     if (pop >= 30 && bc[B.MARKET] + pc[B.MARKET] < 1 + Math.floor(pop / 90)) want.push(B.MARKET);
     let deficitSet = false;
@@ -772,7 +846,7 @@ const Cities = (() => {
       cand.push(u);
     }
     if (cand.length < 3) return false;
-    const site = findSiteRange(c.race, c.x, c.y, 12, 35, null);
+    const site = findSiteRange(c.race, c.x, c.y, 12, 35, c.kingdomId > 0 ? { kid: c.kingdomId } : null);
     if (!site) { m.expCd = tick + 400; return false; }
     R.shuffle(cand);
     const n = clamp(Math.floor(c.pop / 4), 3, Math.min(5, cand.length));
@@ -799,7 +873,7 @@ const Cities = (() => {
   }
 
   function maybeExpedition(c, m, tick) {
-    if (tick < m.expCd) return;
+    if (tick < m.expCd || c.occupierId) return;
     const pop = c.pop;
     if (pop < 14) return;
     const free = m.hc - pop;
@@ -845,9 +919,10 @@ const Cities = (() => {
       return null;
     }
     // site still valid? otherwise re-pick close to the original target
-    if (!canFound(tx, ty, u.race)) {
+    const pkid = (S.cities.get(st.parent) || {}).kingdomId | 0;
+    if (!canFound(tx, ty, u.race, pkid)) {
       st.retry = (st.retry || 0) + 1;
-      const ns = st.retry <= 3 ? findSiteRange(u.race, tx, ty, 0, 9, { anyScore: true }) : null;
+      const ns = st.retry <= 3 ? findSiteRange(u.race, tx, ty, 0, 9, { anyScore: true, kid: pkid }) : null;
       if (!ns) {
         for (let i = 0; i < ids.length; i++) { const v = S.units.get(ids[i]); if (isSettler(v, st.eid)) releaseUnit(v); }
         removeExp(st.eid);
@@ -998,6 +1073,7 @@ const Cities = (() => {
     S.cities.delete(c.id);
     dirtyTerr.delete(c.id);
     destroying = false;
+    if (typeof Regions !== 'undefined' && !Regions.__stub && Regions.onCityRemoved) Regions.onCityRemoved(c);
     // neighbours reclaim the freed ground
     for (const o of S.cities.values()) {
       if (Math.abs(o.x - c.x) <= R0 + o.radius + 2 && Math.abs(o.y - c.y) <= R0 + o.radius + 2) recomputeTerritory(o.id, true);
@@ -1014,32 +1090,54 @@ const Cities = (() => {
     return true;
   }
 
+  // ------------------------------------------------------------------ occupation (stage 2)
+  function isOccupied(cityId) { const c = S.cities.get(cityId); return !!c && c.occupierId > 0; }
+
+  /**
+   * An enemy army holds the city (War calls this via Regions.setController). The city keeps its kingdom; economy x0.4, loyalty drains,
+   * no expeditions / barracks while it lasts. Silent (War writes the log line). Idempotent: returns true only when something changed.
+   */
+  function occupy(cityId, byKid) {
+    const c = S.cities.get(cityId);
+    byKid = byKid | 0;
+    if (!c || byKid <= 0 || byKid === c.kingdomId || c.occupierId === byKid) return false;
+    const first = !c.occupierId;
+    c.occupierId = byKid;
+    const m = initMod(c);
+    m.occSince = S.tick;
+    m.expCd = Math.max(m.expCd, S.tick + 600);
+    if (first) {
+      c.loyalty = Math.max(0, c.loyalty - 6);
+      const nk = Kingdoms.get(byKid);
+      Hist.add(c, 'Оккупирован' + (nk ? ' королевством «' + nk.name + '»' : ''));
+      Fx.add('explosion', c.x + 0.5, c.y + 0.5, { ttl: 0.9, r: 1.5 });
+    }
+    S.touchOwner();
+    Bus.emit('cityOccupied', c, byKid);
+    return true;
+  }
+  /** the occupier is gone (the owner retook the region, or the city changed hands) */
+  function liberate(cityId) {
+    const c = S.cities.get(cityId);
+    if (!c || !c.occupierId) return false;
+    c.occupierId = 0;
+    const m = initMod(c);
+    m.occSince = 0;
+    c.loyalty = Math.min(100, c.loyalty + 10);
+    Hist.add(c, 'Освобождён');
+    S.touchOwner();
+    Bus.emit('cityLiberated', c);
+    return true;
+  }
+
+  /** stage-1 name: an army took the city. Ownership is NOT changed any more (only Kingdoms.transferCity does that). */
   function capture(cityId, newKid, army) {
     const c = S.cities.get(cityId);
     if (!c) return false;
     const oldKid = c.kingdomId;
-    if (oldKid === newKid) return false;
-    const r = Kingdoms.transferCity(cityId, newKid, 'capture');
-    if (r === false) return false;
-    setKingdom(cityId, newKid);
-    c.loyalty = 25;
-    const m = initMod(c);
-    // looting and battle damage
-    for (let i = 0; i < GOODS.length; i++) c.stock[GOODS[i]] = Math.floor(c.stock[GOODS[i]] * 0.7);
-    const ids = c.buildings.slice();
-    for (let i = 0; i < ids.length; i++) {
-      const b = S.buildings.get(ids[i]);
-      if (!b) continue;
-      if (b.type !== B.TOWNHALL && R.chance(0.08)) { Buildings.destroy(b, 'war'); continue; }
-      if (R.chance(0.4)) { b.hp = Math.max(1, Math.floor(b.hp * R.between(0.3, 0.7))); b.data.hit = S.tick; }
-    }
-    recalc(c);
-    m.expCd = S.tick + 600;
+    if (!occupy(cityId, newKid)) return false;
     const nk = Kingdoms.get(newKid);
-    Hist.add(c, 'Захвачен' + (nk ? ' королевством «' + nk.name + '»' : ''));
-    Log.add('Город «' + c.name + '» захвачен' + (nk ? ': «' + nk.name + '»' : ''), Const.LOG.WAR, c.x, c.y, newKid);
-    Fx.add('explosion', c.x + 0.5, c.y + 0.5, { ttl: 0.9, r: 1.5 });
-    S.touchOwner();
+    Log.add('Город «' + c.name + '» оккупирован' + (nk ? ': «' + nk.name + '»' : ''), Const.LOG.WAR, c.x, c.y, newKid);
     Bus.emit('cityCaptured', c, oldKid, newKid);
     void army;
     return true;
@@ -1077,6 +1175,7 @@ const Cities = (() => {
       else if (tick - m.empty > 900) { return 'abandon'; }
     } else m.empty = 0;
     recalc(c);
+    if (c.occupierId) c.loyalty = Math.max(0, c.loyalty - OCC_LOYALTY);
     const lv = levelFor(pop, c.level);
     if (lv !== c.level) setLevel(c, lv);
     const sinceScan = tick - m.c.t;
@@ -1151,7 +1250,13 @@ const Cities = (() => {
     if (DONE_LOG[b.type]) Log.add('В «' + c.name + '» ' + DONE_LOG[b.type], Const.LOG.CITY, b.x, b.y, c.kingdomId);
   });
   Bus.on('buildingChanged', b => { const c = S.cities.get(b.cityId); if (c && !destroying) recalc(c); });
-  Bus.on('buildingDestroyed', b => { const c = S.cities.get(b.cityId); if (c && !destroying) recalc(c); });
+  Bus.on('buildingDestroyed', b => {
+    const c = S.cities.get(b.cityId);
+    if (!c || destroying) return;
+    recalc(c);
+    // a building standing in a region that is no longer ours kept its tile in the sphere; now it is gone: re-clip right away (rare)
+    if (regionsOn()) { const ro = regionOwnerIdx(b.y * S.w + b.x); if (ro >= 0 && ro !== c.kingdomId) recomputeTerritory(c.id, true); }
+  });
   Bus.on('tileChanged', (x, y, o, n) => {
     if (!S.cities.size || Tiles.isLand(o) === Tiles.isLand(n)) return;
     for (const c of S.cities.values()) {
@@ -1165,7 +1270,14 @@ const Cities = (() => {
   function afterLoad() {
     resetCaches();
     state();
-    for (const c of S.cities.values()) { initMod(c); recalc(c); }
+    for (const c of S.cities.values()) {
+      // m.rem (remaining construction work) is only refreshed by visit(): keep the saved, possibly stale value so that a load changes nothing
+      const rem0 = c.mod && typeof c.mod.rem === 'number' ? c.mod.rem : null;
+      initMod(c); recalc(c);
+      if (rem0 !== null) c.mod.rem = rem0;
+      if (c.regionId === undefined) c.regionId = S.region && c.x >= 0 && c.y >= 0 && c.x < S.w && c.y < S.h ? S.region[c.y * S.w + c.x] : 0;
+      if (c.occupierId === undefined) c.occupierId = 0;
+    }
   }
 
   return {
@@ -1181,6 +1293,7 @@ const Cities = (() => {
     },
     canFound, findSite, found, trySettle, foundExpedition, addMember, removeMember, setKingdom, assignJob, dropoff,
     deposit, withdraw, stock, housingCap, housingFree, outfit, recomputeTerritory, ownerAt, destroy, capture,
+    occupy, liberate, isOccupied,
     // extras
     cityAt, findSiteRange, levelFor, stockCap, recalc, homeSpot,
     get lastError() { return lastError; },

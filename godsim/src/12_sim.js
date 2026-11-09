@@ -3,7 +3,7 @@
  *             world creation + initial population.
  * OWNER: Sim+Save agent. API: docs/CONTRACT.md §3 Sim.  DOM-free (runs headless in node).
  *
- *  - Sim.step()        one tick: S.tick++ -> World -> Buildings -> Units -> Cities -> Kingdoms -> Diplomacy -> War -> Powers.
+ *  - Sim.step()        one tick: S.tick++ -> World -> Buildings -> Units -> Cities -> Kingdoms -> Regions -> Diplomacy -> War -> Powers.
  *                      Every module call is wrapped in try/catch; a failing module is reported with console.error at most once per
  *                      100 ticks per module (counters stay in Sim.errors) and never stops the loop.
  *  - Sim.profile       {World:ms,...,total:ms} exponential moving average of the cost of each module step (wall clock, ms/tick).
@@ -19,7 +19,7 @@ const Sim = (() => {
   const RACE = Const.RACE, T = Const.T, SEX = Const.SEX;
 
   // ------------------------------------------------------------------ module table
-  const ORDER = ['World', 'Buildings', 'Units', 'Cities', 'Kingdoms', 'Diplomacy', 'War', 'Powers'];
+  const ORDER = ['World', 'Buildings', 'Units', 'Cities', 'Kingdoms', 'Regions', 'Diplomacy', 'War', 'Powers'];
   let modsCache = null;                       // [{name, mod}] — resolved lazily (modules are not available at load time)
 
   function lookup(name) {
@@ -30,6 +30,7 @@ const Sim = (() => {
         case 'Units': return typeof Units !== 'undefined' ? Units : null;
         case 'Cities': return typeof Cities !== 'undefined' ? Cities : null;
         case 'Kingdoms': return typeof Kingdoms !== 'undefined' ? Kingdoms : null;
+        case 'Regions': return typeof Regions !== 'undefined' ? Regions : null;
         case 'Diplomacy': return typeof Diplomacy !== 'undefined' ? Diplomacy : null;
         case 'War': return typeof War !== 'undefined' ? War : null;
         case 'Powers': return typeof Powers !== 'undefined' ? Powers : null;
@@ -132,6 +133,7 @@ const Sim = (() => {
     st.buildings = b;
     st.sites = sites;
     st.armies = S.armies.size;
+    st.regions = S.regions ? S.regions.size : 0;
     return st;
   }
 
@@ -211,6 +213,10 @@ const Sim = (() => {
     const world = lookup('World');
     if (world && !world.__stub) world.generate({ seed, w, h });
     else S.reset(w, h, seed);
+    const regions = lookup('Regions');                       // stage 2: partition the land before any module hook runs
+    if (regions && !regions.__stub && typeof regions.build === 'function') {
+      try { regions.build(); } catch (e) { report('Regions', 'build', e); }
+    }
     resetPerfState();
     for (const name of ORDER) callLifecycle(name, 'newWorld');
     if (opts.populate) {

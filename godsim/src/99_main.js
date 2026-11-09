@@ -58,13 +58,35 @@ const Main = (() => {
   }
 
   // ------------------------------------------------------------------ camera helpers
+  /** the most interesting spot of a fresh world: the biggest city, else the densest group of creatures (3x3 blocks of an 8-tile grid) */
+  function largestSettlement() {
+    let best = -1, bx = 0, by = 0;
+    for (const c of S.cities.values()) { const p = c.pop | 0; if (p > best) { best = p; bx = c.x + 0.5; by = c.y + 0.5; } }
+    if (best >= 0) return { x: bx, y: by, kind: 'city', n: best };
+    if (!S.units.size) return null;
+    const G = 8, gw = Math.ceil(S.w / G), gh = Math.ceil(S.h / G);
+    const cnt = new Int32Array(gw * gh), sx = new Float64Array(gw * gh), sy = new Float64Array(gw * gh);
+    for (const u of S.units.values()) {
+      const i = Math.min(gh - 1, Math.max(0, (u.y / G) | 0)) * gw + Math.min(gw - 1, Math.max(0, (u.x / G) | 0));
+      cnt[i]++; sx[i] += u.x; sy[i] += u.y;
+    }
+    let bn = 0;
+    for (let cy = 0; cy < gh; cy++) for (let cx = 0; cx < gw; cx++) {
+      let n = 0, x = 0, y = 0;
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        const xx = cx + dx, yy = cy + dy;
+        if (xx < 0 || yy < 0 || xx >= gw || yy >= gh) continue;
+        const i = yy * gw + xx; n += cnt[i]; x += sx[i]; y += sy[i];
+      }
+      if (n > bn) { bn = n; bx = x / n; by = y / n; }
+    }
+    return bn ? { x: bx, y: by, kind: 'group', n: bn } : null;
+  }
   function initialView(instant) {
     if (!S.w) return;
-    let tx = S.w / 2, ty = S.h / 2, found = false;
-    let bestPop = -1;
-    for (const c of S.cities.values()) { if ((c.pop | 0) > bestPop) { bestPop = c.pop | 0; tx = c.x + 0.5; ty = c.y + 0.5; found = true; } }
-    if (!found) { for (const u of S.units.values()) { tx = u.x; ty = u.y; found = true; break; } }
-    const z = Util.clamp(found ? 9 : 6, Render.minZoom(), Render.maxZoom());
+    const spot = largestSettlement();
+    const tx = spot ? spot.x : S.w / 2, ty = spot ? spot.y : S.h / 2;
+    const z = Util.clamp(spot ? 12 : 6, Render.minZoom(), Render.maxZoom());
     if (UI.ready) UI.focusVisible(tx, ty, z, instant !== false); else Render.focusOn(tx, ty, z, true);
   }
   function resetView() {
@@ -210,7 +232,7 @@ const Main = (() => {
   // ------------------------------------------------------------------ debug hook
   function exposeDebug() {
     window.__god = {
-      S, Sim, World, Units, Cities, Kingdoms, Diplomacy, War, Powers, Render, Save, UI, Const,
+      S, Sim, World, Units, Cities, Regions, Kingdoms, Diplomacy, War, Powers, Render, Save, UI, Const,
       setSpeed, getSpeed,
       step(n) { n = n === undefined ? 1 : n | 0; for (let i = 0; i < n; i++) Sim.step(); try { Sim.stats(); } catch (e) { /* ignore */ } return S.tick; },
       // extras for tests
@@ -252,7 +274,7 @@ const Main = (() => {
   }
 
   return {
-    boot, guard: installGuards, setSpeed, getSpeed, newWorld, worldReplaced, resetView, focusTile, initialView, autosave, onResize, start, stop,
+    boot, guard: installGuards, setSpeed, getSpeed, newWorld, worldReplaced, resetView, focusTile, initialView, largestSettlement, autosave, onResize, start, stop,
     get hidden() { return hidden; },
   };
 })();

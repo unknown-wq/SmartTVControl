@@ -527,7 +527,7 @@ section('destroy(): buildings, members, territory, kingdom and neighbours are cl
   assert.equal(S.buildings.size, 0); assert.equal(S.owner.reduce((s, v) => s + (v ? 1 : 0), 0), 0);
 });
 
-section('capture(): flips kingdom, loyalty low, damage, members keep the city', () => {
+section('capture() = occupy() (stage 2): the city keeps its kingdom, an occupier is recorded, members stay', () => {
   const ctx = mkCtx();
   const { S, Cities, Kingdoms } = ctx;
   const s = grassSite(ctx);
@@ -537,15 +537,20 @@ section('capture(): flips kingdom, loyalty low, damage, members keep the city', 
   assert.notEqual(a.kingdomId, b.kingdomId);
   for (let t = 0; t < 30; t++) { S.tick++; Cities.step(S.tick); }
   const evs = []; ctx.Bus.on('cityCaptured', (c, o, n) => evs.push([c.id, o, n]));
+  const occ = []; ctx.Bus.on('cityOccupied', (c, k) => occ.push([c.id, k]));
   const oldK = a.kingdomId, newK = b.kingdomId;
-  a.stock.food = 100;
+  assert.equal(Cities.isOccupied(a.id), false);
   assert.equal(Cities.capture(a.id, newK, null), true);
-  assert.equal(a.kingdomId, newK); assert.ok(a.loyalty < 40);
-  assert.ok(us.every(u => u.kingdomId === newK && u.cityId === a.id), 'members stay');
-  assert.ok(Kingdoms.get(newK).cities.includes(a.id));
-  assert.deepEqual(evs, [[a.id, oldK, newK]]);
-  assert.ok(a.stock.food < 100, 'looted');
-  assert.equal(Cities.capture(a.id, newK, null), false, 'already theirs');
+  assert.equal(a.kingdomId, oldK, 'ownership does not change (only Kingdoms.transferCity does that)');
+  assert.equal(a.occupierId, newK); assert.equal(Cities.isOccupied(a.id), true);
+  assert.ok(us.every(u => u.kingdomId === oldK && u.cityId === a.id), 'members stay');
+  assert.ok(Kingdoms.get(oldK).cities.includes(a.id));
+  assert.deepEqual(evs, [[a.id, oldK, newK]]); assert.deepEqual(occ, [[a.id, newK]]);
+  assert.equal(Cities.capture(a.id, newK, null), false, 'already occupied by them');
+  assert.equal(Cities.occupy(a.id, oldK), false, 'cannot occupy your own city');
+  assert.equal(Cities.occupy(999999, newK), false);
+  assert.equal(Cities.liberate(a.id), true); assert.equal(a.occupierId, 0);
+  assert.equal(Cities.liberate(a.id), false);
   checkInvariants(ctx, 'capture');
 });
 

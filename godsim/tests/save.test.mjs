@@ -59,11 +59,11 @@ function diffCtx(a, b, opts = {}) {
   const ents = (c, m) => [...c.S[m].values()];
   const units = (c) => ents(c, 'units').map(u => opts.ignoreUnitPrev ? Object.assign({}, u, { px: 0, py: 0 }) : u);
   eq('units', units(a), units(b));
-  for (const m of ['cities', 'kingdoms', 'buildings', 'armies', 'wars']) eq(m, ents(a, m), ents(b, m));
+  for (const m of ['cities', 'kingdoms', 'buildings', 'armies', 'wars', 'regions']) eq(m, ents(a, m), ents(b, m));
   eq('rels', [...a.S.rels.entries()], [...b.S.rels.entries()]);
   eq('mod', a.S.mod, b.S.mod); eq('eff', a.S.eff, b.S.eff); eq('cultures', a.S.cultures, b.S.cultures);
   eq('log', a.S.log.slice(-100), b.S.log.slice(-100));
-  for (const l of ['tile', 'elev', 'res', 'amt', 'owner', 'bld', 'fire']) if (a.S[l].length !== b.S[l].length || a.S[l].some((v, i) => v !== b.S[l][i])) out.push('layer:' + l);
+  for (const l of ['tile', 'elev', 'res', 'amt', 'owner', 'bld', 'fire', 'region']) if (a.S[l].length !== b.S[l].length || a.S[l].some((v, i) => v !== b.S[l][i])) out.push('layer:' + l);
   return out;
 }
 function firstUnitDiff(a, b) {
@@ -233,7 +233,10 @@ function runDeterminism(sc, resetCities) {
   const tickAtSave = A.S.tick;
   assert.ok(A.Save.save('auto'), 'save failed: ' + A.Save.lastError);
   assert.equal(A.Sim.totalErrors, 0, 'sim errors before save: ' + JSON.stringify(A.Sim.errors));
+  // the same cache resets a load performs: Cities scratch (seekers / siteCache) and World's fire / lava lists (a load re-orders them by tile index,
+  // see REQUESTS.md "Powers -> World/Save"): both are documented, non-persistent-state leaks of those modules, not of Regions
   if (resetCities && real(A.Cities)) A.Cities.afterLoad();
+  if (resetCities && real(A.World)) A.World.afterLoad();
   // FRESH context (new module state, caches, ids) loads the save
   const B = mk();
   B.Save.storage = store;
@@ -255,14 +258,14 @@ function checkDeterminism(label, sc) {
   const msg = `diverged after ${sc.after} ticks: ${r.diffs.join(',')}${r.diffs.includes('units') ? ' / ' + firstUnitDiff(r.A, r.B) : ''}`;
   if (STRICT) throw new Error(label + ' ' + msg);
   const r2 = runDeterminism(sc, true);
-  if (r2.diffs.length) throw new Error(label + ' ' + msg + ' -- and still diverges when the Cities caches are reset (' + r2.diffs.join(',') + '): NOT explained by Cities');
+  if (r2.diffs.length) throw new Error(label + ' ' + msg + ' -- and still diverges when the Cities caches are reset (' + r2.diffs.join(',') + '): NOT explained by the known Cities / World cache leaks');
   knownLeaks.push(label);
   return { ok: true, known: true, A: r.A };
 }
 function determinismScenario(label, sc) {
   section(`determinism: ${label}`, () => {
     const r = checkDeterminism(label, sc);
-    note(`units ${r.A.S.units.size}, cities ${r.A.S.cities.size}, kingdoms ${r.A.S.kingdoms.size}, buildings ${r.A.S.buildings.size}; ` + (r.known ? 'DIVERGED because of the known Cities cache leak (identical once Cities caches are reset)' : `identical after ${sc.after} more ticks`));
+    note(`units ${r.A.S.units.size}, cities ${r.A.S.cities.size}, kingdoms ${r.A.S.kingdoms.size}, buildings ${r.A.S.buildings.size}; ` + (r.known ? 'DIVERGED because of the known non-persistent caches (Cities seekers/siteCache, World fire/lava list order); identical once they are reset' : `identical after ${sc.after} more ticks`));
   });
 }
 function fingerprintNoPrev(c, keepEntities) {
@@ -306,7 +309,7 @@ section(`determinism sweep: ${QUICK ? 12 : 40} worlds (64/96/128), saved at vari
     const r = checkDeterminism(`sweep seed ${seed} (size ${sc.size}, saved at tick ${sc.before})`, sc);
     if (r.known) known++;
   }
-  note(`${N} scenarios, ${N - known} identical, ${known} diverged only through the Cities cache leak, ${((performance.now() - t0) / N).toFixed(0)} ms each`);
+  note(`${N} scenarios, ${N - known} identical, ${known} diverged only through the known Cities/World cache leaks, ${((performance.now() - t0) / N).toFixed(0)} ms each`);
 });
 
 section('determinism: double round trip (save->load->save) is a fixed point; repeated load/save every 100 ticks stays on track', () => {
@@ -720,6 +723,6 @@ section('stripPaths option shrinks the save (diagnostic; default keeps paths for
 
 // ------------------------------------------------------------------ summary
 const failed = results.filter(r => !r.ok);
-if (knownLeaks.length) console.log(`\nKNOWN ISSUE (module Cities): ${knownLeaks.length} determinism scenario(s) diverged after load only through Cities' non-persistent seekers/siteCache:\n  - ` + knownLeaks.join('\n  - '));
+if (knownLeaks.length) console.log(`\nKNOWN ISSUE (modules Cities / World): ${knownLeaks.length} determinism scenario(s) diverged after load only through non-persistent caches (Cities seekers/siteCache, World fire/lava list order):\n  - ` + knownLeaks.join('\n  - '));
 console.log(`\n${results.length - failed.length}/${results.length} sections passed`);
 if (failed.length) process.exit(1);

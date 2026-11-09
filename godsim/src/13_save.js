@@ -4,8 +4,9 @@
  *
  * Format (version 1) — one JSON object:
  *   { v:1, game:'godsim', savedAt, w, h, seed, tick, rng, nextId, nextLogId,
- *     layers: { tile, elev, res, amt, owner, bld, fire }  each {t:'u8'|'i32', n, e:'raw'|'rle', c:checksum, d:base64},
- *     units/cities/kingdoms/buildings/armies/wars: { k:[keys], r:[[values...], ...] }   (column-table: keys once, one array per entity),
+ *     layers: { tile, elev, res, amt, owner, bld, fire, region? }  each {t:'u8'|'i32', n, e:'raw'|'rle', c:checksum, d:base64},
+ *     units/cities/kingdoms/buildings/armies/wars/regions?: { k:[keys], r:[[values...], ...] }   (column-table: keys once, one array per entity),
+ *     (stage 2: `region` layer + `regions` table are optional — a stage-1 save without them loads and Regions.afterLoad builds them)
  *     rels:[[key,relation]...], cultures:[...], log:[last 100], eff:{...}, mod:{...}, stats:{...}, perf:{thinkEvery,lod} }
  *  - typed arrays: run-length coded (varint) when that is smaller, then base64 (own encoder, chunked String.fromCharCode, no btoa/atob).
  *  - entities keep the iteration order of their Maps, so a loaded world iterates (and therefore simulates) exactly like the original.
@@ -18,7 +19,7 @@ const Save = (() => {
   const PREFIX = 'godsim.v1.';
   const SLOTS = ['auto', '1', '2', '3'];
   const LAYER_NAMES = ['tile', 'elev', 'res', 'amt', 'owner', 'bld', 'fire'];
-  const LAYER_TYPE = { tile: 'u8', elev: 'u8', res: 'u8', amt: 'u8', owner: 'i32', bld: 'i32', fire: 'u8' };
+  const LAYER_TYPE = { tile: 'u8', elev: 'u8', res: 'u8', amt: 'u8', owner: 'i32', bld: 'i32', fire: 'u8', region: 'i32' };
   const TABLES = ['units', 'cities', 'kingdoms', 'buildings', 'armies', 'wars'];
   const LOG_KEEP = 100;
   const MAX_DIM = 512;
@@ -453,6 +454,8 @@ const Save = (() => {
     try { Sim.stats(); } catch (e) { /* stats are only a cache */ }
     const layers = {};
     for (const name of LAYER_NAMES) layers[name] = encodeLayer(S[name], LAYER_TYPE[name]);
+    const hasRegions = !!(S.region && S.region.length === S.w * S.h && S.regions);
+    if (hasRegions) layers.region = encodeLayer(S.region, LAYER_TYPE.region);
     const data = {
       v: Const.SAVE_VERSION, game: 'godsim', savedAt: opts.savedAt !== undefined ? opts.savedAt : clock(),
       w: S.w, h: S.h, seed: S.seed, tick: S.tick, rng: R.getState(), nextId: S.nextId, nextLogId: S.nextLogId,
@@ -463,6 +466,7 @@ const Save = (() => {
       buildings: packTable(Array.from(S.buildings.values())),
       armies: packTable(Array.from(S.armies.values())),
       wars: packTable(Array.from(S.wars.values())),
+      regions: hasRegions ? packTable(Array.from(S.regions.values())) : undefined,
       rels: Array.from(S.rels.entries()),
       cultures: S.cultures,
       log: S.log.length > LOG_KEEP ? S.log.slice(S.log.length - LOG_KEEP) : S.log,
@@ -492,6 +496,31 @@ const Save = (() => {
     if (!data.layers || typeof data.layers !== 'object') fail('layers missing');
     out.layers = {};
     for (const name of LAYER_NAMES) out.layers[name] = decodeLayer(data.layers[name], n, name);
+    // stage 2 (optional): region layer + table. Both or none; a stage-1 save has neither and Regions.afterLoad builds them.
+    out.regions = null; out.layers.region = null;
+    if (data.layers.region && data.regions) {
+      const rlayer = decodeLayer(data.layers.region, n, 'region');
+      const rtab = unpackTable(data.regions, 'regions');
+      const rseen = new Set();
+      for (const r of rtab) {
+        if (!isInt(r.id) || r.id < 1 || rseen.has(r.id)) fail('region bad id');
+        rseen.add(r.id);
+        if (!Array.isArray(r.cityIds)) r.cityIds = [];
+        if (!Array.isArray(r.nb)) r.nb = [];
+        if (!Array.isArray(r.fd)) r.fd = [];
+        if (!Array.isArray(r.claims)) r.claims = [];
+        if (!Array.isArray(r.cores)) r.cores = [];
+        if (!r.terrain || typeof r.terrain !== 'object' || Array.isArray(r.terrain)) r.terrain = { forest: 0, hill: 0, mountain: 0, sand: 0, snow: 0 };
+        r.ownerId = isInt(r.ownerId) ? r.ownerId : 0; r.controllerId = isInt(r.controllerId) ? r.controllerId : 0;
+        r.cx = num(r.cx, 0); r.cy = num(r.cy, 0); r.tiles = num(r.tiles, 0); r.value = num(r.value, 0);
+        r.since = num(r.since, 0); r.occSince = num(r.occSince, 0);
+        if (typeof r.name !== 'string') r.name = 'Регион ' + r.id;
+      }
+      let bad = 0;
+      for (let i = 0; i < n; i++) if (rlayer[i] !== 0 && !rseen.has(rlayer[i])) { rlayer[i] = 0; bad++; }
+      out.repaired += bad;
+      out.layers.region = rlayer; out.regions = rtab;
+    }
     const tile = out.layers.tile, res = out.layers.res;
     for (let i = 0; i < n; i++) { if (tile[i] >= Const.TILE_COUNT) fail('bad tile id'); if (res[i] > 6) fail('bad resource id'); }
 
@@ -605,7 +634,8 @@ const Save = (() => {
 
   // ------------------------------------------------------------------ apply with rollback
   const SNAP_KEYS = ['w', 'h', 'seed', 'tick', 'tile', 'elev', 'res', 'amt', 'owner', 'bld', 'fire', 'dirty', 'dirtyList', 'allDirty', 'ownerVer', 'landDirty',
-    'units', 'cities', 'kingdoms', 'buildings', 'armies', 'wars', 'rels', 'cultures', 'nextId', 'nextLogId', 'log', 'eff', 'mod', 'stats', 'perf'];
+    'units', 'cities', 'kingdoms', 'buildings', 'armies', 'wars', 'rels', 'cultures', 'nextId', 'nextLogId', 'log', 'eff', 'mod', 'stats', 'perf',
+    'region', 'regions', 'regionVer'];
 
   function snapshot() {
     const snap = { rng: R.getState(), fx: Fx.list.slice(), perfCopy: Object.assign({}, S.perf) };
@@ -624,6 +654,7 @@ const Save = (() => {
     S.reset(v.w, v.h, v.seed);
     S.tick = v.tick;
     for (const name of LAYER_NAMES) S[name] = v.layers[name];
+    if (v.layers.region && v.regions) { S.region = v.layers.region; for (const r of v.regions) S.regions.set(r.id, r); }
     const T = v.tables;
     for (const u of T.units) S.units.set(u.id, u);
     for (const c of T.cities) S.cities.set(c.id, c);
@@ -637,7 +668,7 @@ const Save = (() => {
     S.log = v.log;
     S.eff = v.eff; S.mod = v.mod; S.stats = v.stats;
     S.perf.thinkEvery = v.thinkEvery; S.perf.lod = v.lod;
-    S.allDirty = true; S.landDirty = true; S.ownerVer = 1;
+    S.allDirty = true; S.landDirty = true; S.ownerVer = 1; S.regionVer = 1;
     R.setState(v.rng);
     Sim.afterLoad();
     S.perf.thinkEvery = v.thinkEvery; S.perf.lod = v.lod;      // afterLoad resets the adaptive perf state; the saved hint is what the original run used

@@ -12,6 +12,17 @@
  *  - Entities are culled to the view, bucket-sorted by y (no comparator sort, no per-frame allocation).
  *  - Extras beyond the contract: Render.pad (css px of extra scroll margin for UI chrome), Render.panBy / zoomAt /
  *    setCamera / minZoom / maxZoom / visibleRect / invalidate / canvas / size, focusOn(x,y,zoom,instant).
+ *
+ * STAGE 2 (CONTRACT §8.4) — political map + war overlays, section "STAGE 2" below:
+ *  - MODE.BORDERS with regions (S.regions non-empty): owner fill + inner edge shade, crisp kingdom outlines, thin region lines,
+ *    occupation stripes (controller != owner), front lines (Regions.frontlines() or S.wars), region / kingdom names. All of it is cached
+ *    (1 px/tile fill, stripe cache, border runs) and rebuilt when S.regionVer / S.ownerVer / the war set change (>= 150 ms apart);
+ *    while the camera rests the finished layer is blitted from a screen-sized cache. MODE.CULTURE: same per region, coloured by the
+ *    owner's capital culture (city fallback). Without regions the stage-1 city-sphere overlay is used unchanged.
+ *  - All modes: army banners (zoom >= 5; below only the commanded kingdom's), order arrows of Render.cmd.kid's armies (+ everybody's
+ *    with Render.showAllOrders on the political map), war-goal stars, Render.cmd highlights (selected / candidates / goals / targetKid).
+ *  - API: Render.cmd, Render.showAllOrders, Render.regionAt(tx,ty), Render.regionCenter(rid), Render.armyAt(tx,ty),
+ *    Render.armyAtScreen(sx,sy), Render.armyBannerRect(id), Render.debugInfo().political.
  * ===================================================================== */
 
 const Render = (() => {
@@ -451,6 +462,8 @@ const Render = (() => {
     mode: MODE.NORMAL,
     highlight: null,
     brush: null,
+    cmd: null,                 // stage 2: {kid, regionId, armyId, goals:[rid], candidates:[rid], targetKid} set by UI (CONTRACT 8.4)
+    showAllOrders: false,      // stage 2: draw the order arrows / goal stars of every kingdom (political map only)
     stats: { fps: 60, drawMs: 0, visibleUnits: 0, visibleTiles: 0 },
     pad,
   };
@@ -573,8 +586,8 @@ const Render = (() => {
     clampCam();
     labelCache.clear();
   }
-  function setMode(m) { api.mode = m; ovl.ver = -1; }
-  function invalidate() { needFull = true; ovl.ver = -1; }
+  function setMode(m) { api.mode = m; ovl.ver = -1; pol.ver = -1; }
+  function invalidate() { needFull = true; ovl.ver = -1; pol.ver = -1; }
 
   // ------------------------------------------------------------------ overlay (territory / culture)
   const ovl = { fill: null, fctx: null, ver: -1, key: null, mode: -1, built: 0, groups: [], inner: null, w: 0, h: 0 };
@@ -1002,6 +1015,7 @@ const Render = (() => {
     return e;
   }
   function drawLabels(mode) {
+    occFlagsDrawn = 0;
     const big = zoomCss >= 9;
     if (!big && mode === MODE.NORMAL) return;
     ctx.imageSmoothingEnabled = false;
@@ -1013,12 +1027,14 @@ const Render = (() => {
       if (big) {
         const e = labelFor(c, kd, cap);
         ctx.drawImage(e.cv, Math.round(cx - e.w / 2), Math.round(top - e.h - 2 * dpr), e.w, e.h);
+        if (c.occupierId) drawOccupier(c, cx, top - 2 * dpr - e.h / 2, true, e);
       } else if (kd) {
         const fw = Math.round(12 * dpr), fh = Math.round(8 * dpr);
         const fx = Math.round(cx - fw / 2), fy = Math.round(top - fh - 3 * dpr);
         ctx.fillStyle = 'rgba(8,10,20,0.85)'; ctx.fillRect(fx - 1, fy - 1, fw + 2, fh + 2);
         ctx.drawImage(Sprites.flag(kd.flag, fw, fh), fx, fy, fw, fh);
         if (cap) { const cs = Math.round(9 * dpr); ctx.drawImage(Sprites.icon('crown', 16), Math.round(cx - cs / 2), fy - cs + 1, cs, cs); }
+        if (c.occupierId) drawOccupier(c, cx, top, false, null);
       }
     }
   }
@@ -1087,6 +1103,847 @@ const Render = (() => {
     ctx.globalAlpha = 1;
   }
 
+  // ==================================================================================================================
+  // STAGE 2 — political map (regions) and war overlays (CONTRACT §8.4)
+  //   data read (all optional, every access is guarded): S.region / S.regions (Region 8.1), S.armies (Army 8.2), S.wars (War 8.2),
+  //   S.kingdoms, S.cities, Regions.get/centroid/frontlines (only when the real module exists), Render.cmd / Render.showAllOrders.
+  //   The expensive part (fill, stripes, border runs) is cached and rebuilt when S.regionVer / S.ownerVer / the war set change
+  //   (throttled to >= POL_THROTTLE ms); per frame only blits + clipped line strokes + a handful of overlay sprites run.
+  // ==================================================================================================================
+  const POL_THROTTLE = 150;           // ms between rebuilds while the political data keeps changing
+  let SP = 8;                         // pixels per tile of the occupation-stripe cache (shrinks on very large maps)
+  const pol = {
+    ver: -1, ownerVer: -1, warSig: 0, mode: -1, key: null, w: 0, h: 0, built: 0, builds: 0, buildMs: 0,
+    fill: null, fctx: null, img: null, u32: null, stripe: null, sctx: null, patterns: new Map(), stripeTiles: 0,
+    groups: [], thin: null, wild: null, front: null, infos: new Map(), frontPairs: null, usedApi: false, stripeBox: null, tileInfo: null,
+  };
+  const polLayer = { cv: null, cx: null, ox: 0, oy: 0, Z: 0, mode: -1, political: false, builds: -1, key: null, draws: 0, blits: 0, direct: 0, fOx: 0, fOy: 0, fZ: 0, fCw: 0, fCh: 0 };   // screen-sized cache of the whole political layer
+  const geom = { key: null, ver: -1, bbox: null, cache: new Map() };
+  const centers = { key: null, ver: -1, map: new Map() };
+  function hasRegions() { return !!(S.regions && S.regions.size > 0 && S.region && W > 0 && S.region.length === W * H); }
+  function regionsApi() { return (typeof Regions !== 'undefined' && Regions && !Regions.__stub) ? Regions : null; }
+  function regionOf(rid) { return rid ? (S.regions && S.regions.get(rid)) || null : null; }
+  function kingdomOf(kid) { return kid && S.kingdoms ? S.kingdoms.get(kid) || null : null; }
+  function colorOf(kid) { const k = kingdomOf(kid); return k && typeof k.color === 'string' ? k.color : '#a8b0b8'; }
+
+  /** tile (float, centre of the tile) of a region's centre; Regions.centroid when the real module exists, else Region.cx/cy */
+  function regionCenter(rid) {
+    if (centers.key !== S.region || centers.ver !== S.regionVer) { centers.map.clear(); centers.key = S.region; centers.ver = S.regionVer; }
+    let c = centers.map.get(rid);
+    if (c !== undefined) return c;
+    const r = regionOf(rid);
+    if (!r) { centers.map.set(rid, null); return null; }
+    let x = r.cx, y = r.cy;
+    const api2 = regionsApi();
+    if (api2 && typeof api2.centroid === 'function') { try { const p = api2.centroid(rid); if (p && p.x === p.x && p.y === p.y) { x = p.x; y = p.y; } } catch (e) { report('centroid', e); } }
+    c = (x === x && y === y) ? { x: x + 0.5, y: y + 0.5 } : null;
+    centers.map.set(rid, c);
+    return c;
+  }
+  /** region id under a tile position (float tile coords); sea tiles right next to the coast snap to the adjacent land region */
+  function regionAt(tx, ty) {
+    if (!S.region || !(S.w > 0)) return 0;
+    const x = Math.floor(tx), y = Math.floor(ty);
+    if (x < -1 || y < -1 || x > S.w || y > S.h) return 0;
+    if (x >= 0 && y >= 0 && x < S.w && y < S.h) { const r = S.region[y * S.w + x]; if (r) return r; }
+    let best = 0, bd = 1e9;
+    for (let j = -1; j <= 1; j++) for (let i = -1; i <= 1; i++) {
+      const xx = x + i, yy = y + j;
+      if (xx < 0 || yy < 0 || xx >= S.w || yy >= S.h) continue;
+      const r = S.region[yy * S.w + xx]; if (!r) continue;
+      const d = (xx + 0.5 - tx) * (xx + 0.5 - tx) + (yy + 0.5 - ty) * (yy + 0.5 - ty);
+      if (d < bd) { bd = d; best = r; }
+    }
+    return best;
+  }
+
+  // ------------------------------------------------------------------ cache build
+  function warSignature() {
+    let sig = S.wars ? S.wars.size : 0;
+    if (S.wars) for (const w of S.wars.values()) sig = (Math.imul(sig, 31) + w.id * 2 + (w.ended ? 1 : 0) + (w.attackers ? w.attackers.length * 7 : 0) + (w.defenders ? w.defenders.length * 13 : 0)) | 0;
+    return sig;
+  }
+  function pairKey(a, b) { return a < b ? a * 67108864 + b : b * 67108864 + a; }
+  function cultureOfRegion(r, k) {
+    const cap = k ? S.cities.get(k.capitalId) : null;
+    if (cap && cap.culture !== undefined && S.cultures[cap.culture | 0]) return cap.culture | 0;
+    let best = -1, bp = -1;                                  // city-based fallback: the most populous city of the region (else of the kingdom)
+    const ids = r.cityIds && r.cityIds.length ? r.cityIds : (k ? k.cities : null);
+    if (ids) for (let i = 0; i < ids.length; i++) { const c = S.cities.get(ids[i]); if (c && S.cultures[c.culture | 0] && (c.pop | 0) > bp) { bp = c.pop | 0; best = c.culture | 0; } }
+    if (best >= 0) return best;
+    return k && S.cultures[k.culture | 0] ? k.culture | 0 : -1;
+  }
+  function stripePattern(color) {
+    let p = pol.patterns.get(color);
+    if (p) return p;
+    const cv = mk(SP, SP), g = cv.getContext('2d'), id = g.createImageData(SP, SP), d = new Uint32Array(id.data.buffer);
+    const c = packColor(color, 0.92), e = packColor('#0a0c18', 0.55), bw = Math.max(1, Math.round(SP * 0.375));
+    for (let y = 0; y < SP; y++) for (let x = 0; x < SP; x++) { const t = (x + y) % SP; d[y * SP + x] = t < bw ? c : t === bw ? e : 0; }
+    g.putImageData(id, 0, 0);
+    p = pol.sctx.createPattern(cv, 'repeat');
+    pol.patterns.set(color, p);
+    return p;
+  }
+
+  function buildPolitical(mode, sig) {
+    const t0 = performance.now();
+    const w = W, h = H, n = w * h, reg = S.region, culture = mode === MODE.CULTURE;
+    if (!pol.fill || pol.w !== w || pol.h !== h) {
+      pol.fill = mk(w, h); pol.fctx = pol.fill.getContext('2d');
+      pol.img = pol.fctx.createImageData(w, h); pol.u32 = new Uint32Array(pol.img.data.buffer);
+      pol.stripe = null; pol.sctx = null; pol.patterns.clear();
+      SP = Math.max(2, Math.min(8, Math.floor(Math.sqrt(8e6 / Math.max(1, w * h))) & ~1));
+      pol.w = w; pol.h = h;
+    }
+    const px = pol.u32; px.fill(0);
+    // ---- war pairs (S.wars is the truth; Regions.frontlines() is used when the real module provides it)
+    const warPairs = new Set();
+    for (const wr of S.wars.values()) {
+      if (wr.ended || !wr.attackers || !wr.defenders) continue;
+      for (let i = 0; i < wr.attackers.length; i++) for (let j = 0; j < wr.defenders.length; j++) warPairs.add(pairKey(wr.attackers[i], wr.defenders[j]));
+    }
+    let frontPairs = null;
+    const rg = regionsApi();
+    if (!culture && rg && typeof rg.frontlines === 'function') {
+      try {
+        const fl = rg.frontlines();
+        if (fl && typeof fl.length === 'number') { frontPairs = new Set(); for (let i = 0; i < fl.length; i++) { const f = fl[i]; if (f && f.a && f.b) frontPairs.add(pairKey(f.a, f.b)); } }
+      } catch (e) { report('frontlines', e); frontPairs = null; }
+    }
+    pol.usedApi = !!frontPairs; pol.frontPairs = frontPairs;
+    // ---- per-region info
+    const infos = pol.infos; infos.clear();
+    const keyColor = new Map();
+    const alpha = culture ? 0.4 : 0.3;
+    for (const r of S.regions.values()) {
+      const owner = r.ownerId | 0, k = owner ? S.kingdoms.get(owner) : null;
+      let ctrl = r.controllerId | 0; if (!ctrl) ctrl = owner;
+      let key = 0, col = null;
+      if (culture) {
+        if (owner || (r.cityIds && r.cityIds.length)) {
+          const ci = cultureOfRegion(r, k);
+          if (ci >= 0) { key = ci + 1; col = S.cultures[ci].color; }
+        }
+      } else if (owner) { key = owner; col = k ? k.color : '#a8b0b8'; }
+      if (col && !keyColor.has(key)) keyColor.set(key, col);
+      const occ = !culture && owner && ctrl && ctrl !== owner && S.kingdoms.has(ctrl);
+      infos.set(r.id, { id: r.id, owner, ctrl, key, px: col ? packColor(col, alpha) : 0, pxEdge: col ? packColor(col, alpha + 0.13) : 0, lab: null, labPx: 0, labName: '', stripe: occ ? colorOf(ctrl) : null, x0: w, y0: h, x1: -1, y1: -1 });
+    }
+    // ---- fill (1 px per tile) + occupation stripes + bounding boxes
+    let lastR = -1, lastI = null, hasStripes = false;
+    if (!culture) for (const inf of infos.values()) if (inf.stripe) { hasStripes = true; break; }
+    if (hasStripes) {
+      if (!pol.stripe) { pol.stripe = mk(w * SP, h * SP); pol.sctx = pol.stripe.getContext('2d'); pol.patterns.clear(); }
+      pol.sctx.clearRect(0, 0, w * SP, h * SP);
+    }
+    pol.stripeTiles = 0; pol.stripeBox = null;
+    let sbx0 = w, sby0 = h, sbx1 = -1, sby1 = -1;
+    if (!pol.tileInfo || pol.tileInfo.length !== n) pol.tileInfo = new Array(n);
+    const ti = pol.tileInfo;
+    for (let y = 0; y < h; y++) {
+      let runStart = -1, runCol = null;
+      for (let x = 0; x <= w; x++) {
+        const i = y * w + x;
+        let col = null;
+        if (x < w) {
+          const rr = reg[i];
+          ti[i] = null;
+          if (rr) {
+            if (rr !== lastR) { lastR = rr; lastI = infos.get(rr) || null; }
+            if (lastI) {
+              px[i] = lastI.px; col = lastI.stripe; ti[i] = lastI;
+              if (x < lastI.x0) lastI.x0 = x; if (x > lastI.x1) lastI.x1 = x; if (y < lastI.y0) lastI.y0 = y; if (y > lastI.y1) lastI.y1 = y;
+              if (col) { if (x < sbx0) sbx0 = x; if (x > sbx1) sbx1 = x; if (y < sby0) sby0 = y; if (y > sby1) sby1 = y; }
+            }
+          }
+        }
+        if (col !== runCol) {
+          if (runCol && hasStripes) { pol.sctx.fillStyle = stripePattern(runCol); pol.sctx.fillRect(runStart * SP, y * SP, (x - runStart) * SP, SP); pol.stripeTiles += x - runStart; }
+          runCol = col; runStart = x;
+        }
+      }
+    }
+    if (pol.stripeTiles > 0) pol.stripeBox = [sbx0, sby0, sbx1 + 1, sby1 + 1];
+    // inner edge shading: tiles on the rim of a territory (key changes to the next tile) get a stronger tint, like a soft glow inside the border
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const i = y * w + x, a0 = ti[i];
+        if (!a0 || !a0.key) continue;
+        const k0 = a0.key;
+        let edge = false;
+        if (x > 0) { const o = ti[i - 1]; if (!o || o.key !== k0) edge = true; } else edge = true;
+        if (!edge && x < w - 1) { const o = ti[i + 1]; if (!o || o.key !== k0) edge = true; } else if (!edge) edge = true;
+        if (!edge && y > 0) { const o = ti[i - w]; if (!o || o.key !== k0) edge = true; } else if (!edge) edge = true;
+        if (!edge && y < h - 1) { const o = ti[i + w]; if (!o || o.key !== k0) edge = true; } else if (!edge) edge = true;
+        if (edge) px[i] = a0.pxEdge;
+      }
+    }
+    pol.fctx.putImageData(pol.img, 0, 0);
+
+    // ---- boundary runs between regions
+    const groups = new Map();
+    const thin = [], wild = [], front = [];
+    let cA = -1, cB = -1, eKa = 0, eKb = 0, eThin = 0, eFront = 0;
+    function classify(ra, rb) {
+      if (ra === cA && rb === cB) return;
+      cA = ra; cB = rb;
+      eKa = eKb = eThin = eFront = 0;
+      if (ra === rb) return;
+      const ia = ra ? infos.get(ra) : null, ib = rb ? infos.get(rb) : null;
+      const ka = ia ? ia.key : 0, kb = ib ? ib.key : 0;
+      if (ka !== kb) { eKa = ka; eKb = kb; }
+      if (ia && ib) {
+        if (ka === kb) eThin = ka ? 1 : 2;
+        if (!culture && ia.ctrl && ib.ctrl && ia.ctrl !== ib.ctrl) {
+          const pk = pairKey(ia.ctrl, ib.ctrl);
+          eFront = (frontPairs ? frontPairs.has(pairKey(ra, rb)) : warPairs.has(pk)) ? 1 : 0;
+        }
+      }
+    }
+    for (let y = 0; y <= h; y++) {                              // horizontal edges (between rows y-1 and y)
+      let cT = 0, sT = 0, cBt = 0, sB = 0, cTh = 0, sTh = 0, cF = 0, sF = 0;
+      for (let x = 0; x <= w; x++) {
+        let kt = 0, kb = 0, th = 0, fr = 0;
+        if (x < w) { classify(y > 0 ? reg[(y - 1) * w + x] : 0, y < h ? reg[y * w + x] : 0); kt = eKa; kb = eKb; th = eThin; fr = eFront; }
+        if (kt !== cT) { if (cT) addRun(groups, cT, sT, y, x, y, 0, -1); cT = kt; sT = x; }
+        if (kb !== cBt) { if (cBt) addRun(groups, cBt, sB, y, x, y, 0, 1); cBt = kb; sB = x; }
+        if (th !== cTh) { if (cTh) (cTh === 1 ? thin : wild).push(sTh, y, x, y); cTh = th; sTh = x; }
+        if (fr !== cF) { if (cF) front.push(sF, y, x, y); cF = fr; sF = x; }
+      }
+    }
+    cA = -1; cB = -1;
+    for (let x = 0; x <= w; x++) {                              // vertical edges (between columns x-1 and x)
+      let cL = 0, sL = 0, cR = 0, sR = 0, cTh = 0, sTh = 0, cF = 0, sF = 0;
+      for (let y = 0; y <= h; y++) {
+        let kl = 0, kr = 0, th = 0, fr = 0;
+        if (y < h) { classify(x > 0 ? reg[y * w + x - 1] : 0, x < w ? reg[y * w + x] : 0); kl = eKa; kr = eKb; th = eThin; fr = eFront; }
+        if (kl !== cL) { if (cL) addRun(groups, cL, x, sL, x, y, -1, 0); cL = kl; sL = y; }
+        if (kr !== cR) { if (cR) addRun(groups, cR, x, sR, x, y, 1, 0); cR = kr; sR = y; }
+        if (th !== cTh) { if (cTh) (cTh === 1 ? thin : wild).push(x, sTh, x, y); cTh = th; sTh = y; }
+        if (fr !== cF) { if (cF) front.push(x, sF, x, y); cF = fr; sF = y; }
+      }
+    }
+    const gl = [];
+    groups.forEach((arr, key) => { const c = keyColor.get(key) || '#ffffff'; gl.push({ key, color: c, seg: new Float32Array(arr) }); });
+    pol.groups = gl;
+    pol.thin = thin.length ? new Float32Array(thin) : null;
+    pol.wild = wild.length ? new Float32Array(wild) : null;
+    pol.front = front.length ? new Float32Array(front) : null;
+    pol.ver = S.regionVer; pol.ownerVer = S.ownerVer; pol.warSig = sig; pol.mode = mode; pol.key = reg;
+    pol.built = performance.now(); pol.builds++;
+    pol.buildMs = pol.built - t0;
+  }
+  function ensurePolitical(mode) {
+    const sig = warSignature();
+    const stale = pol.mode !== mode || pol.key !== S.region || pol.w !== W || pol.h !== H || !pol.fill;
+    if (!stale && pol.ver === S.regionVer && pol.ownerVer === S.ownerVer && pol.warSig === sig) return;
+    if (!stale && performance.now() - pol.built < POL_THROTTLE) return;
+    buildPolitical(mode, sig);
+  }
+
+  // ------------------------------------------------------------------ per-frame drawing of the cached layer
+  function strokeSegs(arr, off, stride) {                      // arr: [x0,y0,x1,y1(,nx,ny)] in tile coords, view-culled, one stroke() call
+    ctx.beginPath();
+    let any = false;
+    for (let k = 0; k < arr.length; k += stride) {
+      const x0 = arr[k], y0 = arr[k + 1], x1 = arr[k + 2], y1 = arr[k + 3];
+      if (x1 < vx0 - 1 || x0 > vx1 + 1 || y1 < vy0 - 1 || y0 > vy1 + 1) continue;
+      const nx = stride === 6 ? arr[k + 4] * off : 0, ny = stride === 6 ? arr[k + 5] * off : 0;
+      ctx.moveTo(ox + x0 * Z + nx, oy + y0 * Z + ny); ctx.lineTo(ox + x1 * Z + nx, oy + y1 * Z + ny);
+      any = true;
+    }
+    if (any) ctx.stroke();
+  }
+  function drawPolitical(mode) {
+    if (vx1 <= vx0 || vy1 <= vy0) return;
+    const culture = mode === MODE.CULTURE;
+    const dx = ox + vx0 * Z, dy = oy + vy0 * Z, dw = (vx1 - vx0) * Z, dh = (vy1 - vy0) * Z;
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(pol.fill, vx0, vy0, vx1 - vx0, vy1 - vy0, dx, dy, dw, dh);
+    const sb = pol.stripeBox;
+    if (sb && pol.stripe && !culture) {                      // occupation stripes: only the part of the cache that holds striped tiles
+      const x0 = Math.max(vx0, sb[0]), y0 = Math.max(vy0, sb[1]), x1 = Math.min(vx1, sb[2]), y1 = Math.min(vy1, sb[3]);
+      if (x1 > x0 && y1 > y0) {
+        ctx.imageSmoothingEnabled = Z < SP;
+        ctx.drawImage(pol.stripe, x0 * SP, y0 * SP, (x1 - x0) * SP, (y1 - y0) * SP, ox + x0 * Z, oy + y0 * Z, (x1 - x0) * Z, (y1 - y0) * Z);
+        ctx.imageSmoothingEnabled = false;
+      }
+    }
+    ctx.lineCap = 'butt'; ctx.lineJoin = 'miter';
+    if (pol.wild) { ctx.strokeStyle = 'rgba(255,255,255,0.16)'; ctx.lineWidth = Math.max(1, dpr); strokeSegs(pol.wild, 0, 4); }
+    if (pol.thin) { ctx.strokeStyle = 'rgba(255,255,255,0.42)'; ctx.lineWidth = Math.max(1, dpr); strokeSegs(pol.thin, 0, 4); }
+    const lw = (culture ? 1.6 : 2) * dpr, gs = pol.groups;
+    ctx.lineCap = 'square';
+    if (gs.length) {
+      if (zoomCss >= 5.5) { ctx.strokeStyle = 'rgba(8,10,24,0.5)'; ctx.lineWidth = lw * 2 + dpr * 1.6; for (let g = 0; g < gs.length; g++) strokeSegs(gs[g].seg, 0, 6); }   // shared dark casing under both sides of a border
+      ctx.globalAlpha = 1; ctx.lineWidth = lw;
+      for (let g = 0; g < gs.length; g++) { ctx.strokeStyle = gs[g].color; strokeSegs(gs[g].seg, lw, 6); }
+    }
+    if (pol.front && !culture) {                                                                 // front lines: black base + red dashes
+      ctx.lineCap = 'butt';
+      ctx.strokeStyle = 'rgba(8,4,6,0.97)'; ctx.lineWidth = 6 * dpr; strokeSegs(pol.front, 0, 4);
+      ctx.strokeStyle = '#ee3a2e'; ctx.lineWidth = 4 * dpr;
+      const dash = Math.max(3, Math.min(7, Z * 0.32));
+      ctx.setLineDash([dash, dash]);
+      strokeSegs(pol.front, 0, 4);
+      ctx.setLineDash([]);
+    }
+    ctx.lineCap = 'butt';
+  }
+  /** fill + stripes + lines + fronts + names only depend on the camera and the cached data: while the camera is at rest they are rendered once
+   *  into a screen-sized layer and blitted (1 drawImage per idle frame); while it moves (pan / pinch / glide) they are drawn directly. */
+  function drawPoliticalLayer(mode, political) {
+    const L = polLayer;
+    const rest = L.fOx === ox && L.fOy === oy && L.fZ === Z && L.fCw === cw && L.fCh === ch;
+    L.fOx = ox; L.fOy = oy; L.fZ = Z; L.fCw = cw; L.fCh = ch;
+    const fresh = L.cv && L.cv.width === cw && L.cv.height === ch && L.builds === pol.builds && L.ox === ox && L.oy === oy && L.Z === Z && L.mode === mode && L.political === political && L.key === pol.key;
+    ctx.globalAlpha = 1;
+    if (fresh) { blitLayer(L); L.blits++; return; }
+    if (!rest) { drawPolitical(mode); drawRegionLabels(mode); if (political) drawKingdomLabels(); L.direct++; return; }
+    if (!L.cv || L.cv.width !== cw || L.cv.height !== ch) { L.cv = mk(cw, ch); L.cx = L.cv.getContext('2d'); }
+    const main = ctx;
+    ctx = L.cx;
+    try {
+      ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalAlpha = 1; ctx.clearRect(0, 0, cw, ch);
+      drawPolitical(mode);
+      drawRegionLabels(mode);
+      if (political) drawKingdomLabels();
+    } finally { ctx = main; }
+    L.builds = pol.builds; L.ox = ox; L.oy = oy; L.Z = Z; L.mode = mode; L.political = political; L.key = pol.key; L.draws++;
+    blitLayer(L);
+  }
+  function blitLayer(L) {                                  // only the part of the screen that shows map (+ a margin for names) can hold anything
+    const m = Math.round(48 * dpr);
+    const x0 = Math.max(0, Math.floor(ox + vx0 * Z - m)), y0 = Math.max(0, Math.floor(oy + vy0 * Z - m));
+    const x1 = Math.min(cw, Math.ceil(ox + vx1 * Z + m)), y1 = Math.min(ch, Math.ceil(oy + vy1 * Z + m));
+    ctx.imageSmoothingEnabled = false;
+    if (x1 > x0 && y1 > y0) ctx.drawImage(L.cv, x0, y0, x1 - x0, y1 - y0, x0, y0, x1 - x0, y1 - y0);
+  }
+
+  // ------------------------------------------------------------------ text labels (cached bitmaps)
+  const textCache = new Map();
+  let measCtx = null;
+  function measure(font, text) { if (!measCtx) measCtx = mk(4, 4).getContext('2d'); measCtx.font = font; return measCtx.measureText(text).width; }
+  /** spaced upper-case label with dark outline; key = cache key; px = font size in device px */
+  function textLabel(key, text, px, fill, spacing, weight) {
+    let e = textCache.get(key);
+    if (e) return e;
+    if (textCache.size > 220) textCache.clear();
+    const font = (weight || 'bold') + ' ' + px + 'px ' + FONT, chars = Array.from(text);
+    const sp = spacing * px;
+    let tw = 0; const ws = [];
+    for (let i = 0; i < chars.length; i++) { const cw2 = measure(font, chars[i]); ws.push(cw2); tw += cw2 + (i < chars.length - 1 ? sp : 0); }
+    const pad2 = Math.ceil(px * 0.3) + 2, w = Math.ceil(tw) + pad2 * 2, h = Math.ceil(px * 1.35) + pad2 * 2;
+    const cv = mk(w, h), g = cv.getContext('2d');
+    g.font = font; g.textBaseline = 'middle'; g.lineJoin = 'round'; g.lineWidth = Math.max(2, px * 0.3); g.strokeStyle = 'rgba(8,10,24,0.88)'; g.fillStyle = fill;
+    let x = pad2;
+    for (let i = 0; i < chars.length; i++) { g.strokeText(chars[i], x, h / 2 + 0.5); g.fillText(chars[i], x, h / 2 + 0.5); x += ws[i] + sp; }
+    e = { cv, w, h };
+    textCache.set(key, e);
+    return e;
+  }
+  function drawRegionLabels(mode) {
+    regLabelsDrawn = 0;
+    if (zoomCss < 7) return;
+    const px = Math.max(8, Math.min(13, Math.round((6.4 + zoomCss * 0.34))));              // css px
+    const dpx = Math.round(px * dpr);
+    ctx.imageSmoothingEnabled = false;
+    const culture = mode === MODE.CULTURE;
+    for (const r of S.regions.values()) {
+      if (!r.name) continue;
+      const c = regionCenter(r.id); if (!c) continue;
+      if (c.x < vx0 - 6 || c.x > vx1 + 6 || c.y < vy0 - 4 || c.y > vy1 + 4) continue;
+      const inf = pol.infos.get(r.id);
+      const owned = inf && inf.owner;
+      let e = inf ? inf.lab : null;
+      if (!e || inf.labPx !== dpx || inf.labName !== r.name) {                  // per-region label bitmap, looked up once per rebuild / font size
+        const tint = owned && !culture ? lighten(colorOf(inf.owner), 0.8) : (owned ? '#fff8e6' : '#d5dde6');
+        e = textLabel('r' + r.id + '|' + r.name + '|' + dpx + '|' + tint, String(r.name).toUpperCase(), dpx, tint, 0.08, '600');
+        if (inf) { inf.lab = e; inf.labPx = dpx; inf.labName = r.name; }
+      }
+      // shrink long names so they stay inside the region
+      const regW = Math.sqrt(r.tiles || 60) * Z * 1.15;
+      const sc = e.w > regW ? Math.max(0.62, regW / e.w) : 1;
+      if (sc < 0.7 && e.w > regW * 1.6) continue;
+      const hasCity = r.cityIds && r.cityIds.length > 0;
+      const sx = ox + c.x * Z, sy = oy + (c.y + (hasCity ? 0.1 : 0)) * Z + (hasCity ? Z * 1.7 + e.h * 0.25 : 0);
+      ctx.globalAlpha = (owned ? 0.9 : 0.68) * (zoomCss > 16 ? Math.max(0.55, 1 - (zoomCss - 16) * 0.03) : 1);
+      ctx.drawImage(e.cv, Math.round(sx - e.w * sc / 2), Math.round(sy - e.h * sc / 2), Math.round(e.w * sc), Math.round(e.h * sc));
+      regLabelsDrawn++;
+    }
+    ctx.globalAlpha = 1;
+  }
+  function drawKingdomLabels() {                              // zoomed-out overview: kingdom names under their capitals
+    kingLabelsDrawn = 0;
+    if (zoomCss >= 7) return;
+    const dpx = Math.round(Math.max(9, Math.min(15, 5 + zoomCss * 1.5)) * dpr);
+    ctx.imageSmoothingEnabled = false;
+    for (const k of S.kingdoms.values()) {
+      if (k.alive === false || !k.name) continue;
+      let c = k.capitalId ? S.cities.get(k.capitalId) : null;
+      if (!c && k.cities && k.cities.length) c = S.cities.get(k.cities[0]);
+      if (!c) continue;
+      if (c.x < vx0 - 10 || c.x > vx1 + 10 || c.y < vy0 - 4 || c.y > vy1 + 6) continue;
+      const e = textLabel('k' + k.id + '|' + k.name + '|' + dpx, String(k.name).toUpperCase(), dpx, '#ffffff', 0.12, 'bold');
+      ctx.globalAlpha = 0.95;
+      ctx.drawImage(e.cv, Math.round(ox + (c.x + 0.5) * Z - e.w / 2), Math.round(oy + (c.y + 1) * Z + 1 * dpr + e.h * 0.1), e.w, e.h);
+      kingLabelsDrawn++;
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // ------------------------------------------------------------------ region geometry (highlights)
+  function geomOf(rid) {
+    if (geom.key !== S.region || geom.ver !== S.regionVer) { geom.key = S.region; geom.ver = S.regionVer; geom.cache.clear(); geom.bbox = null; }
+    let g = geom.cache.get(rid);
+    if (g !== undefined) return g;
+    if (!geom.bbox) {                                          // one pass over the map gives the bounding box of every region
+      const bb = new Map(), reg = S.region; let lastR = 0, cur = null;
+      for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+        const r = reg[y * W + x]; if (!r) continue;
+        if (r !== lastR) { lastR = r; cur = bb.get(r); if (!cur) { cur = [x, y, x, y]; bb.set(r, cur); } }
+        if (x < cur[0]) cur[0] = x; if (x > cur[2]) cur[2] = x; if (y < cur[1]) cur[1] = y; if (y > cur[3]) cur[3] = y;
+      }
+      geom.bbox = bb;
+    }
+    const b = geom.bbox.get(rid);
+    if (!b) { geom.cache.set(rid, null); return null; }
+    if (geom.cache.size > 48) geom.cache.clear();
+    const reg = S.region, runs = [], edges = [];
+    const at = (x, y) => (x < 0 || y < 0 || x >= W || y >= H) ? -1 : reg[y * W + x];
+    for (let y = b[1]; y <= b[3]; y++) {
+      let s = -1;
+      for (let x = b[0]; x <= b[2] + 1; x++) {
+        const inn = x <= b[2] && reg[y * W + x] === rid;
+        if (inn && s < 0) s = x; else if (!inn && s >= 0) { runs.push(y, s, x - 1); s = -1; }
+      }
+      let sT = -1, sB = -1;                                    // horizontal boundary pieces above / below this row
+      for (let x = b[0]; x <= b[2] + 1; x++) {
+        const inn = x <= b[2] && reg[y * W + x] === rid;
+        const t = inn && at(x, y - 1) !== rid, bt = inn && at(x, y + 1) !== rid;
+        if (t && sT < 0) sT = x; else if (!t && sT >= 0) { edges.push(sT, y, x, y); sT = -1; }
+        if (bt && sB < 0) sB = x; else if (!bt && sB >= 0) { edges.push(sB, y + 1, x, y + 1); sB = -1; }
+      }
+    }
+    for (let x = b[0]; x <= b[2]; x++) {
+      let sL = -1, sR = -1;
+      for (let y = b[1]; y <= b[3] + 1; y++) {
+        const inn = y <= b[3] && reg[y * W + x] === rid;
+        const l = inn && at(x - 1, y) !== rid, r = inn && at(x + 1, y) !== rid;
+        if (l && sL < 0) sL = y; else if (!l && sL >= 0) { edges.push(x, sL, x, y); sL = -1; }
+        if (r && sR < 0) sR = y; else if (!r && sR >= 0) { edges.push(x + 1, sR, x + 1, y); sR = -1; }
+      }
+    }
+    g = { x0: b[0], y0: b[1], x1: b[2], y1: b[3], runs: new Int32Array(runs), edges: new Float32Array(edges) };
+    geom.cache.set(rid, g);
+    return g;
+  }
+  function fillRegion(g, style) {
+    ctx.fillStyle = style;
+    const r = g.runs;
+    for (let k = 0; k < r.length; k += 3) {
+      const y = r[k];
+      if (y < vy0 - 1 || y > vy1) continue;
+      const xa = Math.round(ox + r[k + 1] * Z), xb = Math.round(ox + (r[k + 2] + 1) * Z), ya = Math.round(oy + y * Z), yb = Math.round(oy + (y + 1) * Z);
+      ctx.fillRect(xa, ya, xb - xa, yb - ya);
+    }
+  }
+  function strokeRegion(g, color, width, casing, dash) {
+    const e = g.edges;
+    if (casing) { ctx.strokeStyle = casing; ctx.lineWidth = width + 2.6 * dpr; strokeSegs(e, 0, 4); }
+    ctx.strokeStyle = color; ctx.lineWidth = width;
+    if (dash) { ctx.setLineDash(dash); ctx.lineDashOffset = -curNow / 90 * dpr; }
+    strokeSegs(e, 0, 4);
+    if (dash) { ctx.setLineDash([]); ctx.lineDashOffset = 0; }
+  }
+
+  // ------------------------------------------------------------------ marker sprites (cached)
+  const markCache = new Map();
+  const STAR = ['....y....', '....y....', '...yyy...', 'yyyyyyyyy', '.yyyyyyy.', '..yyyyy..', '..yyyyy..', '.yyy.yyy.', '.yy...yy.'];
+  function starSprite(color, done, scale) {
+    const key = 's' + color + done + '|' + scale;
+    let c = markCache.get(key);
+    if (c) return c;
+    const S0 = 9, pad3 = 1, sz = (S0 + pad3 * 2 + (done ? 3 : 0)) * scale;
+    c = mk(sz, sz);
+    const g = c.getContext('2d'); g.imageSmoothingEnabled = false;
+    const dk = darken(color, 0.45), lt = lighten(color, 0.55);
+    for (let pass = 0; pass < 3; pass++) {                    // 0 = dark outline, 1 = fill, 2 = highlights
+      for (let y = 0; y < S0; y++) for (let x = 0; x < S0; x++) {
+        if (STAR[y][x] !== 'y') continue;
+        if (pass === 0) { g.fillStyle = '#0b0e1c'; for (let j = -1; j <= 1; j++) for (let i = -1; i <= 1; i++) g.fillRect((pad3 + x + i) * scale, (pad3 + y + j) * scale, scale, scale); }
+        else if (pass === 1) { g.fillStyle = (x + y > 9 || y > 6) ? dk : color; g.fillRect((pad3 + x) * scale, (pad3 + y) * scale, scale, scale); }
+        else if (x + y < 7 && y > 0 && y < 6 && (x + y) % 2 === 1) { g.fillStyle = lt; g.fillRect((pad3 + x) * scale, (pad3 + y) * scale, scale, scale); }
+      }
+    }
+    if (done) {                                               // small green check badge
+      const bx = (pad3 + 6) * scale, by = (pad3 + 5) * scale;
+      g.fillStyle = '#0b0e1c'; g.fillRect(bx - scale, by - scale, 5 * scale, 5 * scale);
+      g.fillStyle = '#3fcf5a'; g.fillRect(bx, by, 3 * scale, 3 * scale);
+      g.fillStyle = '#ffffff'; g.fillRect(bx, by + scale, scale, scale); g.fillRect(bx + scale, by + 2 * scale, scale, scale); g.fillRect(bx + 2 * scale, by, scale, scale);
+    }
+    markCache.set(key, c);
+    return c;
+  }
+  function lighten(str, t) {
+    if (typeof str !== 'string' || str.charCodeAt(0) !== 35 || str.length < 7) return '#ffffff';
+    const f = v => Math.round(v + (255 - v) * t);
+    return 'rgb(' + f(parseInt(str.slice(1, 3), 16)) + ',' + f(parseInt(str.slice(3, 5), 16)) + ',' + f(parseInt(str.slice(5, 7), 16)) + ')';
+  }
+  function iconScaled(key, scale) {                           // icon at an integer multiple of its native 16 px (crisp)
+    return Sprites.icon(key, 16 * scale);
+  }
+
+  // ------------------------------------------------------------------ command overlay: highlights + goal stars
+  function drawGoalMarker(rid, color, done, now, pending) {
+    const c = regionCenter(rid); if (!c) return;
+    if (c.x < vx0 - 3 || c.x > vx1 + 3 || c.y < vy0 - 3 || c.y > vy1 + 3) return;
+    goalsDrawn++; if (done) goalsDoneDrawn++;
+    const scale = Math.max(1, Math.min(4, Math.round(Z * 0.62 / 9 + 0.35)));
+    const sp = starSprite(color, done ? 1 : 0, scale);
+    const bob = Math.sin(now / 420 + rid) * 1.5 * dpr * (done ? 0 : 1);
+    const sx = Math.round(ox + c.x * Z - sp.width / 2), sy = Math.round(oy + c.y * Z - Z * 1.15 - sp.height / 2 + bob);
+    if (pending) {                                            // pulsing ring on the ground under the star
+      const pr = 0.5 + 0.5 * Math.sin(now / 300 + rid);
+      ctx.globalAlpha = 0.25 + 0.2 * pr; ctx.strokeStyle = color; ctx.lineWidth = 2 * dpr;
+      ctx.beginPath(); ctx.ellipse(ox + c.x * Z, oy + (c.y + 0.35) * Z, Z * (0.55 + 0.15 * pr), Z * (0.27 + 0.07 * pr), 0, 0, TAU); ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(sp, sx, sy);
+  }
+  function drawCommandLayer(now, political) {
+    const cmd = api.cmd;
+    goalsDrawn = 0; goalsDoneDrawn = 0;
+    // war goals as star markers (commanded kingdom's, or everyone's with showAllOrders) — political map only
+    if (political && S.wars) {
+      const cid = cmd && cmd.kid ? cmd.kid : 0;
+      for (const w of S.wars.values()) {
+        if (w.ended || !w.goals) continue;
+        for (let i = 0; i < w.goals.length; i++) {
+          const gl = w.goals[i];
+          if (!gl || !gl.regionId) continue;
+          if (!api.showAllOrders && gl.kid !== cid) continue;
+          drawGoalMarker(gl.regionId, colorOf(gl.kid), !!gl.done, now, false);
+        }
+      }
+    }
+    if (!cmd) return;
+    const pulse = 0.5 + 0.5 * Math.sin(now / 260);
+    const kcol = cmd.kid ? colorOf(cmd.kid) : '#ffd23c';
+    // target kingdom: red pulsing outer border
+    if (cmd.targetKid && pol.groups.length && political) {
+      for (let g = 0; g < pol.groups.length; g++) {
+        if (pol.groups[g].key !== cmd.targetKid) continue;
+        ctx.lineCap = 'square';
+        ctx.globalAlpha = 0.45 + 0.35 * pulse; ctx.strokeStyle = '#ff4a3c'; ctx.lineWidth = 3.4 * dpr;
+        strokeSegs(pol.groups[g].seg, 3.4 * dpr * 0.5, 6);
+        ctx.globalAlpha = 1; ctx.lineCap = 'butt';
+      }
+    }
+    const cands = cmd.candidates;
+    if (cands && cands.length) {
+      for (let i = 0; i < cands.length; i++) {
+        const g = geomOf(cands[i]); if (!g) continue;
+        if (g.x1 < vx0 - 1 || g.x0 > vx1 + 1 || g.y1 < vy0 - 1 || g.y0 > vy1 + 1) continue;
+        fillRegion(g, 'rgba(235,250,255,' + (0.13 + 0.09 * pulse).toFixed(3) + ')');
+        strokeRegion(g, '#ffffff', 2.4 * dpr, 'rgba(4,14,34,0.85)', [6 * dpr, 4 * dpr]);
+      }
+    }
+    const gls = cmd.goals;
+    if (gls && gls.length) {
+      for (let i = 0; i < gls.length; i++) {
+        const g = geomOf(gls[i]); if (!g) continue;
+        if (g.x1 >= vx0 - 1 && g.x0 <= vx1 + 1 && g.y1 >= vy0 - 1 && g.y0 <= vy1 + 1) {
+          fillRegion(g, 'rgba(255,205,60,' + (0.16 + 0.08 * pulse).toFixed(3) + ')');
+          strokeRegion(g, '#ffd23c', 2.6 * dpr, 'rgba(40,24,0,0.75)', null);
+        }
+        drawGoalMarker(gls[i], kcol, false, now, true);
+      }
+    }
+    if (cmd.regionId) {
+      const g = geomOf(cmd.regionId);
+      if (g && g.x1 >= vx0 - 1 && g.x0 <= vx1 + 1 && g.y1 >= vy0 - 1 && g.y0 <= vy1 + 1) {
+        fillRegion(g, 'rgba(255,240,160,' + (0.14 + 0.1 * pulse).toFixed(3) + ')');
+        ctx.globalAlpha = 0.35 + 0.25 * pulse; ctx.lineJoin = 'round';
+        strokeRegion(g, '#ffe46a', (6 + pulse * 2) * dpr, null, null);                      // soft outer glow
+        ctx.globalAlpha = 0.8 + 0.2 * pulse;
+        strokeRegion(g, '#fff3b0', (2.8 + pulse * 1.4) * dpr, 'rgba(10,8,0,0.85)', null);
+        ctx.globalAlpha = 1;
+      }
+    }
+  }
+
+  // ------------------------------------------------------------------ armies: banners + order arrows
+  const armyPos = new Map();
+  const hits = [];                                  // banner hit boxes of the last frame: id, x0,y0,x1,y1 (css px)
+  let hitN = 0, bannersDrawn = 0, arrowsDrawn = 0, armyGc = 0, regLabelsDrawn = 0, kingLabelsDrawn = 0, goalsDrawn = 0, goalsDoneDrawn = 0, occFlagsDrawn = 0;
+  const bannerCache = new Map();
+  const ARM_ICON = { attack: 'sword', defend: 'shield', hold: 'shield' };
+  function armyIconKey(a) {
+    const t = a.order ? a.order.type : '';
+    if (a.mode === 'retreat' || t === 'retreat') return '';
+    if (t === 'attack' || a.mode === 'siege' || a.mode === 'march') return 'sword';
+    if (t === 'hold' || t === 'defend' || a.mode === 'hold') return 'shield';
+    return '';
+  }
+  function flagSig(f) { return f ? f.pattern + '.' + f.symbol + f.c1 + f.c2 + f.c3 : ''; }
+  /** HOI4-style unit counter: team-coloured plate with the kingdom flag, soldier count, order glyph and a pointer; anchor = bottom centre */
+  function bannerSprite(k, count, iconKey, bs, retreat) {
+    const key = (k ? k.id + flagSig(k.flag) + k.color : 'x') + '|' + count + '|' + iconKey + '|' + bs + '|' + dpr + (retreat ? 'r' : '');
+    let e = bannerCache.get(key);
+    if (e) return e;
+    if (bannerCache.size > 160) bannerCache.clear();
+    const u = dpr * bs / 20;                                  // bs is stored in 1/20 steps
+    const fw = Math.round(15 * u), fh = Math.round(10 * u), pd = Math.max(1, Math.round(1.6 * u)), gap = Math.max(2, Math.round(3 * u)), bd = Math.max(1, Math.round(1.6 * u));
+    const fpx = Math.round(10.5 * u), font = 'bold ' + fpx + 'px ' + FONT, txt = String(count);
+    const tw = Math.ceil(measure(font, txt));
+    const isz = iconKey ? Math.max(8, Math.round(9.5 * u / 8) * 8) : 0;                // 8 / 16 / 24 px native-ish multiples
+    const ph = Math.round(14 * u) + bd * 2, stem = Math.max(2, Math.round(3.5 * u));
+    const pw = bd * 2 + pd * 2 + fw + gap + tw + (isz ? gap + isz : 0);
+    const cv = mk(pw, ph + stem + 1), g = cv.getContext('2d');
+    const col = k && typeof k.color === 'string' ? k.color : '#a8b0b8';
+    g.fillStyle = '#080b16'; g.fillRect(0, 0, pw, ph);
+    g.fillStyle = retreat ? '#8a94a8' : col; g.fillRect(1, 1, pw - 2, ph - 2);
+    g.fillStyle = '#10162a'; g.fillRect(bd + 1, bd + 1, pw - 2 * bd - 2, ph - 2 * bd - 2);
+    // pointer
+    g.fillStyle = '#080b16'; g.beginPath(); g.moveTo(pw / 2 - stem - 1, ph - 1); g.lineTo(pw / 2 + stem + 1, ph - 1); g.lineTo(pw / 2, ph + stem + 1); g.closePath(); g.fill();
+    g.fillStyle = retreat ? '#8a94a8' : col; g.beginPath(); g.moveTo(pw / 2 - stem, ph - 1); g.lineTo(pw / 2 + stem, ph - 1); g.lineTo(pw / 2, ph + stem); g.closePath(); g.fill();
+    g.imageSmoothingEnabled = false;
+    let x = bd + pd + 1;
+    const fy = Math.round((ph - fh) / 2);
+    g.fillStyle = '#05070f'; g.fillRect(x - 1, fy - 1, fw + 2, fh + 2);
+    if (k && k.flag) g.drawImage(Sprites.flag(k.flag, fw, fh), x, fy, fw, fh);
+    x += fw + gap;
+    g.font = font; g.textBaseline = 'middle'; g.fillStyle = '#ffffff'; g.fillText(txt, x, ph / 2 + 0.5 * dpr);
+    x += tw + gap;
+    if (isz) g.drawImage(Sprites.icon(iconKey, 16), x, Math.round((ph - isz) / 2), isz, isz);
+    e = { cv, w: pw, h: ph + stem + 1, ph, stem };
+    bannerCache.set(key, e);
+    return e;
+  }
+  function leaderOf(a) {
+    let u = a.leaderId ? S.units.get(a.leaderId) : null;
+    if (!u && a.members && a.members.length) for (let i = 0; i < a.members.length && !u; i++) u = S.units.get(a.members[i]) || null;
+    return u;
+  }
+  function armyAnchor(a, now) {                      // tile position (smoothed) of the army marker
+    let tx, ty;
+    const u = leaderOf(a);
+    if (u && u.x === u.x) {
+      tx = u.px + (u.x - u.px) * curAlpha; ty = u.py + (u.y - u.py) * curAlpha;
+      if (tx !== tx) tx = u.x; if (ty !== ty) ty = u.y;
+    } else if (a.rally && a.rally.x === a.rally.x) { tx = a.rally.x; ty = a.rally.y; }
+    else return null;
+    let st = armyPos.get(a.id);
+    if (!st) { st = { x: tx, y: ty, t: now }; armyPos.set(a.id, st); return st; }
+    const dxx = tx - st.x, dyy = ty - st.y;
+    if (dxx * dxx + dyy * dyy > 9) { st.x = tx; st.y = ty; } else { const f = Math.min(1, Math.max(0.1, (now - st.t) / 50)); st.x += dxx * f; st.y += dyy * f; }
+    st.t = now;
+    return st;
+  }
+  function armyVisible(a) { return !!(a && a.members && a.members.length > 0); }
+  function drawArrow(x0, y0, x1, y1, w, kind, kcol, now, sel) {
+    // kind: 'attack' | 'hold' | 'retreat'
+    const dx = x1 - x0, dy = y1 - y0, len = Math.sqrt(dx * dx + dy * dy);
+    if (len < 4 * dpr) return false;
+    const ux = dx / len, uy = dy / len, nx = uy, ny = -ux;         // left normal in screen space
+    const cur = kind === 'hold' ? 0.1 : 0.2;
+    const cx = (x0 + x1) / 2 + nx * len * cur, cy = (y0 + y1) / 2 + ny * len * cur;
+    let tx = x1 - cx, ty = y1 - cy; const tl = Math.sqrt(tx * tx + ty * ty) || 1; tx /= tl; ty /= tl;   // tangent at the end
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    if (kind === 'attack') {
+      const hl = Math.max(11 * dpr, w * 2.7), hw = Math.max(7.5 * dpr, w * 1.65);
+      const ex = x1 - tx * hl * 0.78, ey = y1 - ty * hl * 0.78;
+      const path = () => { ctx.beginPath(); ctx.moveTo(x0, y0); ctx.quadraticCurveTo(cx, cy, ex, ey); };
+      ctx.globalAlpha = sel ? 1 : 0.93;
+      path(); ctx.strokeStyle = kcol; ctx.lineWidth = w + 5 * dpr; ctx.stroke();
+      path(); ctx.strokeStyle = 'rgba(26,4,6,0.95)'; ctx.lineWidth = w + 2.4 * dpr; ctx.stroke();
+      path(); ctx.strokeStyle = '#e8402f'; ctx.lineWidth = w; ctx.stroke();
+      path(); ctx.strokeStyle = 'rgba(255,200,176,0.5)'; ctx.lineWidth = Math.max(1, w * 0.2); ctx.setLineDash([9 * dpr, 9 * dpr]); ctx.lineDashOffset = -now / 34 * dpr; ctx.stroke();
+      ctx.setLineDash([]); ctx.lineDashOffset = 0;
+      const head = (grow) => {
+        const bx = x1 - tx * hl, by = y1 - ty * hl, px2 = -ty, py2 = tx, hg = grow;
+        ctx.beginPath(); ctx.moveTo(x1 + tx * hg, y1 + ty * hg); ctx.lineTo(bx + px2 * (hw + hg), by + py2 * (hw + hg)); ctx.lineTo(bx - px2 * (hw + hg), by - py2 * (hw + hg)); ctx.closePath();
+      };
+      head(2.6 * dpr); ctx.fillStyle = kcol; ctx.fill();
+      head(1.3 * dpr); ctx.fillStyle = 'rgba(26,4,6,0.95)'; ctx.fill();
+      head(0); ctx.fillStyle = '#ee4a38'; ctx.fill();
+      ctx.beginPath(); ctx.moveTo(x1 - tx * hl * 0.15 + 0, y1 - ty * hl * 0.15); ctx.lineTo(x1 - tx * hl * 0.8 - ty * hw * 0.6, y1 - ty * hl * 0.8 + tx * hw * 0.6); ctx.strokeStyle = 'rgba(255,210,190,0.6)'; ctx.lineWidth = Math.max(1, dpr); ctx.stroke();
+      ctx.globalAlpha = 1;
+    } else if (kind === 'hold') {
+      ctx.globalAlpha = sel ? 0.95 : 0.75;
+      const path = () => { ctx.beginPath(); ctx.moveTo(x0, y0); ctx.quadraticCurveTo(cx, cy, x1, y1); };
+      ctx.lineCap = 'butt';
+      ctx.setLineDash([8 * dpr, 5 * dpr]); ctx.lineDashOffset = -now / 40 * dpr;
+      path(); ctx.strokeStyle = 'rgba(4,12,38,0.95)'; ctx.lineWidth = Math.max(3 * dpr, w * 0.7) + 2.8 * dpr; ctx.stroke();
+      path(); ctx.strokeStyle = '#74c6ff'; ctx.lineWidth = Math.max(3 * dpr, w * 0.7); ctx.stroke();
+      ctx.setLineDash([]); ctx.lineDashOffset = 0; ctx.globalAlpha = 1;
+    } else {                                                      // retreat: dotted, with a small open head
+      ctx.globalAlpha = sel ? 0.95 : 0.8;
+      const path = () => { ctx.beginPath(); ctx.moveTo(x0, y0); ctx.quadraticCurveTo(cx, cy, x1 - tx * 5 * dpr, y1 - ty * 5 * dpr); };
+      ctx.setLineDash([0.1, 5.5 * dpr]); ctx.lineDashOffset = now / 60 * dpr;
+      path(); ctx.strokeStyle = 'rgba(8,10,22,0.9)'; ctx.lineWidth = 5 * dpr; ctx.stroke();
+      path(); ctx.strokeStyle = '#dfe6f2'; ctx.lineWidth = 3 * dpr; ctx.stroke();
+      ctx.setLineDash([]); ctx.lineDashOffset = 0;
+      const hl = 7 * dpr, hw = 4.6 * dpr, bx = x1 - tx * hl, by = y1 - ty * hl;
+      ctx.beginPath(); ctx.moveTo(bx - ty * hw, by + tx * hw); ctx.lineTo(x1, y1); ctx.lineTo(bx + ty * hw, by - tx * hw);
+      ctx.strokeStyle = 'rgba(8,10,22,0.9)'; ctx.lineWidth = 4.4 * dpr; ctx.stroke(); ctx.strokeStyle = '#dfe6f2'; ctx.lineWidth = 2.2 * dpr; ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+    ctx.lineCap = 'butt'; ctx.lineJoin = 'miter';
+    return true;
+  }
+  function drawOrderMarker(rid, kind, now) {          // shield (hold / defend) or red ring (attack) at the region centre
+    const c = regionCenter(rid); if (!c) return;
+    const sx = ox + c.x * Z, sy = oy + c.y * Z;
+    if (kind === 'hold') {
+      const scale = Math.max(1, Math.min(3, Math.round(Z * 0.9 / 16 + 0.2)));
+      const ic = iconScaled('shield', scale), pr = 0.5 + 0.5 * Math.sin(now / 340 + rid);
+      ctx.globalAlpha = 0.28 + 0.22 * pr; ctx.fillStyle = '#58b0ff';
+      ctx.beginPath(); ctx.ellipse(sx, sy + ic.height * 0.15, ic.width * 0.78, ic.height * 0.5, 0, 0, TAU); ctx.fill();
+      ctx.globalAlpha = 1; ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(ic, Math.round(sx - ic.width / 2), Math.round(sy - ic.height * 0.62));
+    } else if (kind === 'attack') {
+      const pr = 0.5 + 0.5 * Math.sin(now / 220 + rid);
+      ctx.globalAlpha = 0.5 + 0.4 * pr; ctx.strokeStyle = '#ff4a3c'; ctx.lineWidth = 2.4 * dpr;
+      ctx.beginPath(); ctx.ellipse(sx, sy, Z * (0.7 + 0.12 * pr), Z * (0.42 + 0.08 * pr), 0, 0, TAU); ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+  }
+  function targetOf(a) {                           // tile point + kind of an army's order
+    const o = a.order;
+    if (!o) return null;
+    const t = o.type;
+    if (t === 'retreat') {
+      const home = a.cityId ? S.cities.get(a.cityId) : null;
+      if (o.regionId) { const c = regionCenter(o.regionId); if (c) return { x: c.x, y: c.y, kind: 'retreat', rid: o.regionId }; }
+      if (home) return { x: home.x + 0.5, y: home.y + 0.5, kind: 'retreat', rid: 0 };
+      return null;
+    }
+    if (!o.regionId) return null;
+    const c = regionCenter(o.regionId);
+    if (!c) return null;
+    return { x: c.x, y: c.y, kind: t === 'attack' ? 'attack' : 'hold', rid: o.regionId };
+  }
+  function drawArmyOrders(now, political) {
+    arrowsDrawn = 0;
+    const cmd = api.cmd, cid = cmd && cmd.kid ? cmd.kid : 0, all = political && api.showAllOrders;
+    if (!cid && !all) return;
+    for (const a of S.armies.values()) {
+      if (!armyVisible(a)) continue;
+      const mine = a.kingdomId === cid;
+      if (!mine && !all) continue;
+      const tg = targetOf(a); if (!tg) continue;
+      const st = armyPos.get(a.id); if (!st) continue;
+      const x0 = ox + st.x * Z, y0 = oy + (st.y + 0.45) * Z, x1 = ox + tg.x * Z, y1 = oy + tg.y * Z;
+      const minx = Math.min(x0, x1) - 40, maxx = Math.max(x0, x1) + 40, miny = Math.min(y0, y1) - 40, maxy = Math.max(y0, y1) + 40;
+      if (maxx < 0 || minx > cw || maxy < 0 || miny > ch) continue;
+      const sel = !!(cmd && cmd.armyId === a.id);
+      const n = a.members.length;
+      const zs = Math.max(0.75, Math.min(1.2, zoomCss / 12));
+      const w = dpr * Math.max(3, Math.min(7.5, 1.9 + Math.sqrt(n) * 0.75)) * zs * (sel ? 1.15 : 1);
+      const kcol = colorOf(a.kingdomId);
+      if (tg.kind !== 'retreat') drawOrderMarker(tg.rid, tg.kind, now);
+      if (drawArrow(x0, y0, x1, y1, w, tg.kind, kcol, now, sel)) arrowsDrawn++;
+    }
+  }
+  function prepareArmies(now) {                      // smoothed anchors of every army that has soldiers (arrows may start off-screen)
+    if (!S.armies || S.armies.size === 0) { armyPos.clear(); return; }
+    if (++armyGc > 300) { armyGc = 0; for (const id of armyPos.keys()) if (!S.armies.has(id)) armyPos.delete(id); }
+    for (const a of S.armies.values()) { if (armyVisible(a)) armyAnchor(a, now); }
+  }
+  function drawBanners(now, political) {
+    hitN = 0; bannersDrawn = 0;
+    if (!S.armies || S.armies.size === 0) return;
+    const cmd = api.cmd, cid = cmd && cmd.kid ? cmd.kid : 0, low = zoomCss < 5;
+    const bs = Math.round(Math.max(0.72, Math.min(1.12, 0.62 + zoomCss * 0.04)) * 20);
+    const list = drawList; list.length = 0;
+    for (const a of S.armies.values()) {
+      if (!armyVisible(a)) continue;
+      if (low && a.kingdomId !== cid && !(political && api.showAllOrders)) continue;
+      const st = armyPos.get(a.id); if (!st) continue;
+      if (st.x < vx0 - 4 || st.x > vx1 + 4 || st.y < vy0 - 5 || st.y > vy1 + 4) continue;
+      list.push(a);
+    }
+    if (!list.length) return;
+    list.sort(byAnchorY);
+    ctx.imageSmoothingEnabled = false;
+    for (let i = 0; i < list.length; i++) {
+      const a = list[i], st = armyPos.get(a.id), k = S.kingdoms.get(a.kingdomId) || null;
+      const sel = !!(cmd && cmd.armyId === a.id);
+      const retreat = a.mode === 'retreat' || (a.order && a.order.type === 'retreat');
+      const e = bannerSprite(k, a.members.length, armyIconKey(a), bs, retreat);
+      const sz = 16 * texel;
+      const gx = Math.round(ox + st.x * Z), gy = Math.round(oy + (st.y + 0.55) * Z);
+      const lift = zoomCss >= 5 ? sz + 3 * dpr : 3 * dpr;
+      const bx = Math.round(gx - e.w / 2);
+      let by = Math.round(gy - lift - e.h), stacked = false;
+      for (let tries = 0; tries < 4; tries++) {                     // fan overlapping banners upwards instead of stacking them on top of each other
+        let moved = false;
+        for (let j = 0; j < hitN; j++) {
+          const o = j * 5, jx0 = hits[o + 1] * dpr, jy0 = hits[o + 2] * dpr, jx1 = hits[o + 3] * dpr, jy1 = hits[o + 4] * dpr - (e.h - e.ph);
+          if (bx < jx1 - 2 && bx + e.w > jx0 + 2 && by < jy1 - 1 && by + e.ph > jy0 + 1) { by = Math.round(jy0 - e.ph - 2 * dpr); moved = true; stacked = true; break; }
+        }
+        if (!moved) break;
+      }
+      if (stacked) {                                                // thin stem from the banner down to its army
+        ctx.fillStyle = '#080b16'; ctx.fillRect(Math.round(gx - 1.5 * dpr), by + e.ph, Math.round(3 * dpr), Math.max(0, gy - lift - (by + e.ph)));
+        ctx.fillStyle = k ? k.color : '#a8b0b8'; ctx.fillRect(Math.round(gx - 0.5 * dpr), by + e.ph, Math.max(1, Math.round(dpr)), Math.max(0, gy - lift - (by + e.ph)));
+      }
+      if (sel) {                                                   // ring on the ground + glowing frame
+        const pr = 1 + Math.sin(now / 200) * 0.08;
+        ctx.lineWidth = Math.max(2, 2.2 * dpr);
+        ctx.strokeStyle = 'rgba(8,10,20,0.75)'; ctx.beginPath(); ctx.ellipse(gx, gy - 0.05 * Z, Z * 0.62 * pr + 1.5, Z * 0.3 * pr + 1, 0, 0, TAU); ctx.stroke();
+        ctx.strokeStyle = '#ffe36e'; ctx.lineWidth = Math.max(1.5, 1.8 * dpr); ctx.beginPath(); ctx.ellipse(gx, gy - 0.05 * Z, Z * 0.62 * pr, Z * 0.3 * pr, 0, 0, TAU); ctx.stroke();
+        ctx.fillStyle = 'rgba(255,227,110,0.55)'; ctx.fillRect(bx - 3 * dpr, by - 3 * dpr, e.w + 6 * dpr, e.ph + 6 * dpr);
+      }
+      ctx.drawImage(e.cv, bx, by);
+      if (a.supply < 30) {                                         // supply warning: pulsing red crate badge
+        const pr = 0.5 + 0.5 * Math.sin(now / 180 + a.id);
+        const sc = Math.max(1, Math.round(dpr * 0.8 * bs / 20)), ic = iconScaled('supply', sc), bsz = ic.width + 4 * dpr;
+        const wx = bx + e.w - bsz * 0.55, wy = by - bsz * 0.7;
+        ctx.fillStyle = 'rgba(214,40,32,' + (0.75 + 0.2 * pr).toFixed(2) + ')'; ctx.fillRect(Math.round(wx), Math.round(wy), Math.round(bsz), Math.round(bsz));
+        ctx.fillStyle = '#080b16'; ctx.fillRect(Math.round(wx), Math.round(wy), Math.round(bsz), Math.max(1, Math.round(dpr)));
+        ctx.drawImage(ic, Math.round(wx + 2 * dpr), Math.round(wy + 2 * dpr));
+      }
+      bannersDrawn++;
+      if (hits.length < (hitN + 1) * 5) hits.length = (hitN + 1) * 5 + 20;
+      hits[hitN * 5] = a.id; hits[hitN * 5 + 1] = bx / dpr; hits[hitN * 5 + 2] = by / dpr; hits[hitN * 5 + 3] = (bx + e.w) / dpr; hits[hitN * 5 + 4] = (by + e.h) / dpr;
+      hitN++;
+    }
+  }
+  const drawList = [];
+  function byAnchorY(a, b) { const pa = armyPos.get(a.id), pb = armyPos.get(b.id); return pa.y - pb.y; }
+  /** army id whose banner covers the css-px point (sx,sy), 0 if none (topmost first) */
+  function armyAtScreen(sx, sy) {
+    for (let i = hitN - 1; i >= 0; i--) {
+      const o = i * 5;
+      if (sx >= hits[o + 1] - 3 && sx <= hits[o + 3] + 3 && sy >= hits[o + 2] - 3 && sy <= hits[o + 4] + 6) return hits[o];
+    }
+    return 0;
+  }
+  function armyAt(tx, ty) { const s = tileToScreen(tx, ty); return armyAtScreen(s.x, s.y); }
+  /** css-px rectangle of an army's banner in the last frame ({x0,y0,x1,y1}) or null when it was not drawn */
+  function armyBannerRect(id) {
+    for (let i = 0; i < hitN; i++) { const o = i * 5; if (hits[o] === id) return { x0: hits[o + 1], y0: hits[o + 2], x1: hits[o + 3], y1: hits[o + 4] }; }
+    return null;
+  }
+
+  // ------------------------------------------------------------------ occupation marker next to city labels
+  function drawOccupier(c, cx, top, big, e) {
+    if (!c.occupierId) return;
+    const ok = S.kingdoms.get(c.occupierId); if (!ok || !ok.flag) return;
+    occFlagsDrawn++;
+    const fw = Math.round(11 * dpr), fh = Math.round(7.5 * dpr);
+    const fx = big && e ? Math.round(cx + e.w / 2 + 2 * dpr) : Math.round(cx + 7 * dpr);
+    const fy = big && e ? Math.round(top - e.h / 2 - fh / 2 - 2 * dpr) : Math.round(top - fh - 3 * dpr);
+    ctx.fillStyle = '#e9382e'; ctx.fillRect(fx - 2, fy - 2, fw + 4, fh + 4);
+    ctx.fillStyle = 'rgba(8,10,20,0.95)'; ctx.fillRect(fx - 1, fy - 1, fw + 2, fh + 2);
+    ctx.drawImage(Sprites.flag(ok.flag, fw, fh), fx, fy, fw, fh);
+  }
+
+
   // ------------------------------------------------------------------ main draw
   function draw(alpha, now) {
     if (!ctx) return;
@@ -1115,12 +1972,21 @@ const Render = (() => {
     if (vx1 > vx0 && vy1 > vy0) {
       try { drawTerrain(curNow); } catch (e) { report('terrain', e); }
       const mode = api.mode;
-      if (mode !== MODE.NORMAL) { try { ensureOverlay(mode); drawOverlay(mode); } catch (e) { report('overlay', e); } }
+      const reg = hasRegions(), political = reg && mode === MODE.BORDERS;
+      if (mode !== MODE.NORMAL) {
+        try { if (reg) { ensurePolitical(mode); drawPoliticalLayer(mode, political); } else { ensureOverlay(mode); drawOverlay(mode); } } catch (e) { report('overlay', e); }
+      }
       try { drawTileLayer(curNow); } catch (e) { report('tiles', e); }
       try { drawEntities(); } catch (e) { report('entities', e); }
       try { drawFlames(curNow); } catch (e) { report('fire', e); }
       try { drawEffects(curNow); } catch (e) { report('effects', e); }
       try { drawLabels(mode); } catch (e) { report('labels', e); }
+      try {
+        if (reg) drawCommandLayer(curNow, political);
+        prepareArmies(curNow);
+        if (reg) drawArmyOrders(curNow, political);
+        drawBanners(curNow, political);
+      } catch (e) { report('war', e); }
       try { drawHighlight(curNow); drawBrush(curNow); } catch (e) { report('overlays', e); }
     }
     ctx.globalAlpha = 1;
@@ -1148,13 +2014,17 @@ const Render = (() => {
     let seg = 0;
     for (let i = 0; i < ovl.groups.length; i++) seg += ovl.groups[i].seg.length / 6;
     return { P, W, H, dpr, Z, ox, oy, texel, overlayMode: ovl.mode, overlayVer: ovl.ver, borderSegments: seg, innerSegments: ovl.inner ? ovl.inner.length / 4 : 0,
-      dirty: S.dirtyList ? S.dirtyList.length : 0, glide: !!glide, labels: labelCache.size, items: itN };
+      dirty: S.dirtyList ? S.dirtyList.length : 0, glide: !!glide, labels: labelCache.size, items: itN,
+      political: { builds: pol.builds, ver: pol.ver, ownerVer: pol.ownerVer, mode: pol.mode, buildMs: Math.round(pol.buildMs * 100) / 100, outlineRuns: pol.groups.reduce((n, g) => n + g.seg.length / 6, 0),
+        thinRuns: pol.thin ? pol.thin.length / 4 : 0, wildRuns: pol.wild ? pol.wild.length / 4 : 0, frontRuns: pol.front ? pol.front.length / 4 : 0, stripeTiles: pol.stripeTiles, usedFrontApi: pol.usedApi,
+        layerDraws: polLayer.draws, layerBlits: polLayer.blits, layerDirect: polLayer.direct, banners: bannersDrawn, arrows: arrowsDrawn, regionLabels: regLabelsDrawn, kingdomLabels: kingLabelsDrawn, goalMarkers: goalsDrawn, goalMarkersDone: goalsDoneDrawn, occupierFlags: occFlagsDrawn, regions: S.regions ? S.regions.size : 0, hasRegions: hasRegions() } };
   }
 
   Object.assign(api, {
     init, resize, draw, screenToTile, tileToScreen, focusOn, setMode, invalidate,
     setCamera, panBy, zoomAt, settleZoom, crispZoom, clampCam, minZoom, maxZoom() { return MAXZ; }, visibleRect, debugInfo,
     cancelGlide() { glide = null; },
+    regionAt, regionCenter, armyAt, armyAtScreen, armyBannerRect,
   });
   Object.defineProperty(api, 'canvas', { get() { return canvas; } });
   Object.defineProperty(api, 'camSerial', { get() { return camSerial; } });

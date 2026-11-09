@@ -54,6 +54,9 @@ const Units = (() => {
   const SETTLE_BUDGET = 6;                          // Cities.trySettle calls per tick (global)
   const BUILD_RATE = 5;                             // Buildings.work amount per 5 ticks = eff * BUILD_RATE (1 work/tick/builder)
   const BIRTH_ATTEMPT = 0.8;                        // chance per attempt (attempt every ~20 ticks), scaled by fertility
+  // race balance (density-dependent births): once the world fills up, a race above its fair share of the population breeds slower and a
+  // race below it breeds faster, so ~1500 units stay a mix instead of one race taking every free slot (see updateBalance)
+  const BAL_FROM = 140, BAL_RAMP = 330, BAL_UNDER_MAX = 3.2, BAL_UNDER_EXP = 0.6, BAL_OVER_EXP = 2.2;
   const MAX_LEVEL = 30;
   // watchdog: max ticks an activity may last (0 = unlimited)
   const LIMIT = { idle: 0, wander: 600, walk: 900, gather: 900, carry: 700, build: 900, farm: 700, eat: 500, sleep: 700, flee: 300, fight: 500, army: 0, mate: 200, settle: 1700 };
@@ -66,6 +69,7 @@ const Units = (() => {
   let spX = 0, spY = 0;                             // scratch result of aroundSpot
   // threat scan scratch
   let sFoe = null, sFoeD2 = 0, sEnemyPow = 0, sFriendPow = 0, sOnlyMine = false, sForceWar = false;
+  let sArmedPref = false, sArmFoe = null, sArmD2 = 0;   // army scans: nearest hostile that is a combatant (soldier or already fighting)
   // threat gating: census of the previous tick + kingdoms that are at war (so peaceful units never scan)
   const HR = new Uint8Array(NR * NR);                // HR[a*NR+b] = 1 when a wanderer rule (rel <= -50) can make a/b hostile
   for (let a = 0; a < NR; a++) for (let b = 0; b < NR; b++) HR[a * NR + b] = (Races.rel[a][b] <= -50 || Races.rel[b][a] <= -50) ? 1 : 0;
@@ -83,6 +87,28 @@ const Units = (() => {
   function stageIdx(u) { const a = S.tick - u.born; return a < MAT[u.race] ? 0 : a > ELD[u.race] ? 2 : 1; }
   function isChild(u) { return S.tick - u.born < MAT[u.race]; }
   function modState() { return S.mod.units || (S.mod.units = { births: 0, deaths: 0, causes: {} }); }
+  const balPop = new Int32Array(NR);
+  /** birth-rate multiplier of a race (1 = neutral). Persisted in S.mod.units.bal, refreshed every 20 ticks by updateBalance. */
+  function balOf(race) { const b = modState().bal; return b && b[race] > 0 ? b[race] : 1; }
+  function updateBalance() {
+    const pop = balPop;
+    pop.fill(0);
+    for (const u of S.units.values()) if (u.race >= 0 && u.race < NR) pop[u.race]++;
+    let total = 0, present = 0;
+    for (let r = 0; r < NR; r++) { total += pop[r]; if (pop[r] > 0) present++; }
+    const m = modState();
+    if (!Array.isArray(m.bal) || m.bal.length !== NR) m.bal = new Array(NR).fill(1);
+    const crowd = clamp((total - BAL_FROM) / BAL_RAMP, 0, 1);
+    for (let r = 0; r < NR; r++) {
+      let v = 1;
+      if (present > 1 && pop[r] > 0 && crowd > 0) {
+        const ratio = total / (present * pop[r]);                  // fair share / actual share
+        v = ratio >= 1 ? Math.min(BAL_UNDER_MAX, Math.pow(ratio, BAL_UNDER_EXP)) : Math.pow(ratio, BAL_OVER_EXP);
+        v = 1 + (v - 1) * crowd;
+      }
+      m.bal[r] = Math.round(v * 1000) / 1000;
+    }
+  }
   function buffOf(u) { return u.buffUntil > S.tick ? (u.buffMul || 1) : 1; }
   function walkAt(x, y) {
     if (!(x >= 0 && y >= 0 && x < S.w && y < S.h)) return false;
@@ -363,7 +389,8 @@ const Units = (() => {
       addXp(killer, 6 + 3 * (u.level || 1));
     }
     if (cause === 'combat' && fxBudget > 0) { fxBudget--; Fx.add('blood', u.x, u.y, { ttl: 0.5 }); }
-    if (u.isRuler && cause !== 'erase') {
+    // (a ruler of a living kingdom is reported once, by the succession line of Kingdoms: "В «X» умер король «Y», на трон взошёл «Z»")
+    if (u.isRuler && cause !== 'erase' && !(typeof Kingdoms !== 'undefined' && !Kingdoms.__stub && S.kingdoms.get(kid))) {
       const k = S.kingdoms.get(kid);
       const t = DEATH_TXT[cause];
       const f = u.sex === SEX.F ? 1 : 0;
@@ -968,6 +995,9 @@ const Units = (() => {
   }
 
   // ---- armies
+  function occupiedCity(cityId) { const c = S.cities.get(cityId); return !!c && c.occupierId > 0; }
+  /** a soldier of an army that is cut off from its supply does not recover (War applies the attrition) */
+  function armyStarved(u) { const a = S.armies.get(u.armyId); return !!a && a.supply < 30; }
   function enemyBuildingNear(u, army, x, y, rad) {
     // enemy building within rad tiles of (x,y) (3x3 for rad<=1.5), kingdom of its city at war with u's kingdom
     const xi = x | 0, yi = y | 0, r = Math.ceil(rad);
@@ -1006,7 +1036,16 @@ const Units = (() => {
     const st = u.st;
     if (st.tid) {
       const foe = S.units.get(st.tid);
-      if (foe && foe.hp > 0 && (foe.x - u.x) * (foe.x - u.x) + (foe.y - u.y) * (foe.y - u.y) < 100 && army.mode !== 'retreat') { combatStep(u, foe, tick); return; }
+      if (foe && foe.hp > 0 && army.mode !== 'retreat') {
+        const dx = foe.x - u.x, dy = foe.y - u.y;
+        let ok = dx * dx + dy * dy < 100;
+        if (ok && (army.mode === 'hold' || army.mode === 'siege') && !foe.armyId && foe.state !== 'fight') ok = false;   // civilians that stopped fighting are left alone
+        if (ok && army.mode === 'hold' && army.rally) {          // garrison: never chase further than ~8 tiles from the post
+          const fx = foe.x - army.rally.x, fy = foe.y - army.rally.y, ux = u.x - army.rally.x, uy = u.y - army.rally.y;
+          ok = fx * fx + fy * fy <= 64 && ux * ux + uy * uy <= 100;
+        }
+        if (ok) { combatStep(u, foe, tick); return; }
+      }
       st.tid = 0;
     }
     if (st.bid) {
@@ -1025,7 +1064,7 @@ const Units = (() => {
         return;
       }
     }
-    // follow the rally point with a small formation offset
+    // follow the rally point with a small formation offset (stays within ~3 tiles of it: a garrison "holds" within ~4)
     const rally = army.rally;
     if (!rally) return;
     const a = (u.id * 2.399963229728653) % 6.283185307179586;
@@ -1039,18 +1078,26 @@ const Units = (() => {
     if (!army) { release(u); return false; }
     if (u.state !== 'army') { u.state = 'army'; u.job = null; u.st = { ph: '', since: tick }; }
     const st = u.st;
-    if (u.hunger > 80 && tick >= u.ec && u.cityId) {      // supply line: rations from the home city
+    if (u.hunger > 80 && tick >= u.ec && u.cityId && !(army.supply < 30)) {      // supply line: rations from the home city (cut off when out of supply)
       u.ec = tick + 60;
       const g = Cities.withdraw(u.cityId, 'food', 1);
       if (g > 0) u.hunger = Math.max(0, u.hunger - EAT_VALUE * g);
     }
-    if (army.mode === 'retreat') { st.tid = 0; st.bid = 0; return true; }
-    const siege = army.mode === 'siege';
+    const mode = army.mode;
+    if (mode === 'retreat') { st.tid = 0; st.bid = 0; return true; }
+    const siege = mode === 'siege', hold = mode === 'hold';
     if (!st.tid) {
-      sOnlyMine = true; sForceWar = true;
-      scan(u, siege ? 6 : 3.5);
-      sOnlyMine = false; sForceWar = false;
-      if (sFoe) { st.tid = sFoe.id; st.bid = 0; }
+      sOnlyMine = true; sForceWar = true; sArmedPref = true;
+      scan(u, siege || hold ? 6 : 3.5);
+      sOnlyMine = false; sForceWar = false; sArmedPref = false;
+      // soldiers prefer combatants; civilians are only hunted while marching / gathering (never by a garrison or a besieging army)
+      let f = sArmFoe;
+      if (!f && !siege && !hold) f = sFoe;
+      if (f && hold && army.rally) {
+        const fx = f.x - army.rally.x, fy = f.y - army.rally.y;
+        if (fx * fx + fy * fy > 64) f = null;                                // hold: engage within ~6 tiles of the soldier, never beyond ~8 of the post
+      }
+      if (f) { st.tid = f.id; st.bid = 0; }
     }
     if (!st.tid && siege && !st.bid) {
       let b = enemyBuildingNear(u, army, u.x, u.y, 1.5);
@@ -1083,7 +1130,7 @@ const Units = (() => {
   }
   /** fills sFoe (nearest hostile), sEnemyPow, sFriendPow (allies; incl. nothing for self) within r tiles of u */
   function scan(u, r) {
-    sFoe = null; sFoeD2 = 1e9; sEnemyPow = 0; sFriendPow = 0;
+    sFoe = null; sFoeD2 = 1e9; sEnemyPow = 0; sFriendPow = 0; sArmFoe = null; sArmD2 = 1e9;
     const x = u.x, y = u.y, r2 = r * r;
     let cx0 = ((x - r) * 0.125) | 0, cx1 = ((x + r) * 0.125) | 0, cy0 = ((y - r) * 0.125) | 0, cy1 = ((y + r) * 0.125) | 0;
     if (x - r < 0) cx0 = 0; if (y - r < 0) cy0 = 0;
@@ -1103,6 +1150,7 @@ const Units = (() => {
           if (isHostile(u, v) || (!sOnlyMine && isHostile(v, u))) {
             sEnemyPow += powerOf(v);
             if (d2 < sFoeD2) { sFoeD2 = d2; sFoe = v; }
+            if (sArmedPref && d2 < sArmD2 && (v.armyId > 0 || v.state === 'fight')) { sArmD2 = d2; sArmFoe = v; }
           }
         }
       }
@@ -1192,7 +1240,7 @@ const Units = (() => {
   function tryStartMate(u, tick, r, dt) {
     if (!canBirth(u, tick, r)) return false;
     const c = S.cities.get(u.cityId);
-    let p = BIRTH_ATTEMPT * (dt / 20) * Math.min(1.6, Traits.mul(u, 'fertility')) * Math.sqrt(Math.min(1, r.fertility));
+    let p = BIRTH_ATTEMPT * (dt / 20) * Math.min(1.6, Traits.mul(u, 'fertility')) * Math.sqrt(Math.min(1, r.fertility)) * balOf(u.race);
     if (c.pop < 12) p *= 1.4;                           // small villages grow faster
     if (!R.chance(p)) return false;
     u.job = null;
@@ -1217,7 +1265,8 @@ const Units = (() => {
     const c = S.cities.get(u.cityId);
     const sp = S.units.get(u.spouseId);
     const fertF = Math.max(0.2, r.fertility * Traits.mul(u, 'fertility'));
-    u.birthCd = tick + Math.round(r.birthCooldown * TPY / fertF * (c.pop < 16 ? 0.75 : 1));   // small villages recover faster
+    const bal = balOf(u.race);
+    u.birthCd = tick + Math.round(r.birthCooldown * TPY / fertF * (c.pop < 16 ? 0.75 : 1) / (bal > 1 ? Math.min(1.8, bal) : 1));   // small villages recover faster, so do races below their fair share
     const sex = R.chance(0.5 + 0.3 * sexSkew(c)) ? SEX.F : SEX.M;     // mild homeostasis: the scarcer sex is born more often
     const child = spawn(u.race, u.x, u.y, {
       sex, age: 0, fatherId: sp.id, motherId: u.id, traits: mixTraits(sp, u),
@@ -1384,7 +1433,7 @@ const Units = (() => {
         else spreadDisease(u, tick);
       }
     }
-    if (u.hp < u.maxHp && u.hunger < 70 && !u.sick && u.burning <= tick) {
+    if (u.hp < u.maxHp && u.hunger < 70 && !u.sick && u.burning <= tick && !(u.armyId && armyStarved(u))) {
       u.hp = Math.min(u.maxHp, u.hp + (sleeping ? 0.08 : 0.025) * dt * (u.maxHp / 20));
     }
     if (u.burning > tick && S.tile[(u.y | 0) * S.w + (u.x | 0)] === T.SHALLOW) u.burning = 0;
@@ -1402,7 +1451,17 @@ const Units = (() => {
     // ---- enemies (units already in a fight / flight only re-evaluate every ~8 ticks: keeps big battles cheap)
     let foe = null;
     if ((state === 'fight' || state === 'flee') && ((tick + u.id) & 7) >= te) { watchdog(u, tick); return; }
-    if (threatPossible(u)) { scan(u, THREAT_R); foe = sFoe; }
+    if (threatPossible(u)) {
+      const kc = u.kingdomId > 0;
+      sArmedPref = kc;
+      scan(u, THREAT_R);
+      sArmedPref = false;
+      foe = sFoe;
+      // stage 2: wars are fought by armies. Citizens of warring kingdoms tolerate each other's citizens and only react to soldiers / aggressors
+      if (kc && foe !== null && foe.kingdomId > 0 && !foe.armyId && foe.state !== 'fight') { foe = sArmFoe; sFoeD2 = sArmD2; }
+    }
+    // citizens of a city held by an enemy army keep their heads down: no panic, no last stand against the garrison (War/occupation, stage 2)
+    if (foe !== null && foe.armyId > 0 && u.cityId && occupiedCity(u.cityId)) foe = null;
     if (foe) {
       const st0 = u.st;
       if (!(st0.nohunt > tick && sFoeD2 > 6)) {
@@ -1412,7 +1471,8 @@ const Units = (() => {
         if (u.hp < u.maxHp * 0.35) need += 0.6;
         if (c && Cities.ownerAt(foe.x, foe.y) === c.id) need *= 0.5;          // defending the home territory
         const ratio = (sFriendPow + powerOf(u)) / (sEnemyPow + 0.01);
-        if (ratio >= need) {
+        // unarmed villagers do not take on soldiers (no massacre of a defenceless population; guards with weapons still do)
+        if (ratio >= need && !(foe.armyId > 0 && !(u.weapon > 0))) {
           if (!(state === 'fight' && st0.tid === foe.id)) startFight(u, foe, tick);
         } else if (state !== 'flee') startFlee(u, foe, tick);
         return;
@@ -1537,6 +1597,7 @@ const Units = (() => {
     pathBudget = PATH_BUDGET; settleBudget = SETTLE_BUDGET; fxBudget = 8;
     const te = S.perf.thinkEvery > 0 ? S.perf.thinkEvery : 3;
     refreshWars();
+    if (tick % 20 === 0) updateBalance();
     nxtAll.fill(0); nxtWand.fill(0);
     for (const u of S.units.values()) {
       try { tickUnit(u, tick, te); } catch (e) { reportError(e, u); }
@@ -1583,6 +1644,7 @@ const Units = (() => {
         if (u.st && (u.st.tid || u.st.bid)) return u.st.bid && !u.st.tid ? 'Штурмует' : 'Сражается';
         if (a && a.mode === 'march') return 'Марширует';
         if (a && a.mode === 'siege') return 'Осаждает';
+        if (a && a.mode === 'hold') return 'Держит позицию';
         if (a && a.mode === 'retreat') return 'Отступает';
         return 'Собирается в армию';
       }
