@@ -2479,7 +2479,7 @@ const UI = (() => {
     rcSync(); showCmdSheet();
     const ids = [rid].concat(sourceRegions([rid]));
     defer(() => { if (cm.tgt) fitRegions(ids, 5, 11, true); });
-    if (!e.atWar) hintOnce('tgtmore', 'Можно добавить ещё регионы этой страны — тапните их на карте. Чем больше целей, тем труднее война.');
+    if (!e.atWar && okTargets((x) => !x.atWar && x.defenderKid === e.defenderKid).length > 1) hintOnce('tgtmore', 'Тап по другому красному региону этой страны — ещё одна цель');
     return true;
   }
   function toggleTargetGoal(rid) {
@@ -2518,7 +2518,7 @@ const UI = (() => {
     refreshTargets(true); rcSync(); showCmdSheet();
     const ids = goals.concat(sourceRegions(goals));
     defer(() => { if (cm.kid === kid) fitRegions(ids, 6, 10); });
-    hintOnce('warstarted', 'Армии собираются сами и пойдут к цели. Взяв регион, они удержат его. Войны, армии и мир — в панели снизу.');
+    setTimeout(() => { if (cm.kid === kid && !cm.tgt && !bnr.cur) hintOnce('warstarted', 'Армии соберутся сами и пойдут к цели, а взяв регион — удержат его. Войны, армии и мир — в панели снизу.'); }, 3400);
     return true;
   }
   /** «Атаковать»: the goal (if it is not one yet and the region is the enemy's) + an attack order for the selected / idle armies */

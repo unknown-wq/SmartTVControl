@@ -12999,9 +12999,12 @@ const Regions = (() => {
  *                                                      tile (t,variant&15) at sx=(variant&15)*16, sy=t*16
  *   Sprites.feature(kind,variant)                    TREE v0 sapling,1 young,2 oak,3 pine | ROCK/IRON/GOLD v0..3
  *                                                    BERRY v0..3 (with berries), v9 = depleted
- *   Sprites.unit(race,stage,frame,tint,weapon,armor[,look])
- *                                                    look 0..3 (optional, e.g. u.id & 3) picks skin/hair variant
- *   Sprites.building(type,race,level,done[,tint])    tint (optional) = kingdom hex for banners / flags / awnings
+ *   Sprites.unit(race,stage,frame,tint,weapon,armor[,look,pose,carry])
+ *                                                    look 0..7 (e.g. (u.id&3)|(u.sex===1?4:0)): skin/hair variant, bit 2 = female
+ *                                                    pose 0 walk,1 attack,2 chop,3 mine,4 farm,5 build,6 sleep,7 fish,8 forage ; carry 0 none,1 wood,2 stone,3 food,4 iron,5 gold
+ *   Sprites.building(type,race,level,done[,tint,mode,variant])    tint = kingdom hex for banners / flags / awnings; mode = damage state / construction stage; variant = colour look
+ *   Sprites.landmark(type,race,level,tint,mode)      16x24 canvas for town halls / temples (L2+) and castles (L3), else null
+ *   Sprites.decal(kind,v) / chimney(type,race,level) / drawArrow / drawSmoke / drawBird / drawFishJump   art helpers drawn by Render
  *   Sprites.flag(flag,w,h) / Sprites.icon(key,size)
  *   Sprites.drawFx(ctx,fx,px,py,scale,now) / Sprites.drawEffect(ctx,kind,e,px,py,scale,now)
  * ===================================================================== */
@@ -20752,7 +20755,7 @@ const UI = (() => {
     rcSync(); showCmdSheet();
     const ids = [rid].concat(sourceRegions([rid]));
     defer(() => { if (cm.tgt) fitRegions(ids, 5, 11, true); });
-    if (!e.atWar) hintOnce('tgtmore', 'Можно добавить ещё регионы этой страны — тапните их на карте. Чем больше целей, тем труднее война.');
+    if (!e.atWar && okTargets((x) => !x.atWar && x.defenderKid === e.defenderKid).length > 1) hintOnce('tgtmore', 'Тап по другому красному региону этой страны — ещё одна цель');
     return true;
   }
   function toggleTargetGoal(rid) {
@@ -20791,7 +20794,7 @@ const UI = (() => {
     refreshTargets(true); rcSync(); showCmdSheet();
     const ids = goals.concat(sourceRegions(goals));
     defer(() => { if (cm.kid === kid) fitRegions(ids, 6, 10); });
-    hintOnce('warstarted', 'Армии собираются сами и пойдут к цели. Взяв регион, они удержат его. Войны, армии и мир — в панели снизу.');
+    setTimeout(() => { if (cm.kid === kid && !cm.tgt && !bnr.cur) hintOnce('warstarted', 'Армии соберутся сами и пойдут к цели, а взяв регион — удержат его. Войны, армии и мир — в панели снизу.'); }, 3400);
     return true;
   }
   /** «Атаковать»: the goal (if it is not one yet and the region is the enemy's) + an attack order for the selected / idle armies */

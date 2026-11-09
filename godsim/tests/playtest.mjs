@@ -2,7 +2,7 @@
 //   node tests/playtest.mjs [--soak=90] [--seed=4] [--shots=/tmp/godsim-playtest] [--nobuild] [--width=390 --height=844]
 // 1. soak: run x4 for --soak seconds of REAL time with a random god action every ~2.5 s (taps on the map through the real dock), a war whisper,
 //    FPS sampling, screenshots every 15 s; no page errors / error overlay; the sim keeps up; UI sanity (feed, counters, no stuck sheets).
-// 2. command mode in a real world: Kingdoms tab -> chip -> «Объявить войну» -> goal picking on the map -> «Начать войну» -> armies march, take the goal
+// 2. command mode in a real world: Kingdoms tab -> chip (attacker) -> lit target regions -> tap a region -> war card -> «Объявить войну» -> armies march, take the goal
 //    region and HOLD it (the war persists, no further advance) -> save the world in the middle of the war through the menu.
 // 3. load it back through the menu (state restored, UI clean), then Армии page (select army, orders) and the peace conference (offer).
 // 4. the political map at several zoom levels (screenshots + draw cost).
@@ -178,17 +178,17 @@ if (pair) {
   check('attacker chip is visible', !!cc);
   if (cc) await b.tap(cc[0], cc[1]);
   await sleep(1200);
-  const c1 = await E(() => { const g = window.__god; const sh = document.getElementById('sheet').getBoundingClientRect(); return { kid: g.UI.cmdKid, flag: !!(g.Kingdoms.commanded() && g.Kingdoms.commanded().cmd), mode: g.Render.mode, open: document.getElementById('bottom').classList.contains('sheet-open'), h: sh.height, vh: innerHeight, tabs: [...document.querySelectorAll('#sheet .cseg button')].map(x => x.textContent.trim()) }; });
-  check('chip tap commands the kingdom: sheet opens, map switches to the political mode', c1.kid === pair.a && c1.flag && c1.mode === 1 && c1.open, JSON.stringify({ kid: c1.kid, mode: c1.mode }));
-  check('sheet <= 60% of the screen with three pages', c1.h <= c1.vh * 0.6 + 1 && c1.tabs.length === 3, `${Math.round(c1.h)}px ${c1.tabs.join('|')}`);
-  await shot('cmd_01_sheet');
-  await tapSel(`[data-act="declare"][data-kid="${pair.b}"]`);
+  const c1 = await E(() => { const g = window.__god; const sh = document.getElementById('sheet'); const r = sh.getBoundingClientRect(); return { kid: g.UI.cmdKid, flag: !!(g.Kingdoms.commanded() && g.Kingdoms.commanded().cmd), mode: g.Render.mode, hud: sh.classList.contains('hud'), h: r.height, vh: innerHeight }; });
+  check('chip tap selects the attacker: slim HUD opens, map switches to the political mode', c1.kid === pair.a && c1.flag && c1.mode === 1 && c1.hud, JSON.stringify({ kid: c1.kid, mode: c1.mode, hud: c1.hud }));
+  check('the HUD takes <= 25% of the screen (the map stays visible)', c1.h <= c1.vh * 0.25 + 1, `${Math.round(c1.h)}px of ${c1.vh}`);
+  await shot('cmd_01_hud');
+  // new flow: with the attacker selected every legal target region is lit at once (no neighbour list, no «Объявить войну» button)
   await sleep(1300);
-  const g1 = await E(() => { const c = window.__god.UI.cmd; return c && c.goal ? { cand: c.goal.cand.slice(), counter: (document.querySelector('.goalbar') || document.querySelector('#sheet')).textContent.replace(/\s+/g, ' ').slice(0, 120) } : null; });
-  check('goal picking mode: candidates highlighted on the map', !!g1 && g1.cand.length >= 1, g1 ? `cand ${g1.cand} | ${g1.counter}` : 'no goal mode');
-  await shot('cmd_02_goal_mode');
-  if (g1) {
-    const rid = g1.cand[0];
+  const g1 = await E(([bk]) => { const g = window.__god; const rc = g.Render.cmd; const mine = g.UI.targets.filter(e => e.ok && e.defenderKid === bk).map(e => e.regionId); return { cand: rc ? rc.candidates.slice() : [], mine }; }, [pair.b]);
+  check('legal targets are lit on the map right after selecting the attacker', g1.cand.length >= 1 && g1.mine.length >= 1 && g1.mine.every(r => g1.cand.includes(r)), `lit ${g1.cand} | targets in the enemy kingdom ${g1.mine}`);
+  await shot('cmd_02_targets_lit');
+  if (g1.mine.length) {
+    const rid = (pair.goals.find(r => g1.mine.includes(r))) || g1.mine[0];
     // tap the region on the map
     const tapRegion = async (rid) => {
       const find = () => E(rid => {
@@ -208,10 +208,10 @@ if (pair) {
       await b.tap(p[0], p[1]); await sleep(250); return p;
     };
     await tapRegion(rid);
-    const g2 = await E(() => { const c = window.__god.UI.cmd; return { goals: c.goal ? c.goal.goals.slice() : [], disabled: (document.querySelector('[data-act="goal-go"]') || {}).disabled }; });
-    check('tapping a candidate region adds a goal star and enables «Начать войну»', g2.goals.includes(rid) && g2.disabled === false, JSON.stringify(g2));
-    await shot('cmd_03_goal_picked');
-    await tapSel('[data-act="goal-go"]');
+    const g2 = await E(() => { const sh = document.getElementById('sheet'); const go = sh.querySelector('[data-act="tgt-go"]'); return { card: sh.classList.contains('tc'), go: !!go && !go.disabled }; });
+    check('tapping a lit region opens the war card with an enabled «Объявить войну» button', g2.card && g2.go, JSON.stringify(g2));
+    await shot('cmd_03_war_card');
+    await tapSel('[data-act="tgt-go"]');
     await sleep(900);
     warId = await E(([a, b]) => { const g = window.__god; for (const w of g.War.active()) if (w.attackers.includes(a) && w.defenders.includes(b)) return w.id; return 0; }, [pair.a, pair.b]);
     check('the war was declared with the chosen goal', warId > 0 && (await E(([id, rid]) => window.__god.War.get(id).goals.some(g => g.regionId === rid), [warId, rid])));
