@@ -1331,6 +1331,7 @@ const Sprites = (() => {
 
   const ICONS = {
     // ---- terrain tools ----
+    bell: ['.....yy.....', '....yyyy....', '...yywyyY...', '...ywyyyY...', '..yywyyyyY..', '..ywyyyyyY..', '..ywyyyyyY..', '.yywyyyyyyY.', '.ywyyyyyyyY.', 'yyyyyyyyyyYY', 'YYYYYYYYYYYY', '....oooo....', '.....oo.....'],
     crown: ['y.....y.....y', 'yy...yyy...yy', 'yyy.yyyyy.yyy', 'yyyyyyyyyyyyy', 'yYyyyyyyyyyYy', 'yyrYyybYyyYryy'.slice(0, 13), 'yYyYyYyYyYyYy', 'YYYYYYYYYYYYY'],
     raise: ['......yy......', '.....yyyy.....', '....yyyyyy....', '...yyyyyyyy...', '......yy......', '......yy......', '......yy......', '....llllll....', '..lleeeeeell..', '.leeeeeeeeeel.', 'nnnnnnnnnnnnnn', 'nNnnnNnnnnNnnn'],
     lower: ['......yy......', '......yy......', '......yy......', '...yyyyyyyy...', '....yyyyyy....', '.....yyyy.....', 'llllleeeelllll', 'eeeeebbbbeeeee', 'nnnnnbsbbnnnnn', 'nNnnnbbbbnNnnn'],

@@ -399,6 +399,7 @@ async function open(w, h, extra = {}) {
   await b.wait(400);
 
   section('log, world, help panels');
+  await H.tapSel('.fab.feedfab');      // the feed defaults to «only wars & peace»; this part needs the ordinary feed («Все»), see tests/ui3.test.mjs for the filter itself
   await E(() => { window.__god.setSpeed(1); });
   await E(() => window.__god.step(700));
   await b.wait(500);

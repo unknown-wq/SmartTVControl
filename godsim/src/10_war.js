@@ -1059,7 +1059,7 @@ const War = (() => {
       if (loser && kget(loser) && kget(winner)) {
         let ok = false;
         try { ok = !!Kingdoms.annex(loser, winner, 'vassal'); } catch (e) { ok = false; }
-        if (!ok) { const lk = kget(loser); if (lk && !lk.overlordId) { lk.overlordId = winner; lk.vassalSince = S.tick; Log.add('Королевство ' + kname(loser) + ' стало вассалом королевства ' + kname(winner), LOG.KINGDOM, -1, -1, winner); } }
+        if (!ok) { const lk = kget(loser); if (lk && !lk.overlordId) { lk.overlordId = winner; lk.vassalSince = S.tick; Log.add('Королевство ' + kname(loser) + ' стало вассалом королевства ' + kname(winner), LOG.PEACE, -1, -1, winner); } }
       }
     }
     revertControllers();

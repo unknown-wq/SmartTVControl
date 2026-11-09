@@ -861,7 +861,7 @@ section('alliances: make / break, truce, state, log texts, Bus, limits; no allia
   assert.ok(Diplomacy.allied(ka.id, kb.id)); assert.deepEqual(Diplomacy.alliesOf(ka.id), [kb.id]);
   const rel = Diplomacy.get(ka.id, kb.id); assert.equal(rel.allianceSince, S.tick); assert.ok(Diplomacy.opinion(ka.id, kb.id) > o0);
   assert.deepEqual(ev, [[ka.id, kb.id]]);
-  assert.ok(logsSince(ctx, logMark).some(e => e.msg === `Заключён союз между «${ka.name}» и «${kb.name}»` && e.kind === 'peace'));
+  assert.ok(logsSince(ctx, logMark).some(e => e.msg === `Заключён союз между «${ka.name}» и «${kb.name}»` && e.kind === 'kingdom'));
   assert.equal(Diplomacy.canDeclare(ka.id, kb.id).ok, false); assert.match(Diplomacy.canDeclare(ka.id, kb.id).reason, /союзник/);
   assert.equal(Diplomacy.relationsOf(ka.id).find(r => r.other === kb.id).state, Const.REL.ALLIANCE);
   assert.equal(Diplomacy.breakAlliance(ka.id, kb.id), true); assert.equal(Diplomacy.breakAlliance(ka.id, kb.id), false);

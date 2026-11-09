@@ -15,6 +15,9 @@ Source: `src/NN_*.js` (20 files, one shared scope) + `style.css` + `template.htm
 | **UI** | done | Dock with 5 tabs, brush slider, kingdom chips, event feed, inspectors, command mode («Командовать»: kingdom sheet with Война / Армии / Регионы, goal picking on the map, army selection by banner or card, hold / defend popup, peace conference), political map (borders, occupation stripes, fronts, army banners, order arrows, goal stars), culture map, menu (4 save slots + autosave, new world, auto-peace toggle), toasts, safe-area layout, landscape support. |
 | **Save / load** | done | Versioned, RLE + LZ packed, typed layers + column tables, checksum, rollback; loads are bit-identical (also in the middle of a war). |
 
+## Notification filter («Войны» / «Все»)
+A floating button at the top of the right-hand button column hides the noise: **«Войны»** (default) keeps only `war` and `peace` log kinds in the event feed (war declarations, occupations/liberations, peace deals, vassalisation by treaty); **«Все»** shows every event. The choice is stored in `localStorage` (`godsim.ui.feedWar`) and the full log panel opens on the matching chip («Войны» / «Все»). Alliances are logged as `kingdom` (diplomacy), not as `peace`. Test: `tests/ui3.test.mjs`.
+
 ## Approximated / simplified
 
 * Armies are a rally point that walks along an A* route; soldiers follow it with a formation offset. No unit micro, no naval invasions (landmass = connected via ≤ 2 tiles of shallows).
@@ -57,7 +60,7 @@ node tests/regions.test.mjs ; node tests/politics.test.mjs [--war=real] ; node t
 node tests/system.test.mjs [--quick] [--verbose] [--seeds=1,2,3] [--chaos=1,2,3 --chaosTicks=20000]
 node tests/long.mjs --seeds=1,2,3,4,5 --ticks=30000 [--par=3] [--json=/tmp/long]     # per-3000-tick tables of every world
 # browser (Playwright + headless Chromium; run ONE at a time, they are CPU sensitive):
-node tests/render.test.mjs ; node tests/render2.test.mjs ; node tests/ui.test.mjs ; node tests/ui2.test.mjs ; node tests/save.browser.mjs
+node tests/render.test.mjs ; node tests/render2.test.mjs ; node tests/ui.test.mjs ; node tests/ui2.test.mjs ; node tests/ui3.test.mjs ; node tests/save.browser.mjs
 node tests/playtest.mjs [--soak=90]                 # screenshots in /tmp/godsim-playtest
 node tests/perf.mjs [--seconds=12] [--throttle=4]   # frame cost split at 1500 units / 3 wars / x4
 ```

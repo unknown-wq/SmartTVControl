@@ -355,6 +355,7 @@ input[type=range].slider::-moz-range-thumb { width: 20px; height: 20px; border-r
   transition: transform .1s ease, box-shadow .15s ease, border-color .15s ease, background .15s ease;
 }
 .fab:active { transform: scale(.92); }
+.fab.feedfab { order: -1; }          /* notification filter sits at the top of the floating column (DOM order unchanged) */
 .fab canvas { margin-bottom: 1px; }
 .fab.on {
   color: #fff;
@@ -652,9 +653,9 @@ body.booting #splash { display: flex; }
   .splash-logo { font-size: 28px; }
   .splash-orb { margin: 12px auto 8px; }
 }
-@media (max-height: 520px) and (orientation: landscape) and (min-width: 700px) {
+@media (max-height: 520px) and (orientation: landscape) and (min-width: 560px) {
   #fabs { flex-direction: row; align-items: flex-end; }
-  #toasts { padding: 0 max(224px, var(--sr)) 0 max(12px, var(--sl)); }
+  #toasts { padding: 0 max(284px, var(--sr)) 0 max(12px, var(--sl)); }
   .zoom { flex-direction: row; width: auto; height: 50px; }
   .zoom button { width: 44px; height: 100%; }
   .zoom button + button { border-top: 0; border-left: 1px solid var(--line2); }

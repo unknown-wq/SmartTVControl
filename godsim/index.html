@@ -369,6 +369,7 @@ input[type=range].slider::-moz-range-thumb { width: 20px; height: 20px; border-r
   transition: transform .1s ease, box-shadow .15s ease, border-color .15s ease, background .15s ease;
 }
 .fab:active { transform: scale(.92); }
+.fab.feedfab { order: -1; }          /* notification filter sits at the top of the floating column (DOM order unchanged) */
 .fab canvas { margin-bottom: 1px; }
 .fab.on {
   color: #fff;
@@ -666,9 +667,9 @@ body.booting #splash { display: flex; }
   .splash-logo { font-size: 28px; }
   .splash-orb { margin: 12px auto 8px; }
 }
-@media (max-height: 520px) and (orientation: landscape) and (min-width: 700px) {
+@media (max-height: 520px) and (orientation: landscape) and (min-width: 560px) {
   #fabs { flex-direction: row; align-items: flex-end; }
-  #toasts { padding: 0 max(224px, var(--sr)) 0 max(12px, var(--sl)); }
+  #toasts { padding: 0 max(284px, var(--sr)) 0 max(12px, var(--sl)); }
   .zoom { flex-direction: row; width: auto; height: 50px; }
   .zoom button { width: 44px; height: 100%; }
   .zoom button + button { border-top: 0; border-left: 1px solid var(--line2); }
@@ -7415,7 +7416,7 @@ const Diplomacy = (() => {
     if (!rel || rel.state === REL.ALLIANCE) return false;
     rel.state = REL.ALLIANCE; rel.allianceSince = S.tick; rel.since = S.tick; rel.truceUntil = 0;
     addOpinion(a, b, 12, 'Союз заключён');
-    Log.add('Заключён союз между «' + ka.name + '» и «' + kb.name + '»', LOG.PEACE, -1, -1, ka.id);
+    Log.add('Заключён союз между «' + ka.name + '» и «' + kb.name + '»', LOG.KINGDOM, -1, -1, ka.id);
     Hist.add(ka, 'Союз с «' + kb.name + '»'); Hist.add(kb, 'Союз с «' + ka.name + '»');
     Bus.emit('allianceMade', ka, kb);
     return true;
@@ -7427,7 +7428,7 @@ const Diplomacy = (() => {
     rel.state = REL.PEACE; rel.allianceSince = 0; rel.since = S.tick;
     if (ka && kb) {
       addOpinion(a, b, -18, why || 'Союз расторгнут');
-      Log.add('Союз между «' + ka.name + '» и «' + kb.name + '» распался', LOG.PEACE, -1, -1, ka.id);
+      Log.add('Союз между «' + ka.name + '» и «' + kb.name + '» распался', LOG.KINGDOM, -1, -1, ka.id);
       Hist.add(ka, 'Союз с «' + kb.name + '» распался'); Hist.add(kb, 'Союз с «' + ka.name + '» распался');
       Bus.emit('allianceBroken', ka, kb);
     }
@@ -8926,7 +8927,7 @@ const War = (() => {
       if (loser && kget(loser) && kget(winner)) {
         let ok = false;
         try { ok = !!Kingdoms.annex(loser, winner, 'vassal'); } catch (e) { ok = false; }
-        if (!ok) { const lk = kget(loser); if (lk && !lk.overlordId) { lk.overlordId = winner; lk.vassalSince = S.tick; Log.add('Королевство ' + kname(loser) + ' стало вассалом королевства ' + kname(winner), LOG.KINGDOM, -1, -1, winner); } }
+        if (!ok) { const lk = kget(loser); if (lk && !lk.overlordId) { lk.overlordId = winner; lk.vassalSince = S.tick; Log.add('Королевство ' + kname(loser) + ' стало вассалом королевства ' + kname(winner), LOG.PEACE, -1, -1, winner); } }
       }
     }
     revertControllers();
@@ -14010,6 +14011,7 @@ const Sprites = (() => {
 
   const ICONS = {
     // ---- terrain tools ----
+    bell: ['.....yy.....', '....yyyy....', '...yywyyY...', '...ywyyyY...', '..yywyyyyY..', '..ywyyyyyY..', '..ywyyyyyY..', '.yywyyyyyyY.', '.ywyyyyyyyY.', 'yyyyyyyyyyYY', 'YYYYYYYYYYYY', '....oooo....', '.....oo.....'],
     crown: ['y.....y.....y', 'yy...yyy...yy', 'yyy.yyyyy.yyy', 'yyyyyyyyyyyyy', 'yYyyyyyyyyyYy', 'yyrYyybYyyYryy'.slice(0, 13), 'yYyYyYyYyYyYy', 'YYYYYYYYYYYYY'],
     raise: ['......yy......', '.....yyyy.....', '....yyyyyy....', '...yyyyyyyy...', '......yy......', '......yy......', '......yy......', '....llllll....', '..lleeeeeell..', '.leeeeeeeeeel.', 'nnnnnnnnnnnnnn', 'nNnnnNnnnnNnnn'],
     lower: ['......yy......', '......yy......', '......yy......', '...yyyyyyyy...', '....yyyyyy....', '.....yyyy.....', 'llllleeeelllll', 'eeeeebbbbeeeee', 'nnnnnbsbbnnnnn', 'nNnnnbbbbnNnnn'],
@@ -17196,6 +17198,7 @@ const UI = (() => {
   ];
   const RES_NAMES = ['', 'Дерево', 'Камень', 'Железо', 'Золото', 'Ягоды', 'Рыба'];
   const GOOD_NAMES = { food: 'Еда', wood: 'Дерево', stone: 'Камень', iron: 'Железо', gold: 'Золото' };
+  const FEED_WAR = { war: 1, peace: 1 };        // log kinds kept by the «only wars and peace» feed filter
   const LOG_FILTERS = [
     { id: 'all', name: 'Все', kinds: null },
     { id: 'war', name: 'Войны', kinds: ['war', 'peace'] },
@@ -17216,7 +17219,7 @@ const UI = (() => {
   let chipMap = new Map(), chipSig = '';
   let logPanel = null, statsPanel = null;
   const dockCache = { speed: -1, paused: null, year: -1, pop: [-1, -1, -1], kingdoms: -1, wars: -1 };
-  let prefs = { seen: {}, brush: 3 };
+  let prefs = { seen: {}, brush: 3, feedWar: true };   // feedWar: event feed shows only wars and peace (button at the top of the floating column)
 
   // ------------------------------------------------------------------ tiny helpers
   const $ = (id) => document.getElementById(id);
@@ -17586,8 +17589,33 @@ const UI = (() => {
     refs.paintLbl = el('span', '', 'Рука');
     refs.paintFab.appendChild(refs.paintLbl);
     box.appendChild(refs.paintFab);
+
+    // notification filter: «Войны» = feed shows only wars and peace, «Все» = every event (visually placed first in the column via CSS order)
+    refs.feedFab = btn('fab feedfab', 'Уведомления', () => setFeedWar(!prefs.feedWar, true));
+    refs.feedIcon = el('span', 'fi');
+    refs.feedFab.appendChild(refs.feedIcon);
+    refs.feedLbl = el('span', '', '');
+    refs.feedFab.appendChild(refs.feedLbl);
+    box.appendChild(refs.feedFab);
     syncMapFab();
     syncPaintFab();
+    syncFeedFab();
+  }
+  function syncFeedFab() {
+    const on = !!prefs.feedWar;
+    clear(refs.feedIcon);
+    refs.feedIcon.appendChild(ico(on ? 'war' : 'bell', 24));
+    setText(refs.feedLbl, on ? 'Войны' : 'Все');
+    refs.feedFab.classList.toggle('on', on);
+    refs.feedFab.setAttribute('aria-pressed', on ? 'true' : 'false');
+    refs.feedFab.setAttribute('aria-label', on ? 'Уведомления: только войны и мир' : 'Уведомления: все события');
+  }
+  function setFeedWar(on, announce) {
+    prefs.feedWar = !!on;
+    savePrefs();
+    applyFeedFilter();
+    syncFeedFab();
+    if (announce) toast(prefs.feedWar ? 'Уведомления: только войны и мир' : 'Уведомления: все события');
   }
   let zoomTarget = 0, zoomTapAt = 0;
   function zoomBy(f) {
@@ -17636,6 +17664,18 @@ const UI = (() => {
   // ------------------------------------------------------------------ event feed
   const FEED_LIFE = { birth: 4500, death: 5500, info: 5500 };
   const BIG_KIND = { war: 1, peace: 1, disaster: 1, kingdom: 1, rebel: 1, god: 1 };
+  function feedPass(e) { return !prefs.feedWar || FEED_WAR[e.kind] === 1; }
+  /** drop already queued / visible lines that the current filter hides */
+  function applyFeedFilter() {
+    if (!prefs.feedWar) return;
+    for (let i = feed.pending.length - 1; i >= 0; i--) if (!feedPass(feed.pending[i])) feed.pending.splice(i, 1);
+    for (let i = feed.items.length - 1; i >= 0; i--) {
+      const it = feed.items[i];
+      if (FEED_WAR[it.kind] === 1) continue;
+      if (it.node.parentNode) it.node.parentNode.removeChild(it.node);
+      feed.items.splice(i, 1);
+    }
+  }
   function flushFeed(now) {
     if (!feed.pending.length) return;
     const list = feed.pending.splice(0, feed.pending.length);
@@ -17651,7 +17691,7 @@ const UI = (() => {
     line.appendChild(el('span', '', e.msg));
     line.addEventListener('click', () => openLog());
     refs.feed.appendChild(line);
-    feed.items.push({ node: line, born: now, msg: e.msg, life: FEED_LIFE[e.kind] || 8000 });
+    feed.items.push({ node: line, born: now, msg: e.msg, kind: e.kind, life: FEED_LIFE[e.kind] || 8000 });
     while (feed.items.length > 4) { const old = feed.items.shift(); if (old.node.parentNode) old.node.parentNode.removeChild(old.node); }
   }
   function fadeFeed(now) {
@@ -17925,7 +17965,8 @@ const UI = (() => {
       '<h3>Осмотр</h3><ul>' +
       '<li>Тап без инструмента открывает карточку: здоровье и черты существа, склады города, отношения королевства.</li>' +
       '<li>Кнопка «На карте» показывает объект.</li>' +
-      '<li>Лента событий сверху: тап открывает полный журнал.</li></ul>';
+      '<li>Лента событий сверху: тап открывает полный журнал.</li>' +
+      '<li>Кнопка справа вверху столбца («Войны» / «Все») переключает ленту: только войны и мир или все события.</li></ul>';
     m.body.appendChild(a);
   }
 
@@ -17954,10 +17995,10 @@ const UI = (() => {
     const m = openModal({ title: 'Журнал', tall: true, onClose: () => { logPanel = null; } });
     const filters = el('div', 'filters');
     m.card.insertBefore(filters, m.body);
-    const lp = { m, filter: 'all', lastId: 0, count: 0 };
+    const lp = { m, filter: prefs.feedWar ? 'war' : 'all', lastId: 0, count: 0 };
     logPanel = lp;
     LOG_FILTERS.forEach((f) => {
-      const b = btn(f.id === 'all' ? 'on' : '', f.name, () => { lp.filter = f.id; [...filters.children].forEach((c) => c.classList.toggle('on', c === b)); rebuild(); });
+      const b = btn(f.id === lp.filter ? 'on' : '', f.name, () => { lp.filter = f.id; [...filters.children].forEach((c) => c.classList.toggle('on', c === b)); rebuild(); });
       b.textContent = f.name;
       filters.appendChild(b);
     });
@@ -17971,7 +18012,7 @@ const UI = (() => {
       const arr = S.log;
       lp.lastId = arr.length ? arr[arr.length - 1].id : 0;
       for (let i = arr.length - 1; i >= 0; i--) if (pass(arr[i])) { m.body.appendChild(logRow(arr[i])); lp.count++; }
-      if (!lp.count) m.body.appendChild(el('div', 'muted', 'Пока тихо. Мир ещё не успел ничего натворить.'));
+      if (!lp.count) m.body.appendChild(el('div', 'muted', lp.filter === 'war' ? 'Пока ни войн, ни мирных договоров.' : 'Пока тихо. Мир ещё не успел ничего натворить.'));
       m.body.scrollTop = 0;
     }
     lp.refresh = () => {
@@ -20000,7 +20041,7 @@ const UI = (() => {
     buildFabs();
     ready = true;
     selectTab(state.tab);
-    Bus.on('log', (e) => { if (ready) { feed.pending.push(e); if (feed.pending.length > 24) feed.pending.splice(0, feed.pending.length - 24); } });
+    Bus.on('log', (e) => { if (ready && feedPass(e)) { feed.pending.push(e); if (feed.pending.length > 24) feed.pending.splice(0, feed.pending.length - 24); } });
     document.addEventListener('click', (ev) => { const b = ev.target && ev.target.closest ? ev.target.closest('button') : null; if (b && ev.detail > 0) b.blur(); });
     // keyboard shortcuts (desktop testing)
     window.addEventListener('keydown', (ev) => {

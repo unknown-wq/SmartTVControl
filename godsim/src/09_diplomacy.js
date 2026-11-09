@@ -293,7 +293,7 @@ const Diplomacy = (() => {
     if (!rel || rel.state === REL.ALLIANCE) return false;
     rel.state = REL.ALLIANCE; rel.allianceSince = S.tick; rel.since = S.tick; rel.truceUntil = 0;
     addOpinion(a, b, 12, 'Союз заключён');
-    Log.add('Заключён союз между «' + ka.name + '» и «' + kb.name + '»', LOG.PEACE, -1, -1, ka.id);
+    Log.add('Заключён союз между «' + ka.name + '» и «' + kb.name + '»', LOG.KINGDOM, -1, -1, ka.id);
     Hist.add(ka, 'Союз с «' + kb.name + '»'); Hist.add(kb, 'Союз с «' + ka.name + '»');
     Bus.emit('allianceMade', ka, kb);
     return true;
@@ -305,7 +305,7 @@ const Diplomacy = (() => {
     rel.state = REL.PEACE; rel.allianceSince = 0; rel.since = S.tick;
     if (ka && kb) {
       addOpinion(a, b, -18, why || 'Союз расторгнут');
-      Log.add('Союз между «' + ka.name + '» и «' + kb.name + '» распался', LOG.PEACE, -1, -1, ka.id);
+      Log.add('Союз между «' + ka.name + '» и «' + kb.name + '» распался', LOG.KINGDOM, -1, -1, ka.id);
       Hist.add(ka, 'Союз с «' + kb.name + '» распался'); Hist.add(kb, 'Союз с «' + ka.name + '» распался');
       Bus.emit('allianceBroken', ka, kb);
     }
