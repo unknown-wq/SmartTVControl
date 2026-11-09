@@ -273,6 +273,32 @@ test('features: tree species 4..8, decals; flags: small symbols; icons: help', (
   assert.ok(Sprites.chimney(Const.B.HOUSE, 0, 2) !== null && Sprites.chimney(Const.B.FARM, 0, 1) === null);
 });
 
+test('FX frame cache: baked frames are flat bitmaps inside their boxes, repeated draws hit the cache, drawing is cheap', () => {
+  const D = Sprites.fxCache.desc;
+  for (const type in D) {
+    const d = D[type];
+    for (let vi = 0; vi < d.v; vi++) for (let fi = 0; fi < d.n; fi++) {
+      const c = Sprites.fxCache.bake(type, fi, vi, d.col ? '#e53935' : undefined);
+      assert.equal(c.width, d.w * d.res); assert.equal(c.height, d.h * d.res);
+      if (fi > 0 && fi < d.n - 1) assert.ok(opaque(c) > 0, type + ' frame ' + fi + ' is empty');
+      const bb = opaque(c) ? bbox(c) : null;
+      if (bb) assert.ok(bb.x0 >= 1 && bb.y0 >= 1 && bb.x1 <= c.width - 2 && bb.y1 <= c.height - 2, type + ' frame ' + fi + ' touches the edge of its box: ' + JSON.stringify(bb));
+    }
+  }
+  const S2 = Sprites.fxCache.SMK;
+  for (let kind = 0; kind < 4; kind++) for (let vi = 0; vi < 2; vi++) for (let fi = 0; fi < S2.n; fi++) { const c = Sprites.fxCache.smoke(kind, vi, fi); assert.equal(c.width, S2.w); const bb = opaque(c) ? bbox(c) : null; if (bb) assert.ok(bb.x0 >= 1 && bb.y0 >= 1 && bb.x1 <= c.width - 2 && bb.y1 <= c.height - 2, 'smoke ' + [kind, vi, fi]); }
+  // a full sweep warms the cache; a second sweep creates no canvas and no garbage
+  const ctx = recCtx(), types = Object.keys(D).concat(['smoke']);
+  const sweep = (now0) => { for (const type of types) for (let v = 0; v < 4; v++) for (let i = 0; i <= 20; i++) for (const scale of [6, 12, 24]) Sprites.drawFx(ctx, { type, x: 3 + v, y: 5 + v * 2, ttl: 1, age: i / 20, color: v & 1 ? '#e53935' : '#43a047' }, 50, 60, scale, now0 + i); };
+  for (let k = 0; k < 40; k++) sweep(1e6 + k * 1000);        // frame budget is per distinct "now": sweep long enough that everything is baked
+  const before = canvasesMade; sweep(9e6);
+  assert.equal(canvasesMade, before, 'second sweep must be all cache hits');
+  const t0 = performance.now(); let n = 0;
+  for (let k = 0; k < 2000; k++) { Sprites.drawFx(ctx, { type: k % 3 ? 'heart' : 'blood', x: 3, y: 5, ttl: 1, age: (k % 20) / 20 }, 50, 60, 16, 5e6); n++; }
+  const us = (performance.now() - t0) / n * 1000; console.log('       cached drawFx: ' + us.toFixed(2) + ' us/call (fake canvas)');
+  assert.ok(us < 60, 'cached drawFx should be a thin wrapper: ' + us);
+});
+
 test('render helpers: arrow, smoke, bird, fish - no NaN, no throw', () => {
   const ctx = recCtx(), before = badArgs;
   for (const S of [4, 8, 16, 24, 48]) for (let i = 0; i <= 10; i++) {

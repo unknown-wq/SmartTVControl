@@ -73,6 +73,25 @@
     return c;
   };
 
+  // every baked FX frame must stay inside its box (no content on the outermost 1-2 px ring) and show something; returns a report in window.__fxCheck
+  window.__fxCheckRun = () => {
+    const out = [], D = Sprites.fxCache.desc;
+    for (const type in D) {
+      const d = D[type]; let bad = 0, empty = 0, cells = 0;
+      for (let vi = 0; vi < d.v; vi++) for (let fi = 0; fi < d.n; fi++) for (const col of d.col ? ['#e53935', '#43a047'] : [undefined]) {
+        const c = Sprites.fxCache.bake(type, fi, vi, col), W = c.width, H = c.height, id = c.getContext('2d').getImageData(0, 0, W, H).data;
+        let any = 0, edge = 0;
+        for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (id[(y * W + x) * 4 + 3] > 0) { any++; if (x < 1 || y < 1 || x >= W - 1 || y >= H - 1) edge++; }
+        cells++; if (edge) bad++; if (!any && fi > 0 && fi < d.n - 1) empty++;
+      }
+      out.push({ type, cells, clipped: bad, empty });
+    }
+    const S2 = Sprites.fxCache.SMK; let sb = 0;
+    for (let kind = 0; kind < 4; kind++) for (let vi = 0; vi < 2; vi++) for (let fi = 0; fi < S2.n; fi++) { const c = Sprites.fxCache.smoke(kind, vi, fi), id = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; for (let y = 0; y < c.height; y++) for (let x = 0; x < c.width; x++) if (id[(y * c.width + x) * 4 + 3] > 0 && (x < 1 || y < 1 || x >= c.width - 1 || y >= c.height - 1)) sb++; }
+    out.push({ type: 'smoke-column', clipped: sb });
+    return out;
+  };
+
   SEC.units = (o) => {
     const race = (o && o.race) | 0, sc = 6, cw = 16 * sc + 2;
     const combos = [[0, 0], [1, 1], [2, 2], [3, 3]], stages = ['child', 'adult', 'elder'];

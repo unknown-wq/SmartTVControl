@@ -824,7 +824,7 @@ const Sprites = (() => {
 
   function buildUnit(race, stage, fr, tint, weapon, armor, look, pose, carry) {
     const fem = look > 3; look &= 3;
-    if (pose === 6) return sleeper(race, stage, tint, look).toCanvas();
+    if (pose === 6) return sleeper(race, stage, tint, look);
     const b = new Buf(TS, TS), P = unitPal(race, stage, look, tint), rg = RIG[race][stage];
     // pose geometry: body drop d, legs frame lfr (0 spread / 1 together), upper-body lean ox, hand offset (dx,dy), tool rotation
     let d = fr ? 0 : 1, lfr = fr, ox = 0, dx = 0, dy = 0, rot = 0;
@@ -942,13 +942,15 @@ const Sprites = (() => {
     b.outline();
     groundShadow(b, 8, 15, 4);
     for (const x of [4, 5, 10, 11]) if ((b.get(x, 14) >>> 24) < 40) b.set(x, 14, rgba(10, 8, 24, 55));
-    return b.toCanvas();
+    return b;
   }
 
   const tintIds = new Map();
   const unitCache = new Map();
   let tintCount = 0;
-  function unit(race, stage, frame, tint, weapon, armor, look, pose, carry) {
+  // normalised unit arguments of the last unitKey() call (module-level scratch so the hot path allocates nothing)
+  let nR = 0, nS = 0, nF = 0, nW = 0, nA = 0, nL = 0, nP = 0, nC = 0, nT = null;
+  function unitKey(race, stage, frame, tint, weapon, armor, look, pose, carry) {
     const st = stage === 'adult' ? 1 : stage === 'child' ? 0 : stage === 'elder' ? 2 : (stage | 0);
     let tid = 0;
     if (tint) { tid = tintIds.get(tint); if (tid === undefined) { tid = ++tintCount; tintIds.set(tint, tid); } }
@@ -960,11 +962,15 @@ const Sprites = (() => {
     const r = race === 1 ? 1 : race === 2 ? 2 : 0, lk = (look | 0) & 7;
     let f = frame & 1;
     if (po === 6) { w = 0; a = 0; f = 0; }
-    const key = (((((((tid * 8 + lk) * 3 + r) * 3 + st) * 2 + f) * 4 + w) * 4 + a) * 9 + po) * 6 + ca;
+    nR = r; nS = st; nF = f; nW = w; nA = a; nL = lk; nP = po; nC = ca; nT = tint || null;
+    return (((((((tid * 8 + lk) * 3 + r) * 3 + st) * 2 + f) * 4 + w) * 4 + a) * 9 + po) * 6 + ca;
+  }
+  function unit(race, stage, frame, tint, weapon, armor, look, pose, carry) {
+    const key = unitKey(race, stage, frame, tint, weapon, armor, look, pose, carry);
     const hit = unitCache.get(key);
     if (hit !== undefined) return hit;
     if (unitCache.size > 6000) unitCache.clear();
-    const c = buildUnit(r, st, f, tint, w, a, lk, po, ca);
+    const c = buildUnit(nR, nS, nF, nT, nW, nA, nL, nP, nC).toCanvas();
     unitCache.set(key, c);
     return c;
   }
@@ -2198,17 +2204,52 @@ const Sprites = (() => {
   const TAU = Math.PI * 2;
   function hf(n) { const s = Math.sin(n * 12.9898 + 78.233) * 43758.5453; return s - Math.floor(s); }
   function fxSeed(fx) { return fx._s !== undefined ? fx._s : (fx._s = ((fx.x * 73.13 + fx.y * 31.7) * 100) | 0); }
-  function R4(ctx, X, Y, u, gx, gy, w, h) { const pw = w * u, ph = h * u; ctx.fillRect(X + gx * u, Y + gy * u, pw < 1.4 ? 1.4 : pw, ph < 1.4 ? 1.4 : ph); }
+  /** minimal software canvas context: fillStyle (hex / rgba string), globalAlpha, fillRect (integer rects, source-over) -> flat RGBA bitmap, so baked frames are plain pixel canvases */
+  const colCache = new Map();
+  function parseCol(str) {
+    let c = colCache.get(str);
+    if (c === undefined) {
+      let r = 128, g = 128, b = 128, a = 1;
+      if (str.charCodeAt(0) === 35) { const h = hex(str); r = cr(h); g = cg(h); b = cb(h); }
+      else { const m = /rgba?\(([^)]*)\)/.exec(str); if (m) { const q = m[1].split(','); r = +q[0]; g = +q[1]; b = +q[2]; a = q.length > 3 ? +q[3] : 1; } }
+      c = [r, g, b, a]; colCache.set(str, c);
+    }
+    return c;
+  }
+  class SoftCtx {
+    constructor(w, h) { this.w = w; this.h = h; this.px = new Uint8ClampedArray(w * h * 4); this.globalAlpha = 1; this._c = [255, 255, 255, 1]; }
+    set fillStyle(v) { this._c = parseCol(v); }
+    get fillStyle() { return '#fff'; }
+    fillRect(x, y, w, h) {
+      const W = this.w, H = this.h, c = this._c, sa = this.globalAlpha * c[3], px = this.px;
+      let x0 = Math.round(x), y0 = Math.round(y), x1 = Math.round(x + w), y1 = Math.round(y + h);
+      if (x0 < 0) x0 = 0; if (y0 < 0) y0 = 0; if (x1 > W) x1 = W; if (y1 > H) y1 = H;
+      if (!(sa > 0)) return;
+      for (let j = y0; j < y1; j++) for (let i = x0, k = (j * W + x0) * 4; i < x1; i++, k += 4) {
+        const da = px[k + 3] / 255, ra = sa + da * (1 - sa);
+        if (ra <= 0) continue;
+        const wd = da * (1 - sa) / ra, ws = sa / ra;
+        px[k] = c[0] * ws + px[k] * wd; px[k + 1] = c[1] * ws + px[k + 1] * wd; px[k + 2] = c[2] * ws + px[k + 2] * wd; px[k + 3] = ra * 255;
+      }
+    }
+    toCanvas() { const cv = mkCanvas(this.w, this.h), g = cv.getContext('2d'), id = g.createImageData(this.w, this.h); id.data.set(this.px); g.putImageData(id, 0, 0); return cv; }
+  }
+  let SNAP = false;                                       // true while an FX frame is being baked into the cache: every rect snaps to whole pixels
+  function FR(ctx, x, y, w, h) {
+    if (SNAP) { const x1 = Math.round(x + w), y1 = Math.round(y + h); x = Math.round(x); y = Math.round(y); w = x1 - x; h = y1 - y; if (w < 1) w = 1; if (h < 1) h = 1; }
+    ctx.fillRect(x, y, w, h);
+  }
+  function R4(ctx, X, Y, u, gx, gy, w, h) { const pw = w * u, ph = h * u; FR(ctx, X + gx * u, Y + gy * u, pw < 1.4 ? 1.4 : pw, ph < 1.4 ? 1.4 : ph); }
   function snapU(v, u) { return Math.round(v / u) * u; }
   /** filled pixel-disc (rows) centred on X,Y with radius rad and pixel size ps */
   function discRows(ctx, X, Y, rad, ps) {
-    if (rad < ps * 0.5) { ctx.fillRect(X - ps * 0.5, Y - ps * 0.5, ps, ps); return; }
+    if (rad < ps * 0.5) { FR(ctx, X - ps * 0.5, Y - ps * 0.5, ps, ps); return; }
     const n = Math.ceil(rad / ps);
     for (let j = -n; j <= n; j++) {
       const yy = Math.abs(j + (j < 0 ? 0.5 : 0.5) - (j < 0 ? 0 : 0)) * ps;
       const dy = (j + 0.5) * ps; if (Math.abs(dy) > rad) continue;
       const hw = Math.sqrt(rad * rad - dy * dy), w = Math.max(1, Math.round(hw / ps)) * 2;
-      ctx.fillRect(X - w * ps * 0.5, Y + j * ps, w * ps, ps);
+      FR(ctx, X - w * ps * 0.5, Y + j * ps, w * ps, ps);
     }
   }
   function ringRows(ctx, X, Y, rad, th, ps) {
@@ -2218,13 +2259,13 @@ const Sprites = (() => {
       if (Math.abs(dy) > ro) continue;
       const wo = Math.sqrt(ro * ro - dy * dy), wi = Math.abs(dy) < ri ? Math.sqrt(ri * ri - dy * dy) : 0;
       const a = Math.max(ps, Math.round(wo / ps) * ps), b = Math.round(wi / ps) * ps;
-      if (wi <= 0) ctx.fillRect(X - a, Y + j * ps, a * 2, ps);
-      else { ctx.fillRect(X - a, Y + j * ps, Math.max(ps, a - b), ps); ctx.fillRect(X + b, Y + j * ps, Math.max(ps, a - b), ps); }
+      if (wi <= 0) FR(ctx, X - a, Y + j * ps, a * 2, ps);
+      else { FR(ctx, X - a, Y + j * ps, Math.max(ps, a - b), ps); FR(ctx, X + b, Y + j * ps, Math.max(ps, a - b), ps); }
     }
   }
   function pxLine(ctx, x0, y0, x1, y1, step, w) {
     const dx = x1 - x0, dy = y1 - y0, n = Math.max(1, Math.ceil(Math.max(Math.abs(dx), Math.abs(dy)) / step));
-    for (let i = 0; i <= n; i++) { const t = i / n; ctx.fillRect(x0 + dx * t - w * 0.5, y0 + dy * t - w * 0.5, w, w); }
+    for (let i = 0; i <= n; i++) { const t = i / n; FR(ctx, x0 + dx * t - w * 0.5, y0 + dy * t - w * 0.5, w, w); }
   }
   function ps14(rad, u) { return u * Math.max(1, Math.ceil(rad / 14 / u)); }
 
@@ -2430,7 +2471,7 @@ const Sprites = (() => {
       for (let i = 0; i < n; i++) {
         const ch = row[flip ? n - 1 - i : i]; if (ch === '.') continue;
         const c = pal[ch]; if (c === undefined) continue;
-        ctx.fillStyle = c; ctx.fillRect(X + i * u, Y + j * u, u + 0.4, u + 0.4);
+        ctx.fillStyle = c; FR(ctx, X + i * u, Y + j * u, u + 0.4, u + 0.4);
       }
     }
   }
@@ -2478,7 +2519,7 @@ const Sprites = (() => {
       const x0 = hx - 3.5 * hu, y0 = hy - 3 * hu;
       pixArt(ctx, x0 - hu, y0, hu, HEART, { r: '#5a0c24' }); pixArt(ctx, x0 + hu, y0, hu, HEART, { r: '#5a0c24' }); pixArt(ctx, x0, y0 - hu, hu, HEART, { r: '#5a0c24' }); pixArt(ctx, x0, y0 + hu, hu, HEART, { r: '#5a0c24' });
       pixArt(ctx, x0, y0, hu, HEART, { r: i === 1 ? '#ff7ab8' : '#ff4a78' });
-      ctx.fillStyle = '#ffd0e0'; ctx.fillRect(x0 + hu, y0 + hu, hu, hu);
+      ctx.fillStyle = '#ffd0e0'; FR(ctx, x0 + hu, y0 + hu, hu, hu);
     }
     for (let i = 0; i < 4; i++) {                           // twinkles
       const t = (p * 1.6 + hf(seed + i)) % 1, tw = Math.sin(t * Math.PI);
@@ -2501,7 +2542,7 @@ const Sprites = (() => {
   }
   function fxFlagRaise(ctx, fx, X, Y, S, u0, p, now) {
     const u = u0 * 1.4;       // occupation / founding: a banner in the kingdom colour is hoisted up a pole
-    const col = fx.color || '#e53935', c = hex(col), hi = '#' + ((1 << 24) | (cr(lt(c, 0.4)) << 16) | (cg(lt(c, 0.4)) << 8) | cb(lt(c, 0.4))).toString(16).slice(1), lo = '#' + ((1 << 24) | (cr(dk(c, 0.62)) << 16) | (cg(dk(c, 0.62)) << 8) | cb(dk(c, 0.62))).toString(16).slice(1);
+    const col = fx.color || '#e53935', cn = hex(col), c = col, hi = '#' + ((1 << 24) | (cr(lt(cn, 0.4)) << 16) | (cg(lt(cn, 0.4)) << 8) | cb(lt(cn, 0.4))).toString(16).slice(1), lo = '#' + ((1 << 24) | (cr(dk(cn, 0.62)) << 16) | (cg(dk(cn, 0.62)) << 8) | cb(dk(cn, 0.62))).toString(16).slice(1);
     const a = p > 0.85 ? (1 - p) / 0.15 : 1, rise = Math.min(1, p / 0.55), bx = X + S * 0.1, by = Y + S * 0.28, H = 22;
     ctx.globalAlpha = a * 0.5; ctx.fillStyle = '#000'; R4(ctx, bx, by, u, -4, -0.5, 9, 1.6);
     ctx.globalAlpha = a;
@@ -2545,11 +2586,74 @@ const Sprites = (() => {
     quake: fxQuake, dust: fxDust, spark: fxSpark, splash: fxSplash, blood: fxBlood, whisper: fxWhisper, ash: fxAsh, rain_drop: fxDrop,
     heart: fxHeart, soul: fxSoul, flagraise: fxFlagRaise, levelup: fxLevelUp,
   };
+  /* ---- FX frame cache: the small cosmetic effects (hit / heart / soul / smoke ...) are baked once per (type, animation frame, seed variant, colour)
+   *      into tiny canvases (pixel-snapped, drawn by the very same procedural code) and blitted with ONE drawImage per Fx afterwards.
+   *      Big / radius-dependent effects (explosion, lightning, heal, bless, plague, quake) stay procedural: they are rare. ---- */
+  // n frames over the lifetime, v seed variants, box (w,h) in 16-px-per-tile virtual px around the anchor (ax,ay), res = baked pixels per virtual px
+  const FXC = {
+    blood: { n: 6, v: 2, w: 36, h: 36, ax: 18, ay: 16, res: 1 },
+    spark: { n: 6, v: 2, w: 44, h: 44, ax: 22, ay: 22, res: 1 },
+    dust: { n: 6, v: 2, w: 52, h: 36, ax: 26, ay: 20, res: 1, col: true },
+    splash: { n: 6, v: 2, w: 40, h: 36, ax: 20, ay: 14, res: 1 },
+    ash: { n: 8, v: 2, w: 28, h: 28, ax: 14, ay: 10, res: 1 },
+    smoke: { n: 8, v: 3, w: 32, h: 44, ax: 16, ay: 36, res: 1 },
+    fire: { n: 8, v: 3, w: 32, h: 40, ax: 16, ay: 26, res: 1 },
+    whisper: { n: 8, v: 1, w: 44, h: 48, ax: 22, ay: 32, res: 1 },
+    rain_drop: { n: 4, v: 1, w: 20, h: 16, ax: 10, ay: 8, res: 1 },
+    heart: { n: 10, v: 2, w: 44, h: 52, ax: 22, ay: 44, res: 2 },
+    soul: { n: 10, v: 1, w: 32, h: 48, ax: 16, ay: 40, res: 2 },
+    levelup: { n: 10, v: 1, w: 52, h: 60, ax: 26, ay: 46, res: 2 },
+    flagraise: { n: 12, v: 1, w: 68, h: 56, ax: 28, ay: 42, res: 2, col: true },
+  };
+  let fxTi = 0;
+  for (const k in FXC) { const d = FXC[k]; d.type = k; d.ti = fxTi++; d.cv = new Map(); d.fn = FXD[k]; }
+  const fxColors = new Map();
+  function fxColorId(col) {                               // -> 0 for none, 1..15 per distinct colour string, -1 when the table is full (procedural fallback)
+    if (!col) return 0;
+    let id = fxColors.get(col);
+    if (id === undefined) { if (fxColors.size >= 15) return -1; id = fxColors.size + 1; fxColors.set(col, id); }
+    return id;
+  }
+  const fxTmp = { type: '', x: 0, y: 0, ttl: 1, age: 0, _s: 0, color: undefined, n: undefined, dx: 0, dy: 0, r: 2 };
+  function bakeFx(d, fx, fi, vi) {
+    const R = d.res, g = new SoftCtx(d.w * R, d.h * R);
+    fxTmp.type = d.type; fxTmp._s = 101 + vi * 7919; fxTmp.color = fx.color; fxTmp.n = fx.n; fxTmp.dx = 0; fxTmp.dy = 0;
+    SNAP = true;
+    try { d.fn(g, fxTmp, d.ax * R, d.ay * R, 16 * R, R, (fi + 0.5) / d.n, fi * 83 + vi * 17); } catch (e) { /* keep the empty frame */ }
+    SNAP = false;
+    return g.toCanvas();
+  }
+  let fxBudNow = -1, fxBud = 0;
+  /** true = handled (drawn, or skipped because this frame's baking budget is used up), false = use the procedural path */
+  function drawFxCached(ctx, d, fx, px, py, scale, p, now) {
+    const col = d.col ? fxColorId(fx.color) : 0;
+    if (col < 0) return false;
+    if (d.type === 'spark' && (fx.dx || fx.dy)) return false;
+    const nn = d.type === 'spark' ? (fx.n > 0 ? (fx.n > 12 ? 12 : fx.n | 0) : 8) : 0;
+    const seed = fxSeed(fx), vi = d.v === 1 ? 0 : (((seed % d.v) + d.v) % d.v);
+    let fi = (p * d.n) | 0; if (fi >= d.n) fi = d.n - 1;
+    const key = (((((d.ti * 16 + col) * 4 + vi) * 16 + fi) * 16) + nn);
+    let cv = d.cv.get(key);
+    if (cv === undefined) {
+      if (now !== fxBudNow) { fxBudNow = now; fxBud = 10; }
+      if (fxBud <= 0) return true;
+      fxBud--;
+      cv = bakeFx(d, fx, fi, vi);
+      d.cv.set(key, cv);
+    }
+    const k = scale / (16 * d.res);                        // device px per baked px
+    const dw = Math.round(d.w * d.res * k), dh = Math.round(d.h * d.res * k);
+    if (dw < 1 || dh < 1) return true;
+    ctx.drawImage(cv, Math.round(px - d.ax * scale / 16), Math.round(py - d.ay * scale / 16), dw, dh);
+    return true;
+  }
   function drawFx(ctx, fx, px, py, scale, now) {
     const f = FXD[fx.type];
     if (f === undefined) return;
     const ttl = fx.ttl > 0 ? fx.ttl : 0.8;
     let p = fx.age / ttl; p = p < 0 ? 0 : p > 1 ? 1 : p;
+    const d = FXC[fx.type];
+    if (d !== undefined && scale > 0 && drawFxCached(ctx, d, fx, px, py, scale, p, now || 0)) return;
     f(ctx, fx, px, py, scale, scale / 16, p, now || 0);
   }
 
@@ -2571,17 +2675,39 @@ const Sprites = (() => {
     ctx.fillStyle = '#8fd48a'; ctx.fillRect(X - dx * len - u * 0.8, Y - dy * len - u * 0.8, u * 1.4, u * 1.4);                    // fletching
     ctx.globalAlpha = 1;
   }
-  /** a rising smoke column: X,Y = chimney mouth (device px), S = px per tile, k = intensity (0.5 small / 1 big), dark = burning */
-  function drawSmoke(ctx, X, Y, S, now, seed, k, dark) {
-    const u = Math.max(1, S / 16), n = k > 0.7 ? 5 : 3;
+  /** a rising smoke column: X,Y = chimney mouth (device px), S = px per tile, k = intensity (0.5 small / 1 big), dark = burning.
+   *  16 baked animation frames per (kind, variant); one drawImage per column. */
+  const SMK_N = 16, SMK_W = 28, SMK_H = 40, SMK_AX = 10, SMK_AY = 34;
+  const smkCache = new Map();
+  function smokePeriod(vi) { return 2200 + hf(vi * 37 + 5) * 600; }
+  function bakeSmoke(kind, vi, fi) {
+    const g = new SoftCtx(SMK_W, SMK_H), seed = vi * 37 + 5, k = kind === 0 ? 0.5 : kind === 1 ? 0.7 : 1, dark = kind === 1 || kind === 2;
+    const n = k > 0.7 ? 5 : 3, u = 1, S = 16, X = SMK_AX, Y = SMK_AY, ph = (fi + 0.5) / SMK_N;
+    SNAP = true;
     for (let i = 0; i < n; i++) {
-      const t = ((now / (2200 + hf(seed) * 600)) + i / n + hf(seed + 3)) % 1;
+      const t = (ph + i / n + hf(seed + 3)) % 1;
       const sz = u * (1.6 + t * 3.2 * k), x = X + Math.sin(t * 5 + seed + i) * u * 1.4 * (0.4 + t) + t * u * 2.2, y = Y - t * S * (0.55 + 0.35 * k);
-      ctx.globalAlpha = Math.sin(Math.min(1, t * 1.15) * Math.PI) * (dark ? 0.7 : 0.55);
-      ctx.fillStyle = dark ? '#3c3a40' : '#b8b8c4'; ctx.fillRect(x - sz / 2, y - sz / 2, sz, sz);
-      ctx.fillStyle = dark ? '#5c5a62' : '#e4e4ee'; ctx.fillRect(x - sz / 2, y - sz / 2, sz * 0.55, sz * 0.55);
+      g.globalAlpha = Math.sin(Math.min(1, t * 1.15) * Math.PI) * (dark ? 0.7 : 0.55);
+      g.fillStyle = dark ? '#3c3a40' : '#b8b8c4'; FR(g, x - sz / 2, y - sz / 2, sz, sz);
+      g.fillStyle = dark ? '#5c5a62' : '#e4e4ee'; FR(g, x - sz / 2, y - sz / 2, sz * 0.55, sz * 0.55);
     }
-    ctx.globalAlpha = 1;
+    SNAP = false;
+    return g.toCanvas();
+  }
+  function drawSmoke(ctx, X, Y, S, now, seed, k, dark) {
+    const kind = dark ? (k > 0.85 ? 2 : 1) : (k > 0.7 ? 3 : 0), vi = seed & 1;
+    let ph = (now / smokePeriod(vi) + hf(seed)) % 1; if (ph < 0) ph += 1;
+    const fi = (ph * SMK_N) | 0, key = ((kind * 2 + vi) * SMK_N) + fi;
+    let cv = smkCache.get(key);
+    if (cv === undefined) {
+      if (now !== fxBudNow) { fxBudNow = now; fxBud = 10; }
+      if (fxBud <= 0) return;
+      fxBud--;
+      cv = bakeSmoke(kind, vi, fi); smkCache.set(key, cv);
+    }
+    const sc = S / 16, dw = Math.round(SMK_W * sc), dh = Math.round(SMK_H * sc);
+    if (dw < 1 || dh < 1) return;
+    ctx.drawImage(cv, Math.round(X - SMK_AX * sc), Math.round(Y - SMK_AY * sc), dw, dh);
   }
   const CHIM = [];                                        // [type*9 + race*3 + level-1] -> [x,y] smoke mouth on the 16x16 sprite
   (function () {
@@ -2592,26 +2718,43 @@ const Sprites = (() => {
   })();
   /** smoke mouth [x,y] (16x16 sprite grid) for buildings with a chimney / smoke hole, else null (shared array, do not modify) */
   function chimney(type, race, level) { const c = CHIM[(type | 0) * 9 + (race | 0) * 3 + ((level | 0) - 1)]; return c === undefined ? null : c; }
-  /** a small bird (flap = animation phase in ms), X,Y = centre */
+  /** a small bird (flapping, 2 baked frames), X,Y = centre */
+  const birdCache = [];
+  function bakeBird(up) {
+    const g = new SoftCtx(20, 12), R = (x, y, w, h) => g.fillRect((5 + x) * 2, (3 + y) * 2, w * 2, h * 2);
+    g.fillStyle = '#2a2e3c';
+    if (up) { R(-3, -1.5, 1, 1); R(-2, -0.5, 1, 1); R(-1, 0, 2, 1); R(1, -0.5, 1, 1); R(2, -1.5, 1, 1); }
+    else { R(-3, 0.5, 1, 1); R(-2, 0, 1, 1); R(-1, -0.5, 2, 1); R(1, 0, 1, 1); R(2, 0.5, 1, 1); }
+    g.fillStyle = '#e8ecf4'; R(-0.5, (up ? 0 : -0.5) + 0.4, 1, 0.6);
+    return g.toCanvas();
+  }
   function drawBird(ctx, X, Y, S, now, seed) {
     const u = Math.max(1, S / 12), up = (((now / 150) | 0) + seed) & 1;
     ctx.globalAlpha = 0.18; ctx.fillStyle = '#10141c'; ctx.fillRect(X - u * 2, Y + S * 0.9, u * 4, u * 1.2);
-    ctx.globalAlpha = 1; ctx.fillStyle = '#2a2e3c';
-    if (up) { ctx.fillRect(X - u * 3, Y - u * 1.5, u, u); ctx.fillRect(X - u * 2, Y - u * 0.5, u, u); ctx.fillRect(X - u, Y, u * 2, u); ctx.fillRect(X + u, Y - u * 0.5, u, u); ctx.fillRect(X + u * 2, Y - u * 1.5, u, u); }
-    else { ctx.fillRect(X - u * 3, Y + u * 0.5, u, u); ctx.fillRect(X - u * 2, Y, u, u); ctx.fillRect(X - u, Y - u * 0.5, u * 2, u); ctx.fillRect(X + u, Y, u, u); ctx.fillRect(X + u * 2, Y + u * 0.5, u, u); }
-    ctx.fillStyle = '#e8ecf4'; ctx.fillRect(X - u * 0.5, Y + (up ? 0 : -u * 0.5) + u * 0.4, u, u * 0.6);
-  }
-  /** a fish leaping out of the water: p = 0..1 over the jump, X,Y = water surface point */
-  function drawFishJump(ctx, X, Y, S, p) {
-    const u = Math.max(1, S / 14), a = p > 0.8 ? (1 - p) / 0.2 : 1;
-    const fx = X + (p - 0.5) * S * 0.7, fy = Y - Math.sin(p * Math.PI) * S * 0.5, ang = (0.5 - p) * 2.4;
-    ctx.globalAlpha = a; ctx.fillStyle = '#9fd0f4';
-    for (let i = -2; i <= 2; i++) ctx.fillRect(fx + i * u * Math.cos(ang), fy - i * u * Math.sin(ang), u * 1.4, u * 1.4);
-    ctx.fillStyle = '#e8f6ff'; ctx.fillRect(fx - u, fy - u * 0.4, u * 1.6, u * 0.9);
-    ctx.fillStyle = '#4a86c8'; ctx.fillRect(fx - u * 2.6 * Math.cos(ang), fy + u * 2.6 * Math.sin(ang), u * 1.4, u * 1.4);
-    ctx.fillStyle = '#e4f4ff';
-    for (const e of [0, 1]) { const q = e ? Math.max(0, (p - 0.75) / 0.25) : Math.min(1, p / 0.25); if (q <= 0 || q >= 1) continue; ctx.globalAlpha = (1 - q) * 0.85; ringRows(ctx, X + (e ? S * 0.35 : -S * 0.35), Y + u, S * (0.05 + 0.18 * q), Math.max(u, 1.2), u); }
     ctx.globalAlpha = 1;
+    const cv = birdCache[up] || (birdCache[up] = bakeBird(up));
+    ctx.drawImage(cv, Math.round(X - 5 * u), Math.round(Y - 3 * u), Math.round(10 * u), Math.round(6 * u));
+  }
+  /** a fish leaping out of the water: p = 0..1 over the jump, X,Y = water surface point (8 baked frames) */
+  const fishCache = [];
+  function bakeFish(fi) {
+    const g = new SoftCtx(28, 24), S = 32, u = S / 14, p = (fi + 0.5) / 8, X = 14, Y = 16, a = p > 0.8 ? (1 - p) / 0.2 : 1;
+    const fx = X + (p - 0.5) * S * 0.7, fy = Y - Math.sin(p * Math.PI) * S * 0.5, ang = (0.5 - p) * 2.4;
+    SNAP = true;
+    g.globalAlpha = a; g.fillStyle = '#9fd0f4';
+    for (let i = -2; i <= 2; i++) FR(g, fx + i * u * Math.cos(ang), fy - i * u * Math.sin(ang), u * 1.4, u * 1.4);
+    g.fillStyle = '#e8f6ff'; FR(g, fx - u, fy - u * 0.4, u * 1.6, u * 0.9);
+    g.fillStyle = '#4a86c8'; FR(g, fx - u * 2.6 * Math.cos(ang), fy + u * 2.6 * Math.sin(ang), u * 1.4, u * 1.4);
+    g.fillStyle = '#e4f4ff';
+    for (const e of [0, 1]) { const q = e ? Math.max(0, (p - 0.75) / 0.25) : Math.min(1, p / 0.25); if (q <= 0 || q >= 1) continue; g.globalAlpha = (1 - q) * 0.85; ringRows(g, X + (e ? S * 0.35 : -S * 0.35), Y + u, S * (0.05 + 0.18 * q), Math.max(u, 1.2), u); }
+    SNAP = false;
+    return g.toCanvas();
+  }
+  function drawFishJump(ctx, X, Y, S, p) {
+    p = p < 0 ? 0 : p > 1 ? 1 : p;
+    let fi = (p * 8) | 0; if (fi > 7) fi = 7;
+    const cv = fishCache[fi] || (fishCache[fi] = bakeFish(fi)), sc = S / 32;
+    ctx.drawImage(cv, Math.round(X - 14 * sc), Math.round(Y - 16 * sc), Math.round(28 * sc), Math.round(24 * sc));
   }
 
   /* ---------------- persistent effects (S.eff) ---------------- */
@@ -2735,6 +2878,8 @@ const Sprites = (() => {
 
   return {
     init, drawTile, tileAtlas, feature, decal, unit, building, landmark, flag, icon, drawFx, drawEffect, drawArrow, drawSmoke, drawBird, drawFishJump, chimney, stats,
+    /** test hooks: FX cache descriptors and a bake of one cached frame (used by tests/sprites_sheet bounds check) */
+    fxCache: { desc: FXC, bake(type, fi, vi, color) { return bakeFx(FXC[type], { color, n: undefined }, fi, vi); }, smoke(kind, vi, fi) { return bakeSmoke(kind, vi, fi); }, SMK: { n: SMK_N, w: SMK_W, h: SMK_H } },
     LOOKS, TILE_PX: TS,
     /** all icon keys known to the sprite sheet */
     iconKeys() { return Object.keys(IFN).concat(Object.keys(ICONS).filter(k => ICONS[k] && ICONS[k].length && !IFN[k])); },

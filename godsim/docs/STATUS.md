@@ -40,6 +40,9 @@ A floating button at the top of the right-hand button column hides the noise: **
 * Chromium, 390×844 @2×, software GL, 1500 units + 3 wars at ×4: 60 fps, frame CPU 1.8–3.6 ms (sim 0.5–0.8 + draw 1.2–2.9), sim keeps 40 ticks/s. With the CPU throttled ×4 (phone-like): 12–18 fps on the whole-map views, 35 fps at city zoom (sim ≈ 4–5 ms/tick, draw 6–15 ms); `Sim.adaptPerf` lowers thinking / effects automatically. Rare single frames of 30–65 ms when the political cache rebuilds after a region change.
 * `tests/playtest.mjs`: 90 s at ×4 (40.0 ticks/s, 59.9 fps avg), 20+ random god actions through the real dock, war whisper, then the full command flow in a real world: declare → goal tap → armies take and hold the region → menu save → menu load (state restored, UI clean) → army orders → peace conference → release; political map at 5 zoom levels; no page errors. 36 / 36 checks.
 
+## Art pass (procedural pixel art, still zero external assets)
+Units: 8 looks per race (bit 2 = female), faction colour on shields / pauldrons + war banner / cloaks for armoured units, poses (attack lunge, chop / mine / farm / build / fish / forage, sleep), carried goods (wood, stone, food, iron, gold), hit flash, level-up sparkle, visible arrows. Buildings: 16x24 landmarks (town hall, temple L2+, barracks L3), 3 construction stages, damaged / burnt / ruin looks, roof and colour variants, chimney smoke. Terrain: 5 new tree kinds, burnt-ground decals, reeds, lily pads, pebbles, water glints. FX: slash, hearts, soul wisps, banner raise, birds and leaping fish (`Render.ambient = false` turns the ambient set off). Perf rules: small FX are baked once per animation frame into bitmaps (one `drawImage` each), only the newest ~16 tiny / 32 fire+smoke FX are drawn, tiny cosmetic FX hide below zoom 7-9, carried goods appear from zoom 9, poses from zoom 7. Measured draw cost per frame at 1500 units + 3 wars (software GL): whole map 1.9 ms, zoom 8 political 3.4, zoom 14 city 2.2, zoom 6 culture 3.8 (the first art pass had 5.3 / 3.4 / 9.8 before this fix). Guard test: `node tests/fxperf.mjs`.
+
 ## Known issues
 
 * About half of all founded villages die out after 3000–9000 ticks (small expedition villages stop growing); harmless, but 25–32 «опустела» lines per world in the feed (stage-1 city logic).
@@ -60,7 +63,7 @@ node tests/regions.test.mjs ; node tests/politics.test.mjs [--war=real] ; node t
 node tests/system.test.mjs [--quick] [--verbose] [--seeds=1,2,3] [--chaos=1,2,3 --chaosTicks=20000]
 node tests/long.mjs --seeds=1,2,3,4,5 --ticks=30000 [--par=3] [--json=/tmp/long]     # per-3000-tick tables of every world
 # browser (Playwright + headless Chromium; run ONE at a time, they are CPU sensitive):
-node tests/render.test.mjs ; node tests/render2.test.mjs ; node tests/ui.test.mjs ; node tests/ui2.test.mjs ; node tests/ui3.test.mjs ; node tests/save.browser.mjs
+node tests/render.test.mjs ; node tests/render2.test.mjs ; node tests/ui.test.mjs ; node tests/ui2.test.mjs ; node tests/ui3.test.mjs ; node tests/fxperf.mjs ; node tests/save.browser.mjs
 node tests/playtest.mjs [--soak=90]                 # screenshots in /tmp/godsim-playtest
 node tests/perf.mjs [--seconds=12] [--throttle=4]   # frame cost split at 1500 units / 3 wars / x4
 ```

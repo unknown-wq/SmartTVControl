@@ -838,18 +838,21 @@ const Render = (() => {
       }
     }
     const li = u.id & 4095;                                            // level-up sparkle: remembers the last level seen per (hashed) unit id
-    if (lvId[li] === u.id) { if (u.hp < hpLast[li] - 0.01) hitUntil[li] = curNow + 130; hpLast[li] = u.hp; const lv = u.level | 0; if (lv > lvLv[li]) { lvLv[li] = lv; if (zoomCss >= 7 && ambientOn && Fx.list.length < 160) Fx.add('levelup', u.x, u.y, { ttl: 1.3 }); } else lvLv[li] = lv; }
+    if (lvId[li] === u.id) { if (u.hp < hpLast[li] - 0.01) hitUntil[li] = curNow + 130; hpLast[li] = u.hp; const lv = u.level | 0; if (lv > lvLv[li]) { lvLv[li] = lv; if (zoomCss >= 9 && ambientOn && Fx.list.length < 160) Fx.add('levelup', u.x, u.y, { ttl: 1.3 }); } else lvLv[li] = lv; }
     else { lvId[li] = u.id; lvLv[li] = u.level | 0; hpLast[li] = u.hp; hitUntil[li] = 0; }
-    let spr = Sprites.unit(u.race, stage, frame, kd ? kd.color : null, u.weapon, u.armor, (u.id & 3) | (u.sex === 1 ? 4 : 0), pose, carry);
-    const sick = u.sick > S.tick;
+    // fewer sprite variants when zoomed out (every distinct sprite is a separate texture for the browser): carried goods from zoom 9, poses from 7, women's hair / skirts from 8
+    const act = pose;
+    if (zoomCss < 9) carry = 0;
+    if (zoomCss < 7 && pose !== 6) pose = 0;
+    let spr = Sprites.unit(u.race, stage, frame, kd ? kd.color : null, u.weapon, u.armor, (u.id & 3) | (zoomCss >= 8 && u.sex === 1 ? 4 : 0), pose, carry);
     if (u.face < 0) spr = variantOf(spr, 0);
-    if (sick) spr = variantOf(spr, 2);
+    if (u.sick > S.tick) spr = variantOf(spr, 2);
     if (hitUntil[li] > curNow) spr = variantOf(spr, 3);                // hit flash
     const sz = 16 * texel;
     const sx = Math.round(ox + ix * Z), sy = Math.round(oy + (iy + 0.55) * Z);
     const left = sx - (sz >> 1), top = sy - sz;
     ctx.drawImage(spr, left, top, sz, sz);
-    if (pose === 1 && el < 4 && u.race === 2 && u.weapon > 0 && u.st && zoomCss >= 6) {        // archers: the arrow flies to the target
+    if (act === 1 && el < 4 && u.race === 2 && u.weapon > 0 && u.st && zoomCss >= 6) {        // archers: the arrow flies to the target
       const foe = S.units.get(u.st.tid);
       if (foe && foe !== u) Sprites.drawArrow(ctx, sx + (u.face < 0 ? -4 : 4) * texel, sy - 8 * texel, ox + foe.x * Z, oy + (foe.y + 0.1) * Z - 6 * texel, (el + curAlpha) / 4, Z);
     }
@@ -889,7 +892,7 @@ const Render = (() => {
     const sx = Math.round(ox + b.x * Z), sy = Math.round(oy + b.y * Z);
     const sz = Math.round(ox + (b.x + 1) * Z) - sx, sh = Math.round(oy + (b.y + 1) * Z) - sy;
     const flipH = b.type === Const.B.HOUSE && ((b.id >> 2) & 1) !== 0;
-    const lm = done ? Sprites.landmark(b.type, brace, blvl, bcol, bmode) : null;     // town halls / temples / castles are 1.5 tiles tall
+    const lm = (done && (b.type === Const.B.TOWNHALL || b.type === Const.B.TEMPLE || b.type === Const.B.BARRACKS)) ? Sprites.landmark(b.type, brace, blvl, bcol, bmode) : null;     // town halls / temples / castles are 1.5 tiles tall
     if (lm) { const lh = Math.round(sh * 1.5); ctx.drawImage(lm, sx, sy + sh - lh, sz, lh); }
     else {
       let spr = Sprites.building(b.type, brace, blvl, done, bcol, bmode, b.id % 3);          // houses / markets: 3 colour looks by id, half of them mirrored
@@ -912,11 +915,12 @@ const Render = (() => {
   function hookBus() {
     if (busHooked || typeof Bus === 'undefined' || !Bus || typeof Bus.on !== 'function') return;
     busHooked = true;
-    const seen = (x, y) => ambientOn && zoomCss >= 5 && x >= vx0 - 2 && x <= vx1 + 2 && y >= vy0 - 2 && y <= vy1 + 2 && Fx.list.length < 160;
-    Bus.on('unitBorn', u => { try { if (u && (u.motherId | 0) > 0 && seen(u.x, u.y)) Fx.add('heart', u.x, u.y, { ttl: 1.7 }); } catch (e) { /* cosmetic only */ } });
-    Bus.on('unitDied', (u, cause) => { try { if (u && (cause === 'age' || cause === 'disease' || cause === 'hunger') && seen(u.x, u.y)) Fx.add('soul', u.x, u.y, { ttl: 2.0 }); } catch (e) { /* cosmetic only */ } });
+    const seen = (x, y) => ambientOn && zoomCss >= 9 && x >= vx0 - 2 && x <= vx1 + 2 && y >= vy0 - 2 && y <= vy1 + 2 && Fx.list.length < 120;
+    let heartAt = 0, soulAt = 0;                             // throttles: at most ~6 hearts / 5 wisps a second
+    Bus.on('unitBorn', u => { try { if (u && (u.motherId | 0) > 0 && curNow - heartAt > 160 && seen(u.x, u.y)) { heartAt = curNow; Fx.add('heart', u.x, u.y, { ttl: 1.7 }); } } catch (e) { /* cosmetic only */ } });
+    Bus.on('unitDied', (u, cause) => { try { if (u && (cause === 'age' || cause === 'disease' || cause === 'hunger') && curNow - soulAt > 200 && seen(u.x, u.y)) { soulAt = curNow; Fx.add('soul', u.x, u.y, { ttl: 2.0 }); } } catch (e) { /* cosmetic only */ } });
     const flag = (c, kid) => { try { if (c && seen(c.x, c.y)) { const kd = kid ? S.kingdoms.get(kid) : null; Fx.add('flagraise', c.x + 0.5, c.y + 0.5, { ttl: 2.4, color: kd ? kd.color : '#e53935' }); } } catch (e) { /* cosmetic only */ } };
-    Bus.on('buildingDestroyed', (b, cause) => { try { if (b && b.done && S.tile && b.x >= 0 && b.y >= 0 && b.x < S.w && b.y < S.h && cause !== 'terrain') { ensureScorch(); const i = b.y * S.w + b.x; ruinT[i] = (((S.tick >> 3) + 1) & 0xffff) || 1; ruinV[i] = ((b.id & 3) << 1) | (cause === 'fire' || b.race === 1 ? 1 : 0); } } catch (e) { /* cosmetic only */ } });
+    Bus.on('buildingDestroyed', (b, cause) => { try { if (b && b.done && S.tile && b.x >= 0 && b.y >= 0 && b.x < S.w && b.y < S.h && cause !== 'terrain') { ensureScorch(); const i = b.y * S.w + b.x; if (ruinT[i] === 0) markN++; ruinT[i] = (((S.tick >> 3) + 1) & 0xffff) || 1; ruinV[i] = ((b.id & 3) << 1) | (cause === 'fire' || b.race === 1 ? 1 : 0); } } catch (e) { /* cosmetic only */ } });
     Bus.on('cityOccupied', (c, byKid) => flag(c, byKid));
     Bus.on('cityLiberated', c => flag(c, c && c.kingdomId));
     Bus.on('cityFounded', c => flag(c, c && c.kingdomId));
@@ -924,7 +928,7 @@ const Render = (() => {
 
   // ------------------------------------------------------------------ ambient life: birds crossing the map, fish leaping out of the sea (pure functions of time, no state)
   function drawAmbient(now) {
-    if (!ambientOn || zoomCss < 6) return;
+    if (!ambientOn || zoomCss < 8) return;
     const t = now / 1000, tile = tileArr;
     ctx.imageSmoothingEnabled = false;
     for (let k = 0; k < 6; k++) {
@@ -999,9 +1003,9 @@ const Render = (() => {
 
   // ------------------------------------------------------------------ fire + water glints (visible tile scan)
   let fireList = new Int32Array(512), fireN = 0;
-  let ruinT = null, ruinV = null;
+  let ruinT = null, ruinV = null, markN = 0;      // markN = tiles carrying a scorch / rubble mark (0 -> the per-tile mark checks are skipped)
   let scorch = null, scorchFor = null;            // Uint16 per tile: (tick >> 3) + 1 of the last time the tile was seen burning (burnt ground fades after ~3 min of game time)
-  function ensureScorch() { const n = S.w * S.h; if (scorchFor !== S.tile || !scorch || scorch.length !== n) { scorch = new Uint16Array(n); ruinT = new Uint16Array(n); ruinV = new Uint8Array(n); scorchFor = S.tile; } }
+  function ensureScorch() { const n = S.w * S.h; if (scorchFor !== S.tile || !scorch || scorch.length !== n) { scorch = new Uint16Array(n); ruinT = new Uint16Array(n); ruinV = new Uint8Array(n); scorchFor = S.tile; markN = 0; } }
   function drawTileLayer(now) {                 // scorch marks + water sparkles; burning tiles are queued for drawFlames()
     const showGlint = zoomCss >= 8;
     const fire = fireArr, gl = glint;
@@ -1017,8 +1021,10 @@ const Render = (() => {
           ctx.fillStyle = 'rgba(24,8,0,0.3)'; ctx.fillRect(sx, sy, sz, sz);
           if (fireN >= fireList.length) { const nl = new Int32Array(fireList.length * 2); nl.set(fireList); fireList = nl; }
           fireList[fireN++] = i;
+          if (sc[i] === 0) markN++;
           sc[i] = (st8 & 0xffff) || 1;
         } else {
+          if (markN > 0) {
           const sv = sc[i];
           if (sv !== 0) {                                     // burnt ground: soot decal that fades out
             const age = (st8 - sv) & 0xffff;
@@ -1027,7 +1033,7 @@ const Render = (() => {
               ctx.globalAlpha = age < 40 ? 1 : 1 - (age - 40) / 440;
               ctx.drawImage(Sprites.decal('scorch', (x * 7 + y * 13) & 3), sx, sy, sz, sz);
               ctx.globalAlpha = 1;
-            } else sc[i] = 0;
+            } else { sc[i] = 0; markN--; }
           }
           const rr = rT[i];
           if (rr !== 0) {                                      // rubble of a destroyed building, fades after ~8 game minutes
@@ -1039,7 +1045,8 @@ const Render = (() => {
                 ctx.drawImage(Sprites.decal('ruin', rV[i]), sx, sy, sz, sz);
                 ctx.globalAlpha = 1;
               }
-            } else rT[i] = 0;
+            } else { rT[i] = 0; markN--; }
+          }
           }
           if (showGlint) {
             const g = gl[i];
@@ -1076,11 +1083,22 @@ const Render = (() => {
 
   // ------------------------------------------------------------------ effects
   const NONE = [];
+  // small cosmetic effects come from baked frames (Sprites.drawFx): hidden when zoomed far out, and only the newest few are drawn (1 = tiny cosmetics, 2 = fire / smoke)
+  const FX_SMALL = { blood: 1, spark: 1, dust: 1, splash: 1, ash: 1, heart: 3, soul: 3, levelup: 3, whisper: 1, rain_drop: 1, smoke: 2, fire: 2 };
   function drawEffects(now) {
-    const fl = Fx.list;
+    const fl = Fx.list, far = zoomCss < 7, far3 = zoomCss < 9;
+    let c1 = 0, c2 = 0;
     for (let i = 0; i < fl.length; i++) {
-      const f = fl[i], m = (f.r || 2) + 3;
+      const f = fl[i], cls = FX_SMALL[f.type];
+      if (cls === undefined || (far && cls === 1) || (far3 && cls === 3) || f.x < vx0 - 4 || f.x > vx1 + 4 || f.y < vy0 - 6 || f.y > vy1 + 4) continue;
+      if (cls === 2) c2++; else c1++;
+    }
+    let skip1 = c1 - 16, skip2 = c2 - 32;
+    ctx.imageSmoothingEnabled = Z < 16;                     // baked frames: crisp when magnified, smooth when shrunk (Sprites.drawFx never touches the flag)
+    for (let i = 0; i < fl.length; i++) {
+      const f = fl[i], m = (f.r || 2) + 3, cls = FX_SMALL[f.type];
       if (f.x < vx0 - m || f.x > vx1 + m || f.y < vy0 - m - 3 || f.y > vy1 + m) continue;
+      if (cls !== undefined) { if ((far && cls === 1) || (far3 && cls === 3)) continue; if (cls === 2 ? skip2-- > 0 : skip1-- > 0) continue; }
       Sprites.drawFx(ctx, f, ox + f.x * Z, oy + f.y * Z, Z, now);
     }
     const eff = S.eff;
