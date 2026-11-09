@@ -8,7 +8,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const srcDir = path.join(root, 'src');
 
 // sim (DOM-free) module names the harness may stub if their file is missing or forced via opts.stub
-export const SIM_MODULES = ['World', 'Buildings', 'Cities', 'Units', 'Kingdoms', 'Diplomacy', 'War', 'Powers', 'Sim', 'Save'];
+export const SIM_MODULES = ['World', 'Buildings', 'Cities', 'Units', 'Regions', 'Kingdoms', 'Diplomacy', 'War', 'Powers', 'Sim', 'Save'];
 
 function stubModule(name) {
   const target = {};
@@ -61,7 +61,7 @@ export function stepN(ctx, n) {
   for (let i = 0; i < n; i++) {
     if (hasSim) { ctx.Sim.step(); continue; }
     ctx.S.tick++;
-    for (const m of ['World', 'Buildings', 'Units', 'Cities', 'Kingdoms', 'Diplomacy', 'War', 'Powers']) {
+    for (const m of ['World', 'Buildings', 'Units', 'Cities', 'Regions', 'Kingdoms', 'Diplomacy', 'War', 'Powers']) {
       const mod = ctx[m];
       if (mod && !mod.__stub && typeof mod.step === 'function') mod.step(ctx.S.tick);
     }

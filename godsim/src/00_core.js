@@ -28,7 +28,10 @@ const Const = (() => {
     // diplomacy relation state
     REL: { PEACE: 0, ALLIANCE: 1, WAR: 2 },
     // map render modes
-    MODE: { NORMAL: 0, BORDERS: 1, CULTURE: 2 },
+    MODE: { NORMAL: 0, BORDERS: 1 /* political: region owners/controllers, fronts */, CULTURE: 2 },
+    // army orders (HOI4-style)
+    ORDER: { ATTACK: 'attack', HOLD: 'hold', DEFEND: 'defend', RETREAT: 'retreat' },
+    REGION_SPACING: 10,      // target distance between region seeds (tiles) -> ~60-90 tiles per region
     // unit AI states (strings, JSON-safe). UI maps them to Russian labels.
     STATES: ['idle', 'wander', 'walk', 'gather', 'carry', 'build', 'farm', 'eat', 'sleep', 'flee', 'fight', 'army', 'mate', 'settle'],
     // log kinds (feed colors in UI)
@@ -158,9 +161,11 @@ const S = {
   owner: null,  // Int32Array  city id owning the tile (0 none)
   bld: null,    // Int32Array  building id on tile (0 none)
   fire: null,   // Uint8Array  remaining burn ticks (0 none)
+  region: null, // Int32Array  region id of every LAND tile (0 = water / unassigned). Owned by Regions.
   // ---- render dirty tracking (see S.markDirty) ----
   dirty: null, dirtyList: [], allDirty: true,
   ownerVer: 0,    // bump when S.owner or city→kingdom/culture mapping changes (border overlay rebuild)
+  regionVer: 0,   // bump when region owner/controller/claims/goals change (political overlay rebuild) — use S.touchRegions()
   landDirty: true, // landmass labels need recompute (World)
   // ---- entities (all JSON-safe plain objects; refer to each other by id) ----
   units: new Map(), cities: new Map(), kingdoms: new Map(), buildings: new Map(), armies: new Map(), wars: new Map(),
@@ -179,6 +184,7 @@ const S = {
     this.tile = new Uint8Array(n); this.elev = new Uint8Array(n);
     this.res = new Uint8Array(n); this.amt = new Uint8Array(n);
     this.owner = new Int32Array(n); this.bld = new Int32Array(n); this.fire = new Uint8Array(n);
+    this.region = new Int32Array(n); this.regions = new Map(); this.regionVer = 1;
     this.dirty = new Uint8Array(n); this.dirtyList = []; this.allDirty = true; this.ownerVer = 1; this.landDirty = true;
     this.units = new Map(); this.cities = new Map(); this.kingdoms = new Map(); this.buildings = new Map();
     this.armies = new Map(); this.wars = new Map(); this.rels = new Map();
@@ -202,4 +208,6 @@ const S = {
   },
   /** call after changing S.owner / city ownership / culture so the border overlay is rebuilt */
   touchOwner() { this.ownerVer++; },
+  /** call after any change of region owner / controller / claims / war goals (also bumps ownerVer) */
+  touchRegions() { this.regionVer++; this.ownerVer++; },
 };

@@ -19,7 +19,7 @@ let js = files.map(f => `/* ---- ${f} ---- */\n` + fs.readFileSync(path.join(src
 if (args.stubs) {
   const declRe = /^(?:const|let|var|function|class)\s+([A-Za-z_$][\w$]*)/gm;
   const declared = new Set([...js.matchAll(declRe)].map(m => m[1]));
-  const ALL = ['World', 'Buildings', 'Cities', 'Units', 'Kingdoms', 'Diplomacy', 'War', 'Powers', 'Sim', 'Save', 'Sprites', 'Render', 'Input', 'UI'];
+  const ALL = ['World', 'Buildings', 'Cities', 'Units', 'Regions', 'Kingdoms', 'Diplomacy', 'War', 'Powers', 'Sim', 'Save', 'Sprites', 'Render', 'Input', 'UI'];
   const stubs = ALL.filter(n => !declared.has(n)).map(n => `const ${n} = new Proxy({}, { get(t,k){ if(k in t) return t[k]; if(k==='__stub') return true; return () => undefined; }, set(t,k,v){ t[k]=v; return true; } });`);
   if (stubs.length) js += '\n\n/* ---- stubs ---- */\n' + stubs.join('\n');
 }
