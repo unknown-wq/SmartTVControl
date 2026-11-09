@@ -948,7 +948,7 @@ const UI = (() => {
     v.ups.push(() => {
       const f = frac();
       if (mid) { const o = Util.clamp(f, -1, 1); setStyle(fill, 'left', o < 0 ? (50 + o * 50) + '%' : '50%'); setStyle(fill, 'width', Math.abs(o) * 50 + '%'); }
-      else setStyle(fill, 'width', pct(f));
+      else setStyle(fill, 'transform', 'scaleX(' + (Math.round(Util.clamp(f, 0, 1) * 1000) / 1000) + ')');
       const c = color ? color(f) : null;
       if (c) setStyle(fill, 'backgroundColor', c);
       setText(tx, text());

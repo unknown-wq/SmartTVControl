@@ -72,8 +72,8 @@ async function open(w, h, extra = {}) {
   check('no page errors on boot', b.errors.length === 0, b.errors[0] || '');
   await H.shot('01_boot_powers');
 
-  // let the world develop so that cities / kingdoms exist for the inspector tests
-  await E(() => { window.__god.setSpeed(0); window.__god.step(1500); });
+  // deterministic world (the boot world uses a random seed), then let it develop so that cities / kingdoms exist for the inspector tests
+  await E(() => { window.__god.Main.newWorld({ seed: 7, w: 96, h: 96, populate: true }); window.__god.setSpeed(0); window.__god.step(1500); });
   await H.frames(3);
   const world = await E(() => { const g = window.__god; return { cities: g.S.cities.size, kingdoms: g.S.kingdoms.size, units: g.S.units.size, year: g.Util.year() }; });
   check('world developed (cities and kingdoms exist)', world.cities > 0 && world.kingdoms > 0, JSON.stringify(world));
@@ -159,7 +159,7 @@ async function open(w, h, extra = {}) {
   await H.tapSel('.tab[data-tab="life"]');
   await H.tapSel('#tools .tool[data-tool="human"]');
   await E(() => window.__god.UI.setBrush(2));
-  const land = await E(() => { const g = window.__god, S = g.S; for (let y = 10; y < S.h - 10; y++) for (let x = 10; x < S.w - 10; x++) { let ok = true; for (let dy = -4; dy <= 4 && ok; dy++) for (let dx = -4; dx <= 4; dx++) if (S.tile[(y + dy) * S.w + x + dx] !== g.Const.T.GRASS) { ok = false; break; } if (ok) return [x, y]; } return null; });
+  const land = await E(() => { const g = window.__god, S = g.S; for (let y = 10; y < S.h - 10; y++) for (let x = 10; x < S.w - 10; x++) { let ok = true; for (let dy = -3; dy <= 3 && ok; dy++) for (let dx = -3; dx <= 3; dx++) if (S.tile[(y + dy) * S.w + x + dx] !== g.Const.T.GRASS) { ok = false; break; } if (ok) return [x, y]; } return null; });
   check('found an open meadow for painting', !!land);
   await H.focus(land[0] + 0.5, land[1] + 0.5, 16);
   const mode0 = await E(() => window.__god.UI.state.mode);
@@ -365,6 +365,13 @@ async function open(w, h, extra = {}) {
   const tickLoaded = await E(() => window.__god.S.tick);
   check('load restores the saved tick', tickLoaded === tickSaved && tickMoved > tickSaved, `saved ${tickSaved}, moved ${tickMoved}, loaded ${tickLoaded}`);
   check('menu closes after loading', !(await H.exists('.m-card')));
+  // reset zoom: shows the whole map
+  await E(() => window.__god.Render.setCamera(40, 40, 20));
+  await H.tapSel('#btnMenu'); await b.wait(300);
+  await H.tapSel('.mbtn:nth-child(4)'); await b.wait(900);
+  const rz = await E(() => ({ z: window.__god.Render.cam.zoom, w: window.__god.S.w, vw: innerWidth, modal: !!document.querySelector('.m-card') }));
+  check('"Сброс масштаба" fits the whole map and closes the menu', rz.z * rz.w <= rz.vw + 2 && !rz.modal, `zoom ${rz.z.toFixed(2)} map ${rz.w} px-width ${(rz.z * rz.w).toFixed(0)} / ${rz.vw}`);
+  await H.shot('20b_reset_zoom');
   // new world: size 64, seed 777, no population
   await H.tapSel('#btnMenu'); await b.wait(300);
   await H.tapSel('.mbtn:nth-child(3)'); await b.wait(200);
