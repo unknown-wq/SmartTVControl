@@ -274,7 +274,17 @@ const Render = (() => {
     if (rk !== 0 && rk !== RES.FISH) {
       const hh = h >>> 3;
       let v;
-      if (rk === RES.TREE) { const a = amtArr[i]; v = a < 24 ? 0 : a < 44 ? 1 : ((hh & 1) ? 3 : 2); }
+      if (rk === RES.TREE) {
+        const a = amtArr[i];
+        if (a < 24) v = 0; else if (a < 44) v = 1;
+        else {                                             // mature tree: species by surroundings + hash (palm on the coast, snowy pine in the cold, birch / autumn / dead mixed in)
+          const q = hh & 15, cold = nN === T.MOUNTAIN || nE === T.MOUNTAIN || nS === T.MOUNTAIN || nW === T.MOUNTAIN || nN === T.SNOW || nE === T.SNOW || nS === T.SNOW || nW === T.SNOW, shore = nN === T.SAND || nE === T.SAND || nS === T.SAND || nW === T.SAND || nN === T.SHALLOW || nE === T.SHALLOW || nS === T.SHALLOW || nW === T.SHALLOW;
+          if (cold && q < 10) v = 7;
+          else if (shore && q < 9) v = 5;
+          else if (t === T.HILL && q > 12) v = 6;
+          else v = q < 6 ? 2 : q < 9 ? 3 : q < 12 ? 4 : q < 13 ? 8 : (q & 1) ? 3 : 2;
+        }
+      }
       else if (rk === RES.BERRY) v = amtArr[i] === 0 ? 9 : (hh & 3);
       else v = hh & 3;
       c.drawImage(Sprites.feature(rk, v), px, py);
@@ -402,9 +412,9 @@ const Render = (() => {
   }
 
   // ------------------------------------------------------------------ small sprite helpers (flip / tint variants)
-  const flipMap = new WeakMap(), darkMap = new WeakMap(), greenMap = new WeakMap();
+  const flipMap = new WeakMap(), darkMap = new WeakMap(), greenMap = new WeakMap(), whiteMap = new WeakMap();
   function variantOf(cv, kind) {
-    const map = kind === 0 ? flipMap : kind === 1 ? darkMap : greenMap;
+    const map = kind === 0 ? flipMap : kind === 1 ? darkMap : kind === 3 ? whiteMap : greenMap;
     let v = map.get(cv);
     if (v) return v;
     v = mk(cv.width, cv.height);
@@ -414,7 +424,7 @@ const Render = (() => {
     else {
       g.drawImage(cv, 0, 0);
       g.globalCompositeOperation = 'source-atop';
-      g.fillStyle = kind === 1 ? 'rgba(40,12,10,0.42)' : 'rgba(60,230,70,0.5)';
+      g.fillStyle = kind === 1 ? 'rgba(40,12,10,0.42)' : kind === 3 ? 'rgba(255,255,255,0.72)' : 'rgba(60,230,70,0.5)';
       g.fillRect(0, 0, cv.width, cv.height);
     }
     map.set(cv, v);
@@ -566,6 +576,7 @@ const Render = (() => {
     ctx = canvas.getContext('2d', { alpha: false });
     Sprites.init();
     if (!flames) buildFlames();
+    hookBus();
     const r = canvas.getBoundingClientRect();
     resize((r && r.width) || window.innerWidth || 390, (r && r.height) || window.innerHeight || 844, window.devicePixelRatio || 1);
     if (S.w) { const cam = api.cam; cam.x = S.w / 2; cam.y = S.h / 2; cam.zoom = Math.max(minZoom() * 1.6, 7); clampCam(); }
@@ -800,23 +811,47 @@ const Render = (() => {
     ctx.globalAlpha = 1;
   }
 
+  const lvId = new Int32Array(4096), lvLv = new Uint8Array(4096), hpLast = new Float32Array(4096), hitUntil = new Float64Array(4096);
   function drawUnitSprite(u, k) {
     const ix = itX[k], iy = itY[k] - 0.4;
     const kd = u.kingdomId ? S.kingdoms.get(u.kingdomId) : null;
     const moving = (u.x - u.px) * (u.x - u.px) + (u.y - u.py) * (u.y - u.py) > 1e-6;
-    const frame = moving ? (((curNow / 180 + u.id) | 0) & 1) : 0;
+    let frame = moving ? (((curNow / 180 + u.id) | 0) & 1) : 1;       // idle = the upright "passing" pose
     const stage = stageOf(u);
-    let spr = Sprites.unit(u.race, stage, frame, kd ? kd.color : null, u.weapon, u.armor, u.id & 3);
+    // pose (attack / work / sleep) + carried goods from the unit state; all cheap numeric compares
+    let pose = 0, carry = 0, el = 99;
+    const stt = u.state;
+    if (stt === 'sleep') pose = 6;
+    else {
+      const cdl = u.cd - S.tick;                                         // > 0 for a few ticks after a strike
+      if (cdl > 0 && (stt === 'fight' || stt === 'army')) {
+        el = (u.race === 2 && u.weapon > 0 ? 12 : 8) - cdl;             // ticks since the blow
+        if (el < 5) { pose = 1; frame = el < 2 ? 1 : 0; }
+      }
+      if (pose === 0) {
+        if ((stt === 'gather' || stt === 'build' || stt === 'farm') && u.st && u.st.ph === 'work') {
+          const jt = u.job ? u.job.type : '';
+          pose = jt === 'chop' ? 2 : jt === 'mine' ? 3 : jt === 'farm' ? 4 : jt === 'build' ? 5 : jt === 'fish' ? 7 : jt === 'forage' ? 8 : 0;
+          if (pose) frame = ((curNow / 300 + u.id) | 0) & 1;
+        }
+        if (pose === 0 && u.carry) { const cr = u.carry; carry = cr === 'wood' ? 1 : cr === 'stone' ? 2 : cr === 'food' ? 3 : cr === 'iron' ? 4 : cr === 'gold' ? 5 : 0; }
+      }
+    }
+    const li = u.id & 4095;                                            // level-up sparkle: remembers the last level seen per (hashed) unit id
+    if (lvId[li] === u.id) { if (u.hp < hpLast[li] - 0.01) hitUntil[li] = curNow + 130; hpLast[li] = u.hp; const lv = u.level | 0; if (lv > lvLv[li]) { lvLv[li] = lv; if (zoomCss >= 7 && ambientOn && Fx.list.length < 160) Fx.add('levelup', u.x, u.y, { ttl: 1.3 }); } else lvLv[li] = lv; }
+    else { lvId[li] = u.id; lvLv[li] = u.level | 0; hpLast[li] = u.hp; hitUntil[li] = 0; }
+    let spr = Sprites.unit(u.race, stage, frame, kd ? kd.color : null, u.weapon, u.armor, (u.id & 3) | (u.sex === 1 ? 4 : 0), pose, carry);
     const sick = u.sick > S.tick;
     if (u.face < 0) spr = variantOf(spr, 0);
     if (sick) spr = variantOf(spr, 2);
+    if (hitUntil[li] > curNow) spr = variantOf(spr, 3);                // hit flash
     const sz = 16 * texel;
     const sx = Math.round(ox + ix * Z), sy = Math.round(oy + (iy + 0.55) * Z);
     const left = sx - (sz >> 1), top = sy - sz;
     ctx.drawImage(spr, left, top, sz, sz);
-    if (zoomCss >= 9 && u.carry) {
-      const c = CARRY_COL[u.carry];
-      if (c) { ctx.fillStyle = c; const s2 = Math.max(2, texel * 2); ctx.fillRect(sx + (u.face < 0 ? -5 : 3) * texel, sy - 7 * texel, s2, s2); }
+    if (pose === 1 && el < 4 && u.race === 2 && u.weapon > 0 && u.st && zoomCss >= 6) {        // archers: the arrow flies to the target
+      const foe = S.units.get(u.st.tid);
+      if (foe && foe !== u) Sprites.drawArrow(ctx, sx + (u.face < 0 ? -4 : 4) * texel, sy - 8 * texel, ox + foe.x * Z, oy + (foe.y + 0.1) * Z - 6 * texel, (el + curAlpha) / 4, Z);
     }
     if (u.burning > S.tick && flames) drawFlame(sx, sy - 2 * texel, Math.max(8, Math.round(sz * 0.8)), ((curNow / 110) | 0) + u.id);
     if (u.state === 'sleep') drawZ(sx + 3 * texel, top + 3 * texel, Math.max(1, Math.round(texel * 0.8)), curNow, u.id);
@@ -840,19 +875,74 @@ const Render = (() => {
     }
   }
 
+  let ambientOn = true;                                      // chimney smoke, birds, jumping fish (Render.ambient = false switches them off)
   function drawBuildingSprite(b) {
     const city = S.cities.get(b.cityId);
     const kd = city && city.kingdomId ? S.kingdoms.get(city.kingdomId) : null;
-    let spr = Sprites.building(b.type, city ? city.race : 0, b.level || 1, !!b.done, kd ? kd.color : null);
-    const dmg = b.maxHp > 0 ? b.hp / b.maxHp : 1;
-    if (b.done && dmg < 0.55) spr = variantOf(spr, 1);
+    const done = !!b.done, bcol = kd ? kd.color : null, brace = city ? city.race : 0;
+    let blvl = b.level || 1;
+    if (b.type === Const.B.FARM) blvl = 1 + (((S.tick / 420) | 0) + b.id) % 3;                // crop growth stage cycles: sprouts -> green -> ripe
+    // sprite state: finished -> 0 normal / 1 damaged / 2 burning; unfinished -> construction stage 0..2 from the progress
+    let bmode = 0, dmg = 1;
+    if (done) { dmg = b.maxHp > 0 ? b.hp / b.maxHp : 1; bmode = (fireArr && fireArr[b.y * W + b.x] > 0) ? 2 : dmg < 0.55 ? 1 : 0; }
+    else { const pr = b.progress || 0; bmode = pr < 0.34 ? 0 : pr < 0.67 ? 1 : 2; }
     const sx = Math.round(ox + b.x * Z), sy = Math.round(oy + b.y * Z);
     const sz = Math.round(ox + (b.x + 1) * Z) - sx, sh = Math.round(oy + (b.y + 1) * Z) - sy;
-    ctx.drawImage(spr, sx, sy, sz, sh);
+    const flipH = b.type === Const.B.HOUSE && ((b.id >> 2) & 1) !== 0;
+    const lm = done ? Sprites.landmark(b.type, brace, blvl, bcol, bmode) : null;     // town halls / temples / castles are 1.5 tiles tall
+    if (lm) { const lh = Math.round(sh * 1.5); ctx.drawImage(lm, sx, sy + sh - lh, sz, lh); }
+    else {
+      let spr = Sprites.building(b.type, brace, blvl, done, bcol, bmode, b.id % 3);          // houses / markets: 3 colour looks by id, half of them mirrored
+      if (flipH) spr = variantOf(spr, 0);
+      ctx.drawImage(spr, sx, sy, sz, sh);
+    }
+    if (done && ambientOn && zoomCss >= 9) {                 // chimney smoke, smouldering / burning damage
+      if (bmode === 0) { const ch = Sprites.chimney(b.type, brace, blvl); if (ch !== null && (b.id % 5) < 3) Sprites.drawSmoke(ctx, sx + (flipH ? 15 - ch[0] : ch[0]) / 16 * sz, sy + ch[1] / 16 * sh, Z, curNow, b.id, 0.5, false); }
+      else { Sprites.drawSmoke(ctx, sx + sz * 0.5, sy + sh * (lm ? 0.05 : 0.25), Z, curNow, b.id, bmode === 2 ? 1 : 0.7, true); if (dmg < 0.3 && flames) drawFlame(sx + (sz >> 1) + Math.round(sz * 0.15), sy + sh - Math.round(sh * 0.25), Math.round(sz * 0.5), ((curNow / 120) | 0) + b.id); }
+    }
     if (!b.done && zoomCss >= 7) {
       const bw = Math.round(sz * 0.76), bh = Math.max(2, Math.round(Z * 0.09)), bx = sx + ((sz - bw) >> 1), by = sy + sh - bh - Math.max(1, Math.round(Z * 0.04));
       ctx.fillStyle = 'rgba(8,8,16,0.75)'; ctx.fillRect(bx - 1, by - 1, bw + 2, bh + 2);
       ctx.fillStyle = '#ffd23c'; ctx.fillRect(bx, by, Math.max(1, Math.round(bw * clamp(b.progress || 0, 0, 1))), bh);
+    }
+  }
+
+  // ------------------------------------------------------------------ cosmetic events (hearts at births, wisps at deaths, banners at occupation / founding)
+  let busHooked = false;
+  function hookBus() {
+    if (busHooked || typeof Bus === 'undefined' || !Bus || typeof Bus.on !== 'function') return;
+    busHooked = true;
+    const seen = (x, y) => ambientOn && zoomCss >= 5 && x >= vx0 - 2 && x <= vx1 + 2 && y >= vy0 - 2 && y <= vy1 + 2 && Fx.list.length < 160;
+    Bus.on('unitBorn', u => { try { if (u && (u.motherId | 0) > 0 && seen(u.x, u.y)) Fx.add('heart', u.x, u.y, { ttl: 1.7 }); } catch (e) { /* cosmetic only */ } });
+    Bus.on('unitDied', (u, cause) => { try { if (u && (cause === 'age' || cause === 'disease' || cause === 'hunger') && seen(u.x, u.y)) Fx.add('soul', u.x, u.y, { ttl: 2.0 }); } catch (e) { /* cosmetic only */ } });
+    const flag = (c, kid) => { try { if (c && seen(c.x, c.y)) { const kd = kid ? S.kingdoms.get(kid) : null; Fx.add('flagraise', c.x + 0.5, c.y + 0.5, { ttl: 2.4, color: kd ? kd.color : '#e53935' }); } } catch (e) { /* cosmetic only */ } };
+    Bus.on('buildingDestroyed', (b, cause) => { try { if (b && b.done && S.tile && b.x >= 0 && b.y >= 0 && b.x < S.w && b.y < S.h && cause !== 'terrain') { ensureScorch(); const i = b.y * S.w + b.x; ruinT[i] = (((S.tick >> 3) + 1) & 0xffff) || 1; ruinV[i] = ((b.id & 3) << 1) | (cause === 'fire' || b.race === 1 ? 1 : 0); } } catch (e) { /* cosmetic only */ } });
+    Bus.on('cityOccupied', (c, byKid) => flag(c, byKid));
+    Bus.on('cityLiberated', c => flag(c, c && c.kingdomId));
+    Bus.on('cityFounded', c => flag(c, c && c.kingdomId));
+  }
+
+  // ------------------------------------------------------------------ ambient life: birds crossing the map, fish leaping out of the sea (pure functions of time, no state)
+  function drawAmbient(now) {
+    if (!ambientOn || zoomCss < 6) return;
+    const t = now / 1000, tile = tileArr;
+    ctx.imageSmoothingEnabled = false;
+    for (let k = 0; k < 6; k++) {
+      const wx = ((t * (0.8 + (k % 3) * 0.3) + k * 41.7) % (W + 30)) - 15, wy = H * (0.1 + 0.8 * ((k * 0.6180339) % 1)) + Math.sin(t * 0.3 + k * 2.1) * 3;
+      const bx = ox + wx * Z, by = oy + wy * Z;
+      if (bx < -30 || by < -30 || bx > cw + 30 || by > ch + 30) continue;
+      Sprites.drawBird(ctx, Math.round(bx), Math.round(by), Z, now, k);
+    }
+    if (!tile) return;
+    const cx0 = (vx0 / 6) | 0, cx1 = (vx1 / 6) | 0, cy0 = (vy0 / 6) | 0, cy1 = (vy1 / 6) | 0, tb = Math.floor(t / 2.4), pc = (t / 2.4) - tb;
+    if (pc < 0.3 && (cx1 - cx0 + 1) * (cy1 - cy0 + 1) < 160) {
+      for (let cy = cy0; cy <= cy1; cy++) for (let cx = cx0; cx <= cx1; cx++) {
+        const h = ihash(cx, cy, tb + 977);
+        if ((h & 15) !== 0) continue;
+        const fx = cx * 6 + ((h >>> 4) % 6), fy = cy * 6 + ((h >>> 10) % 6);
+        if (fx < vx0 || fx >= vx1 || fy < vy0 || fy >= vy1 || tile[fy * W + fx] !== T.DEEP) continue;
+        Sprites.drawFishJump(ctx, ox + (fx + 0.5) * Z, oy + (fy + 0.5) * Z, Z, pc / 0.3);
+      }
     }
   }
 
@@ -909,10 +999,15 @@ const Render = (() => {
 
   // ------------------------------------------------------------------ fire + water glints (visible tile scan)
   let fireList = new Int32Array(512), fireN = 0;
+  let ruinT = null, ruinV = null;
+  let scorch = null, scorchFor = null;            // Uint16 per tile: (tick >> 3) + 1 of the last time the tile was seen burning (burnt ground fades after ~3 min of game time)
+  function ensureScorch() { const n = S.w * S.h; if (scorchFor !== S.tile || !scorch || scorch.length !== n) { scorch = new Uint16Array(n); ruinT = new Uint16Array(n); ruinV = new Uint8Array(n); scorchFor = S.tile; } }
   function drawTileLayer(now) {                 // scorch marks + water sparkles; burning tiles are queued for drawFlames()
     const showGlint = zoomCss >= 8;
     const fire = fireArr, gl = glint;
     const fz = Math.max(1, Z / 16);
+    ensureScorch();
+    const sc = scorch, rT = ruinT, rV = ruinV, bldA = S.bld, st8 = (S.tick >> 3) + 1;
     fireN = 0;
     for (let y = vy0; y < vy1; y++) {
       let i = y * W + vx0;
@@ -922,14 +1017,45 @@ const Render = (() => {
           ctx.fillStyle = 'rgba(24,8,0,0.3)'; ctx.fillRect(sx, sy, sz, sz);
           if (fireN >= fireList.length) { const nl = new Int32Array(fireList.length * 2); nl.set(fireList); fireList = nl; }
           fireList[fireN++] = i;
-        } else if (showGlint) {
-          const g = gl[i];
-          if (g !== 0) {
-            const p = ((now / 900) + g * 0.0617) % 1;
-            if (p < 0.22) {
-              ctx.globalAlpha = Math.sin(p / 0.22 * Math.PI) * 0.9;
-              ctx.fillStyle = '#ffffff';
-              ctx.fillRect(Math.round(ox + (x + ((g & 15) / 16)) * Z), Math.round(oy + (y + ((g >> 4) / 16)) * Z), Math.max(2, Math.round(fz * 2)), Math.max(1, Math.round(fz)));
+          sc[i] = (st8 & 0xffff) || 1;
+        } else {
+          const sv = sc[i];
+          if (sv !== 0) {                                     // burnt ground: soot decal that fades out
+            const age = (st8 - sv) & 0xffff;
+            if (age < 480) {
+              const sx = Math.round(ox + x * Z), sy = Math.round(oy + y * Z), sz = Math.round(ox + (x + 1) * Z) - sx;
+              ctx.globalAlpha = age < 40 ? 1 : 1 - (age - 40) / 440;
+              ctx.drawImage(Sprites.decal('scorch', (x * 7 + y * 13) & 3), sx, sy, sz, sz);
+              ctx.globalAlpha = 1;
+            } else sc[i] = 0;
+          }
+          const rr = rT[i];
+          if (rr !== 0) {                                      // rubble of a destroyed building, fades after ~8 game minutes
+            const age = (st8 - rr) & 0xffff;
+            if (age < 600) {
+              if (!bldA[i]) {
+                const sx = Math.round(ox + x * Z), sy = Math.round(oy + y * Z), sz = Math.round(ox + (x + 1) * Z) - sx;
+                ctx.globalAlpha = age < 300 ? 1 : 1 - (age - 300) / 300;
+                ctx.drawImage(Sprites.decal('ruin', rV[i]), sx, sy, sz, sz);
+                ctx.globalAlpha = 1;
+              }
+            } else rT[i] = 0;
+          }
+          if (showGlint) {
+            const g = gl[i];
+            if (g !== 0) {
+              const p = ((now / 900) + g * 0.0617) % 1;
+              if (p < 0.22) {
+                const k = Math.sin(p / 0.22 * Math.PI), gx = Math.round(ox + (x + ((g & 15) / 16)) * Z), gy = Math.round(oy + (y + ((g >> 4) / 16)) * Z);
+                ctx.globalAlpha = k * 0.9;
+                ctx.fillStyle = '#ffffff';
+                const u1 = Math.max(1, Math.round(fz));
+                ctx.fillRect(gx, gy, Math.max(2, Math.round(fz * 2)), u1);
+                if (zoomCss >= 12 && k > 0.55) {                 // 4-point star at the peak of the twinkle
+                  ctx.fillRect(gx + (u1 >> 1), gy - u1, u1, u1 * 3);
+                  ctx.globalAlpha = k * 0.45; ctx.fillRect(gx - u1, gy, u1 * 4, u1);
+                }
+              }
             }
           }
         }
@@ -1641,14 +1767,46 @@ const Render = (() => {
         ctx.globalAlpha = 1; ctx.lineCap = 'butt';
       }
     }
+    // UI war flow (optional fields): sel = outline the selected attacker, dim = unavailable neighbour regions,
+    // tgt = candidates are attack targets (red pulse + crosshair with the defender flag from ckids[i]), arrows = attack preview
+    if (cmd.sel && cmd.kid && pol.groups.length && political) {
+      for (let g = 0; g < pol.groups.length; g++) {
+        if (pol.groups[g].key !== cmd.kid) continue;
+        ctx.lineCap = 'square'; ctx.lineJoin = 'round';
+        ctx.globalAlpha = 0.28 + 0.14 * pulse; ctx.strokeStyle = lighten(kcol, 0.35); ctx.lineWidth = 7 * dpr;
+        strokeSegs(pol.groups[g].seg, 0, 6);
+        ctx.globalAlpha = 0.95; ctx.strokeStyle = 'rgba(6,10,22,0.9)'; ctx.lineWidth = 4.2 * dpr;
+        strokeSegs(pol.groups[g].seg, 0, 6);
+        ctx.strokeStyle = '#fff6d8'; ctx.lineWidth = 2.2 * dpr;
+        strokeSegs(pol.groups[g].seg, 0, 6);
+        ctx.globalAlpha = 1; ctx.lineCap = 'butt'; ctx.lineJoin = 'miter';
+      }
+    }
+    const dims = cmd.dim;
+    if (dims && dims.length) {
+      for (let i = 0; i < dims.length; i++) {
+        const g = geomOf(dims[i]); if (!g) continue;
+        if (g.x1 < vx0 - 1 || g.x0 > vx1 + 1 || g.y1 < vy0 - 1 || g.y0 > vy1 + 1) continue;
+        fillRegion(g, 'rgba(5,8,18,0.42)');
+        strokeRegion(g, 'rgba(170,180,200,0.55)', 1.2 * dpr, null, [3 * dpr, 4 * dpr]);
+      }
+    }
     const cands = cmd.candidates;
     if (cands && cands.length) {
       for (let i = 0; i < cands.length; i++) {
         const g = geomOf(cands[i]); if (!g) continue;
         if (g.x1 < vx0 - 1 || g.x0 > vx1 + 1 || g.y1 < vy0 - 1 || g.y0 > vy1 + 1) continue;
+        if (cmd.tgt) {
+          fillRegion(g, 'rgba(255,72,48,' + (0.08 + 0.09 * pulse).toFixed(3) + ')');
+          ctx.lineJoin = 'round';
+          strokeRegion(g, '#ff5a3c', (2.2 + 0.9 * pulse) * dpr, 'rgba(30,4,4,0.85)', null);
+          ctx.lineJoin = 'miter';
+          continue;
+        }
         fillRegion(g, 'rgba(235,250,255,' + (0.13 + 0.09 * pulse).toFixed(3) + ')');
         strokeRegion(g, '#ffffff', 2.4 * dpr, 'rgba(4,14,34,0.85)', [6 * dpr, 4 * dpr]);
       }
+      if (cmd.tgt) for (let i = 0; i < cands.length; i++) drawTargetMark(cands[i], cmd.ckids ? cmd.ckids[i] : 0, now);
     }
     const gls = cmd.goals;
     if (gls && gls.length) {
@@ -1671,6 +1829,44 @@ const Render = (() => {
         strokeRegion(g, '#fff3b0', (2.8 + pulse * 1.4) * dpr, 'rgba(10,8,0,0.85)', null);
         ctx.globalAlpha = 1;
       }
+    }
+    const arr = cmd.arrows;                                    // attack preview (tile coords), grows in from arrowT0
+    if (arr && arr.length) {
+      const p0 = Math.max(0, Math.min(1, (now - (cmd.arrowT0 || 0)) / 420)), p = 1 - (1 - p0) * (1 - p0) * (1 - p0);
+      const w = dpr * 4.2 * Math.max(0.8, Math.min(1.25, zoomCss / 10));
+      for (let i = 0; i < arr.length && i < 6; i++) {
+        const a = arr[i]; if (!a) continue;
+        const x0 = ox + a.x0 * Z, y0 = oy + a.y0 * Z, x1 = ox + a.x1 * Z, y1 = oy + a.y1 * Z;
+        drawArrow(x0, y0, x0 + (x1 - x0) * p, y0 + (y1 - y0) * p, w, 'attack', kcol, now, true);
+      }
+    }
+  }
+  /** attack target marker at a region centre: pulsing crosshair ring + the defender's flag on a small post */
+  function drawTargetMark(rid, kid, now) {
+    const c = regionCenter(rid); if (!c) return;
+    if (c.x < vx0 - 2 || c.x > vx1 + 2 || c.y < vy0 - 2 || c.y > vy1 + 2) return;
+    const sx = ox + c.x * Z, sy = oy + c.y * Z, pr = 0.5 + 0.5 * Math.sin(now / 240 + rid);
+    const R0 = Math.max(7, Math.min(13, zoomCss * 0.95)) * dpr * (0.94 + 0.12 * pr);
+    ctx.lineCap = 'round';
+    ctx.globalAlpha = 0.9; ctx.strokeStyle = 'rgba(22,4,4,0.9)'; ctx.lineWidth = 4.4 * dpr;
+    ctx.beginPath(); ctx.arc(sx, sy, R0, 0, TAU); ctx.stroke();
+    ctx.strokeStyle = '#ff5a3c'; ctx.lineWidth = 2.2 * dpr;
+    ctx.beginPath(); ctx.arc(sx, sy, R0, 0, TAU); ctx.stroke();
+    const t0 = R0 * 0.45, t1 = R0 * 1.45;
+    ctx.beginPath();
+    ctx.moveTo(sx - t1, sy); ctx.lineTo(sx - t0, sy); ctx.moveTo(sx + t0, sy); ctx.lineTo(sx + t1, sy);
+    ctx.moveTo(sx, sy - t1); ctx.lineTo(sx, sy - t0); ctx.moveTo(sx, sy + t0); ctx.lineTo(sx, sy + t1);
+    ctx.strokeStyle = 'rgba(22,4,4,0.9)'; ctx.lineWidth = 4 * dpr; ctx.stroke();
+    ctx.strokeStyle = '#ffe2d8'; ctx.lineWidth = 1.8 * dpr; ctx.stroke();
+    ctx.fillStyle = '#ff5a3c'; ctx.fillRect(Math.round(sx - dpr), Math.round(sy - dpr), Math.round(2 * dpr), Math.round(2 * dpr));
+    ctx.globalAlpha = 1; ctx.lineCap = 'butt';
+    const k = kid ? kingdomOf(kid) : null;
+    if (k && k.flag) {                                         // defender flag up-right of the ring
+      const fw = Math.round(14 * dpr), fh = Math.round(9 * dpr);
+      const fx = Math.round(sx + R0 * 0.7), fy = Math.round(sy - R0 * 0.7 - fh);
+      ctx.fillStyle = 'rgba(8,10,20,0.95)'; ctx.fillRect(fx - Math.round(dpr), fy - Math.round(dpr), fw + Math.round(2 * dpr), fh + Math.round(2 * dpr));
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(Sprites.flag(k.flag, fw, fh), fx, fy, fw, fh);
     }
   }
 
@@ -1953,6 +2149,7 @@ const Render = (() => {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.globalAlpha = 1;
     ctx.imageSmoothingEnabled = false;
+    ambientOn = api.ambient !== false;
     let ok = false;
     try { ok = syncWorld(); } catch (e) { report('bake', e); }
     if (!ok) { ctx.fillStyle = BG; ctx.fillRect(0, 0, cw, ch); updateStats(t0); return; }
@@ -1978,6 +2175,7 @@ const Render = (() => {
       }
       try { drawTileLayer(curNow); } catch (e) { report('tiles', e); }
       try { drawEntities(); } catch (e) { report('entities', e); }
+      try { drawAmbient(curNow); } catch (e) { report('ambient', e); }
       try { drawFlames(curNow); } catch (e) { report('fire', e); }
       try { drawEffects(curNow); } catch (e) { report('effects', e); }
       try { drawLabels(mode); } catch (e) { report('labels', e); }

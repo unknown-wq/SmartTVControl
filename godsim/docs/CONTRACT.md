@@ -245,12 +245,14 @@ Sprites.init()                                         // build atlases; idempot
 Sprites.drawTile(ctx,t,x,y,size,variant)               // terrain tile (≥4 variants/type, shaded; deep water/shallow/sand/grass/forest(dense trees)/hill/mountain/snow/lava, animated-looking via 2 frames optional)
 Sprites.tileAtlas()                                    // {canvas, cols, tilePx} optional fast path for Render
 Sprites.feature(kind,variant)                          // canvas for Const.RES kinds TREE (lone tree), ROCK, IRON, GOLD, BERRY
-Sprites.unit(race,stage /*'child'|'adult'|'elder'*/,frame /*0|1*/,tint /*kingdom hex or null*/,weapon,armor) -> canvas   // cached by key; ≥2 walk frames; cloth region tinted by kingdom color; weapon/armor visible; elves w/ bow; orcs bulky green
-Sprites.building(type,race,level,done) -> canvas       // per race style; unfinished = scaffold look; sizes 16×16 (townhall may be 16×16 but richer)
+Sprites.unit(race,stage /*'child'|'adult'|'elder'*/,frame /*0|1*/,tint /*kingdom hex or null*/,weapon,armor,look /*0..3 + 4 if female*/,pose /*0 walk,1 attack,2 chop,3 mine,4 farm,5 build,6 sleep,7 fish,8 forage*/,carry /*0 none,1 wood,2 stone,3 food,4 iron,5 gold*/) -> canvas   // cached by key; ≥2 walk frames; cloth region tinted by kingdom color; weapon/armor visible; elves w/ bow; orcs bulky green
+Sprites.building(type,race,level,done,tint,mode,variant) -> canvas   // per race style; mode: finished 0 normal/1 damaged/2 burnt, unfinished = construction stage 0..2; variant 0..2 colour look (houses/markets); 16×16
+Sprites.landmark(type,race,level,tint,mode) -> canvas|null          // 16×24 (8 rows taller, same footing) for TOWNHALL/TEMPLE level>=2 and BARRACKS level 3
+Sprites.decal(kind /*'scorch'|'ruin'*/,v) / Sprites.chimney(type,race,level) / Sprites.drawArrow / drawSmoke / drawBird / drawFishJump   // Render-side art helpers (see REQUESTS.md «Sprites»)
 Sprites.flag(flag,w,h) -> canvas                       // kingdom flag: pattern 0..5 (plain,halves,stripes,cross,diagonal,chevron) × symbol 0..9 (procedural glyphs) cached
 Sprites.icon(key,size) -> canvas                       // UI icons incl. every ToolDefs[].icon, Tabs[].icon, and: play,pause,speed1,speed2,speed4,menu,hand,brush,save,load,newworld,close,
                                                        //   map_normal,map_borders,map_culture,crown,sword,heart,food,wood,stone,iron,gold,human,orc,elf,skull,coin, plus races as small heads
-Sprites.drawFx(ctx,fx,px,py,scale,now)                 // draws one Fx entry (Fx.list item) at screen position: lightning,explosion,fire,smoke,heal,bless,plague,quake,dust,spark,splash,blood,whisper,ash
+Sprites.drawFx(ctx,fx,px,py,scale,now)                 // draws one Fx entry (Fx.list item) at screen position: lightning,explosion,fire,smoke,heal,bless,plague,quake,dust,spark,splash,blood,whisper,ash, heart,soul,flagraise,levelup (cosmetic, spawned by Render)
 Sprites.drawEffect(ctx,kind,e,px,py,scale,now)         // persistent S.eff items: 'meteor','tornado','rain','quake'
 ```
 ### Render (21_render.js)
@@ -387,15 +389,32 @@ Symmetric opinion −100..100 per kingdom pair (`S.rels`): base race matrix, cul
 ## 8.4 Render: political map (MODE.BORDERS) + war overlays
 * MODE.BORDERS draws regions: fill by owner colour (alpha ≈ 0.30; unowned = no fill), crisp 2 px outline where owner changes (kingdom borders), thin 1 px lines between regions of the same owner, region names at zoom ≥ 7 (small caps, dark outline), **controller ≠ owner ⇒ diagonal stripes of the controller colour over the owner colour** (occupation), frontlines (`Regions.frontlines()`): thick red/black dashed line between hostile controlled regions. Cache in an offscreen canvas rebuilt on `S.regionVer` change (throttled), NOT per frame. MODE.CULTURE: fill each owned region by its owner's capital/dominant culture colour (keep city-based fallback). City labels as before.
 * Army markers (all modes, when zoom ≥ 5 and the army has ≥ 1 member): banner sprite at the army leader's position with the kingdom colour and soldier count; supply warning icon when `supply < 30`; selected army ring. **Order arrows** (HOI4-style) from the army to `order.regionId` centre: red thick curved arrow with arrowhead for `attack`, blue shield marker at region centre for `hold/defend`, dotted for retreat; only draw arrows for armies of the commanded kingdom, or for all when zoom is low and `Render.showAllOrders` is on; war goal regions get a star marker in the commanding kingdom's colour.
-* `Render.cmd = null | {kid, regionId /*selected region*/, armyId, goals:[rid], candidates:[rid] /*highlight as selectable*/, targetKid}` — set by UI; Render highlights `regionId` (pulsing outline), `candidates` (dashed bright outline + subtle fill) and `goals`. `Render.regionAt(tx,ty)` → region id. New icons in Sprites: command, region, army, shield, arrow, star, supply, war, flag_goal, handshake.
+* `Render.cmd = null | {kid, regionId /*selected region*/, armyId, goals:[rid], candidates:[rid] /*highlight as selectable*/, targetKid}` — set by UI; Render highlights `regionId` (pulsing outline), `candidates` (dashed bright outline + subtle fill) and `goals`. Optional (war tool): `sel` (outline cmd.kid's territory), `tgt` + `ckids:[kid]` (candidates drawn as attack targets: red pulse + crosshair + defender flag), `dim:[rid]` (darkened unavailable regions), `arrows:[{x0,y0,x1,y1}]` + `arrowT0` (attack preview growing in from that time). `Render.regionAt(tx,ty)` → region id. New icons in Sprites: command, region, army, shield, arrow, star, supply, war, flag_goal, handshake.
 
-## 8.5 UI: command mode ("Командовать")
-Tool `command` (tab Королевства): tap a kingdom's land/city/unit (or its chip) ⇒ `UI.cmdKid = kid`, `Kingdoms.setCommanded(kid,true)` (previous commanded kingdom released), command sheet opens. Flow:
-1. **Sheet header:** flag, name, ruler, regions/cities/pop, score bars of its wars; close = release command.
-2. **Война** page: list of neighbouring kingdoms (`Diplomacy.neighbors`) with opinion, strength ratio (`Kingdoms.strength`), truce/alliance status, and «Объявить войну». Then **goal picking on the map**: candidate regions (`War.potentialGoals`) are highlighted via `Render.cmd.candidates`; tap regions to toggle goals, a counter shows total cost vs. allowance, «Начать войну» confirms (`War.declare`). Existing wars: card with enemy, score bar, goals with ✓, «+ Цель», «Мир».
-3. **Армии** page: list armies (size, supply, order, region); tap army (list or marker) to select; then tap a region on the map: enemy region ⇒ attack order; own/controlled region ⇒ hold/defend (a small popup lets choose Attack/Hold/Defend); buttons «Все: удерживать», «Все: отступить».
-4. **Мир**: peace conference sheet: pick occupied regions to take (cost vs. score), «Предложить мир» (result text), white peace option.
-5. Region inspector (Info tool or tapping a region): name, owner, controller, cities, claims, neighbours, value. Menu toggle «Авто‑мир при истощении» (`War.setAutoPeace`). Tapping with the command tool on an already commanded kingdom's army/region does the above actions instead of re-selecting.
+## 8.5 UI: the war tool («Война», map first — supersedes the stage-2 "command sheet")
+Tool `command` (tab Королевства, label «Война», icon `war`). Owner feedback: *choose a country, then the region it will attack*. Two taps:
+1. **Attacker:** tap a country's land / city / unit / army banner (or its chip) ⇒ `Kingdoms.setCommanded(kid,true)` (one at a time). A slim **HUD**
+   replaces the dock (flag, name, population, regions, ruler; war chips with the score; ✕ = release). Its territory is outlined
+   (`Render.cmd.sel`); every region it may attack lights up at once (`War.targetsFor(kid)` ok entries ⇒ `Render.cmd.candidates` + `ckids`
+   (defender flags), `tgt = 1`: red pulse + crosshair); unavailable neighbours are dimmed (`Render.cmd.dim`), a tap explains why in one line
+   (truce until year N / ally / vassal / overlord / too many wars / not adjacent / other continent / held by a third kingdom).
+2. **Target:** tap a lit region ⇒ its owner is the defender ⇒ compact **war card** (≤ 50–60 % of the screen): «A ⚔ D», goal chips (more lit
+   regions of the same defender add goals, max 4), odds bar (`War.targetInfo`: our side vs theirs incl. allies who would join, honest words and a
+   warning when outgunned), cost vs `War.allowance`, casus (claim ⇒ infamy +3, else +10 and opinion penalties), defender allies, route
+   (unsupplied march), an animated attack arrow (`Render.cmd.arrows`). ONE primary button «Объявить войну» ⇒
+   `War.declare(a, d, goals, claim ? 'claim' : 'conquest')` with exactly those goals.
+3. Every declaration (player's or AI's; Bus `warDeclared` + the «объявило войну» log line) shows a full-width **«ВОЙНА» banner** (flags, names,
+   target region; tap = focus) that dismisses itself (~2.5 s); that log line skips the event feed (the journal keeps it). Player wars also glide
+   the camera to the front.
+4. **At war** the same tap on a lit enemy region opens the **attack card** («Атаковать»: `War.addGoal` if needed + `War.order(attack)` for the
+   selected army, else the idle ones, else the nearest; «Цель»: goal only); own / held land ⇒ popup Удерживать / Оборонять (army selected) or
+   О регионе / Оборонять. The HUD pulls up (button / swipe / grabber) into a **drawer** «Войны | Армии | Регионы»: war cards (score, goals,
+   offer, «+ Цель», «Фронт», «Мир» = peace conference as before), armies (bulk hold / retreat, cards, «приказы всех армий»), regions + kingdom card.
+   The kingdom inspector's «Дипломатия» section lists neighbours with opinion (tap: causes), border, truce, strength — information only.
+5. Tap priority: own army banner > lit target > own territory > dimmed / enemy / neighbour land (explain, «Выбрать страну» in the popup) >
+   another country (becomes the attacker) > wild land (hint) > sea (one step back: card → army → drawer → release). Release / switch / sea /
+   world replacement never leave UI state behind (body `cmd`, `cmd-pick`, `cmd-drawer`, `Render.cmd`, `Render.highlight`, popups).
+6. Region inspector, menu toggle «Авто‑мир при истощении», feed filter «Войны» / «Все», log focus: unchanged.
 
 ### 8.6 Glue API (exists in the stubs now; real versions must keep it)
 * `War.atWar(a,b)` is the single truth about wars (S.wars). `Diplomacy.atWar(a,b)` forwards to it; `Diplomacy.state(a,b)` = WAR if atWar else ALLIANCE/PEACE from the relation. Both must be O(1) (keep a pair cache rebuilt in afterLoad / on war start & end; `Units.isHostile` calls it a lot).

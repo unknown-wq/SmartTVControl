@@ -1673,6 +1673,184 @@ const War = (() => {
     rebuildPairs();
   }
 
+  // ================================================================== UI: map-first war targets (read-only API: no mutation, no RNG)
+  //   targetsFor(kid)        -> [{regionId, defenderKid, ok, reason, atWar, warId, adjacent, claim, cost, odds, ratio, goal}]
+  //                             every foreign region next to the land kid's side controls (peace: any neighbour, ok when a war could be
+  //                             declared for it; war: enemy regions our side may attack + our own regions the enemy holds)
+  //   targetInfo(kid, rid, {route}) -> the same entry for ANY region (reason for wild / own / far / other-continent land too) + details:
+  //                             allowance, casus, infamy, opinion, allies (who joins the defender), friends (who joins us), myPow, theirPow,
+  //                             score (war), route / routeOk (unsupplied tiles of the march from the nearest city or army, when opts.route)
+  function yearOfTick(t) { return (Const.START_YEAR || 1) + Math.floor(t / Const.TICKS_PER_YEAR); }
+  function warCount(kid) { let n = 0; for (const w of S.wars.values()) if (!w.ended && sideOf(w, kid)) n++; return n; }
+  function opinionOf(a, b) { try { if (dipOn() && typeof Diplomacy.opinion === 'function') { const v = Diplomacy.opinion(a, b); return v === v ? +v || 0 : 0; } } catch (e) { /* ignore */ } return 0; }
+  /** kingdom-level reason why a NEW war a -> b is impossible ('' = allowed): War.canDeclare + the Diplomacy war cap, in short Russian */
+  function declareProblem(a, b) {
+    const ka = kget(a), kb = kget(b);
+    if (!ka || !kb || a === b) return 'королевство не существует';
+    if (ka.overlordId === b) return '«' + kb.name + '» — ваш сюзерен';
+    if (kb.overlordId === a) return '«' + kb.name + '» — ваш вассал';
+    if (alliedTo(a, b)) return '«' + kb.name + '» — ваш союзник';
+    const tu = truceUntil(a, b);
+    if (tu || inTruce(a, b)) return 'перемирие с «' + kb.name + '» до ' + yearOfTick(tu || S.tick) + ' года';
+    if (warCount(a) >= 3) return 'слишком много войн сразу';
+    return '';
+  }
+  /** who would join a war a -> d, without rolling dice: vassals / overlords surely, the defender's allies probably, ours when they dislike d */
+  function joinersOf(a, d) {
+    const def = [], att = [];
+    const ka = kget(a), kd = kget(d);
+    if (!ka || !kd) return { def, att };
+    const dA = alliesOf(d);
+    for (let i = 0; i < dA.length; i++) {
+      const al = dA[i], k = kget(al);
+      if (!k || al === a) continue;
+      const sure = kd.overlordId === al || k.overlordId === d;
+      if (!sure && (alliedTo(al, a) || warCount(al) >= 2)) continue;
+      def.push({ kid: al, sure });
+    }
+    const aA = alliesOf(a);
+    for (let i = 0; i < aA.length; i++) {
+      const al = aA[i], k = kget(al);
+      if (!k || al === d) continue;
+      const sure = ka.overlordId === al || k.overlordId === a;
+      if (!sure && (alliedTo(al, d) || warCount(al) >= 2 || opinionOf(al, d) >= -10)) continue;
+      att.push({ kid: al, sure });
+    }
+    return { def, att };
+  }
+  function peacePowers(a, d) {
+    const j = joinersOf(a, d);
+    let my = Math.max(0, milPower(a)), their = Math.max(0, milPower(d));
+    for (let i = 0; i < j.att.length; i++) my += Math.max(0, milPower(j.att[i].kid)) * (j.att[i].sure ? 1 : 0.6);
+    for (let i = 0; i < j.def.length; i++) their += Math.max(0, milPower(j.def[i].kid)) * (j.def[i].sure ? 1 : 0.85);
+    return { my, their, j };
+  }
+  function oddsOf(my, their) { return my + their > 0 ? my / (my + their) : 0.5; }
+  function ratioOf(my, their) { return their > 0 ? my / their : (my > 0 ? 9.9 : 1); }
+  function peaceEntry(kid, d, r, problem, pot, pw) {
+    const third = r.controllerId && r.controllerId !== d && r.controllerId !== kid && !alliedTo(kid, r.controllerId) ? kget(r.controllerId) : null;
+    let reason = problem;
+    if (!reason && third) reason = 'регион занят «' + third.name + '»';
+    if (!reason && pot.indexOf(r.id) < 0) reason = 'регион недоступен';
+    return { regionId: r.id, defenderKid: d, ok: !reason, reason, atWar: false, warId: 0, adjacent: true, claim: !!Regions.hasClaim(r.id, kid), cost: regionCost(r),
+      odds: oddsOf(pw.my, pw.their), ratio: ratioOf(pw.my, pw.their), goal: false };
+  }
+  function warEntry(kid, w, s, r, reason, strike) {
+    const foe = sideOf(w, r.controllerId) === 3 - s ? r.controllerId : r.ownerId;
+    const their = defencePower(w, s, r.id);
+    return { regionId: r.id, defenderKid: kget(foe) ? foe : leadOf(w, 3 - s), ok: !reason, reason, atWar: true, warId: w.id, adjacent: true, claim: !!Regions.hasClaim(r.id, kid),
+      cost: regionCost(r), odds: oddsOf(strike, their), ratio: ratioOf(strike, their), goal: isGoal(w, s, r.id) };
+  }
+  function targetsFor(kid) {
+    const out = [];
+    if (!rgOn() || !kget(kid)) return out;
+    const seen = new Set();
+    // 1) running wars: enemy land next to land our side controls (allies included), and our own land the enemy holds (retake)
+    for (const w of S.wars.values()) {
+      if (w.ended) continue;
+      const s = sideOf(w, kid);
+      if (!s) continue;
+      const mates = sideArr(w, s), foes = sideArr(w, 3 - s), strike = strikePower(w, s);
+      for (let i = 0; i < mates.length; i++) for (let j = 0; j < foes.length; j++) {
+        const list = Regions.attackable(mates[i], foes[j]);
+        for (let q = 0; q < list.length; q++) {
+          const r = reg(list[q]);
+          if (!r || seen.has(r.id)) continue;
+          seen.add(r.id);
+          out.push(warEntry(kid, w, s, r, sideOf(w, r.controllerId) === s ? 'регион уже занят вашей стороной' : '', strike));
+        }
+      }
+      for (const r of S.regions.values()) {
+        if (seen.has(r.id) || sideOf(w, r.ownerId) !== s || sideOf(w, r.controllerId) !== 3 - s) continue;
+        seen.add(r.id);
+        out.push(warEntry(kid, w, s, r, '', strike));
+      }
+    }
+    // 2) peace: every region of another kingdom that touches land we control (ok = a war could be declared for it)
+    for (const k of S.kingdoms.values()) {
+      const d = k.id;
+      if (d === kid || !kget(d) || atWar(kid, d)) continue;
+      const list = Regions.attackable(kid, d);
+      if (!list.length) continue;
+      const problem = declareProblem(kid, d), pot = problem ? [] : potentialGoals(kid, d), pw = peacePowers(kid, d);
+      for (let q = 0; q < list.length; q++) {
+        const r = reg(list[q]);
+        if (!r || seen.has(r.id) || r.ownerId !== d) continue;
+        seen.add(r.id);
+        out.push(peaceEntry(kid, d, r, problem, pot, pw));
+      }
+    }
+    return out;
+  }
+  /** unsupplied path tiles of the best march to region r (from our 3 nearest cities, or our armies in that war); 9999 = no route */
+  function routeFor(kid, r, w) {
+    const k = kget(kid);
+    if (!k) return 9999;
+    const tw = w || feasW, side = w ? sideOf(w, kid) : 1;
+    if (!w) { feasW.attackers[0] = kid; feasW.defenders[0] = r.ownerId; }
+    const near = [];
+    if (w) for (const a of S.armies.values()) if (a.kingdomId === kid && a.warId === w.id && !a.dis && a.members.length) near.push({ x: a.rally.x, y: a.rally.y, race: a.race | 0, d: Util.dist2(a.rally.x, a.rally.y, r.cx, r.cy) });
+    for (let j = 0; j < k.cities.length; j++) { const c = S.cities.get(k.cities[j]); if (c) near.push({ x: c.x, y: c.y, race: c.race, d: Util.dist2(c.x, c.y, r.cx, r.cy) }); }
+    near.sort((x, y) => x.d - y.d);
+    let best = 9999;
+    for (let j = 0; j < near.length && j < 3; j++) { const u = routeUnsupplied(near[j].x, near[j].y, r.cx + 0.5, r.cy + 0.5, near[j].race, tw, side); if (u < best) best = u; }
+    return best;
+  }
+  function sameLandAs(kid, r) {
+    for (const o of S.regions.values()) if (o.controllerId === kid && World.sameLand(o.cx, o.cy, r.cx, r.cy)) return true;
+    return false;
+  }
+  function targetInfo(kid, rid, opts) {
+    const e = { regionId: rid | 0, defenderKid: 0, ok: false, reason: '', atWar: false, warId: 0, adjacent: false, claim: false, cost: 0, odds: 0.5, ratio: 1, goal: false, own: false };
+    const r = reg(rid);
+    if (!rgOn() || !kget(kid)) { e.reason = 'королевство не существует'; return e; }
+    if (!r) { e.reason = 'нет такого региона'; return e; }
+    e.cost = regionCost(r); e.claim = !!Regions.hasClaim(r.id, kid);
+    const list = targetsFor(kid);
+    let hit = null;
+    for (let i = 0; i < list.length; i++) if (list[i].regionId === r.id) { hit = list[i]; break; }
+    if (hit) Object.assign(e, hit);
+    else if (!r.ownerId) e.reason = 'ничья земля: её заселяют, а не завоёвывают';
+    else if (r.ownerId === kid || (r.controllerId === kid)) { e.own = true; e.reason = r.ownerId === kid ? 'это ваш регион' : 'регион занят вашими войсками'; }
+    else {
+      const d = r.ownerId, w = warBetween(kid, d);
+      e.defenderKid = d;
+      if (w) { e.atWar = true; e.warId = w.id; }
+      const problem = w ? '' : declareProblem(kid, d);
+      e.reason = problem || (sameLandAs(kid, r) ? 'не граничит с вашими землями: сначала возьмите соседний регион' : 'другой материк: армии не доберутся по суше');
+    }
+    const d = e.defenderKid;
+    if (d && kget(d)) {
+      if (e.atWar) {
+        const w = S.wars.get(e.warId);
+        const s = w ? sideOf(w, kid) : 0;
+        e.allies = []; e.friends = [];
+        if (w && s) {
+          const foes = sideArr(w, 3 - s), mates = sideArr(w, s);
+          for (let i = 0; i < foes.length; i++) if (foes[i] !== d && kget(foes[i])) e.allies.push({ kid: foes[i], sure: true });
+          for (let i = 0; i < mates.length; i++) if (mates[i] !== kid && kget(mates[i])) e.friends.push({ kid: mates[i], sure: true });
+          e.myPow = strikePower(w, s); e.theirPow = defencePower(w, s, r.id);
+          e.score = Math.round((w.score[kid] || 0) * 10) / 10;
+          e.goal = isGoal(w, s, r.id);
+        }
+      } else {
+        const pw = peacePowers(kid, d);
+        e.allies = pw.j.def; e.friends = pw.j.att; e.myPow = pw.my; e.theirPow = pw.their;
+        e.odds = oddsOf(pw.my, pw.their); e.ratio = ratioOf(pw.my, pw.their);
+        e.allowance = allowance(kid, d);
+        e.casus = e.claim ? 'claim' : 'conquest';
+        e.infamy = e.claim ? 3 : 10;
+        e.opinion = e.claim ? -22 : -35;
+      }
+      if (opts && opts.route && e.ok) {
+        const w = e.warId ? S.wars.get(e.warId) : null;
+        e.route = routeFor(kid, r, w);
+        e.routeOk = e.route <= MAX_UNSUP;
+      }
+    }
+    return e;
+  }
+
   return {
     atWar, declare, canDeclare,
     start(attackerKid, defenderKid, casus) { return declare(attackerKid, defenderKid, null, casus); },
@@ -1687,7 +1865,7 @@ const War = (() => {
     step, newWorld, afterLoad,
     // extras
     autoPeace() { return !!mod().autoPeace; },
-    weariness, allowance, split, merge, truceUntil, inTruce,
+    weariness, allowance, split, merge, truceUntil, inTruce, targetsFor, targetInfo,
     allowanceFor(warId, kid, regionIds) { const w = S.wars.get(warId); return w ? Math.round(allowanceOf(w, kid, normRegions(regionIds)) * 10) / 10 : 0; },
     heldRegions(warId, kid) { const w = S.wars.get(warId); return w && sideOf(w, kid) ? heldRegions(w, sideOf(w, kid)) : []; },
     regionCost(rid) { const r = reg(rid); return r ? regionCost(r) : 0; },

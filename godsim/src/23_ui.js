@@ -11,14 +11,17 @@
  *  UI.openInspector(type,id)    type: unit | building | city | kingdom | region | tile (tile id = y*S.w+x)
  *  UI.onWorldReplaced()         Main calls it after Sim.newWorld / Save.load
  *
- *  STAGE 2 (CONTRACT 8.5) — command mode ("Командовать"):
- *  UI.commandKingdom(kid,{focus,page}) / UI.releaseCommand()   UI.cmdKid, UI.cmd (read-only snapshot for tests)
- *  UI.startGoalMode(targetKid, warId) / UI.openPeace(warId) / UI.selectArmy(id) / UI.setRegionHL(rid, ms)
- *  The command sheet replaces the dock (like the inspector): header, three pages (Война | Армии | Регионы), goal-picking bar, peace conference.
- *  Everything the map must show goes through ONE object, Render.cmd = {kid, regionId, armyId, goals, candidates, targetKid};
- *  every list is a keyed list (listSlot): rows are rebuilt only when their structure changes, numbers are updated in place, so a tap
- *  is never lost to a refresh. Sim state touched: Kingdoms.setCommanded (k.cmd), War.declare / addGoal / order / peaceOffer / forcePeace /
- *  respondOffer / setAutoPeace. A world replacement or a load clears every k.cmd flag (a save made while commanding must not freeze the AI).
+ *  WAR TOOL (CONTRACT 8.5, ToolDefs id 'command', label «Война») — map first: a country, then the region it attacks:
+ *  UI.commandKingdom(kid,{focus,page}) = select the attacker / UI.releaseCommand()   UI.cmdKid, UI.cmd (read-only snapshot), UI.targets, UI.banner
+ *  UI.pickTarget(rid) / UI.confirmTarget() / UI.attackTarget() / UI.cancelTarget() / UI.openDrawer(page) / UI.closeDrawer()
+ *  UI.openPeace(warId) / UI.selectArmy(id) / UI.setRegionHL(rid, ms) / UI.startGoalMode(targetKid, warId) (compat: opens the card / «+ Цель»)
+ *  The bottom sheet of the war tool is one of: a slim HUD (selected country + war chips), the target war card, a pull-up drawer
+ *  (Войны | Армии | Регионы), the army mode, the peace conference. Everything the map shows goes through ONE object, Render.cmd =
+ *  {kid, regionId, armyId, goals, candidates, targetKid, sel, tgt, ckids, dim, arrows, arrowT0}; targets come from War.targetsFor /
+ *  War.targetInfo. Every declaration (the player's and the AI's) gets the «ВОЙНА» banner (#banner) instead of a feed line.
+ *  Lists are keyed (listSlot): rows are rebuilt only when their structure changes, numbers are updated in place, so a tap is never lost
+ *  to a refresh. Sim state touched: Kingdoms.setCommanded (k.cmd), War.declare / addGoal / order / peaceOffer / forcePeace / respondOffer /
+ *  setAutoPeace. A world replacement or a load clears every k.cmd flag (a save made while commanding must not freeze the AI).
  * ===================================================================== */
 
 const UI = (() => {
@@ -30,13 +33,13 @@ const UI = (() => {
     info: '#8fa5d6', war: '#ff5b5b', peace: '#58e08a', birth: '#ff9fd0', death: '#9aa3b5',
     disaster: '#ff9a3a', city: '#ffd24a', kingdom: '#c78bff', rebel: '#ff4fa3', god: '#58c7ff',
   };
-  const SHORT = { earthquake: 'Землетр.', bless: 'Благосл.', war_whisper: 'Шёпот', lightning: 'Молния', split: 'Раскол', command: 'Командир' };
+  const SHORT = { earthquake: 'Землетр.', bless: 'Благосл.', war_whisper: 'Шёпот', lightning: 'Молния', split: 'Раскол', command: 'Война' };
   const GROUP_LABEL = { terrain: 'Рельеф', creatures: 'Существа', destroy: 'Разрушение', bless: 'Благословение', diplomacy: 'Дипломатия', info: 'Осмотр', command: 'Война' };
   const DEFAULT_HINT = {
     land: 'Выберите кисть, затем тапните по карте. Режим кисти — рисовать пальцем.',
     life: 'Выберите существо и тапните по карте, чтобы создать его.',
     powers: 'Выберите силу и тапните по карте. Без силы тап — осмотр.',
-    kingdoms: 'Выберите королевство в списке или инструмент дипломатии.',
+    kingdoms: '«Война»: выберите страну, затем регион, куда она нападёт. Или инструмент дипломатии.',
     info: 'Тап по существу, зданию, городу или земле — карточка.',
   };
   const MAP_MODES = [
@@ -184,6 +187,7 @@ const UI = (() => {
     setTimeout(() => t.classList.add('out'), 2600);
     setTimeout(() => { if (t.parentNode) t.parentNode.removeChild(t); }, 3050);
   }
+  function clearToasts() { if (refs.toasts) clear(refs.toasts); toastLast = ''; }
   function hintOnce(key, text) {
     if (prefs.seen[key] || !ready) return;
     if (refs.toasts.children.length) return;           // never stack hints on top of other toasts: show it next time
@@ -352,7 +356,7 @@ const UI = (() => {
     renderTools();
     renderKBar();
     layoutSoon();
-    if (id === 'kingdoms' && state.tool === 'command') hintOnce('cmdtool', 'Тапните по королевству на карте или в списке — и командуйте им: войны, армии, мир');
+    if (id === 'kingdoms' && state.tool === 'command') hintOnce('warflow', 'Выберите страну, затем регион, куда она нападёт');
   }
   function selectTool(id) {
     const def = ToolDefs.byId[id];
@@ -361,7 +365,7 @@ const UI = (() => {
     tabTool[def.tab] = id;
     syncToolSel();
     Render.brush = null;
-    if (id === 'command' && state.mode === 'paint') setMode('pan');
+    if (id === 'command') { if (state.mode === 'paint') setMode('pan'); hintOnce('warflow', 'Выберите страну, затем регион, куда она нападёт'); }
     if (def.brush) flashBrush(true);
     if (def.drag && def.brush && state.mode === 'pan') {
       if (seenOnce('brushmode')) {
@@ -425,7 +429,7 @@ const UI = (() => {
     zoom.appendChild(zi); zoom.appendChild(zo);
     box.appendChild(zoom);
 
-    refs.mapFab = btn('fab', 'Режим карты', () => cycleMap());
+    refs.mapFab = btn('fab mapfab', 'Режим карты', () => cycleMap());
     refs.mapFab.appendChild(el('span', 'fi'));
     refs.mapFabLbl = el('span', '', 'Карта');
     refs.mapFab.appendChild(refs.mapFabLbl);
@@ -805,6 +809,11 @@ const UI = (() => {
       '<li><b>Существа</b> — создавайте людей, орков и эльфов. Ластик стирает существ.</li>' +
       '<li><b>Силы</b> — молнии, метеориты, чума и торнадо. А ещё дождь, исцеление и благословение.</li>' +
       '<li><b>Королевства</b> — шепните королю о войне, примирите враждующих или отколите город.</li></ul>' +
+      '<h3>Война</h3><ul>' +
+      '<li>Инструмент <b>«Война»</b> (вкладка «Королевства»): тапните страну — она станет нападающей, её цели подсветятся красным.</li>' +
+      '<li>Тапните красный регион: карточка покажет силы, цену и союзников врага. «Объявить войну» — и армии пойдут сами.</li>' +
+      '<li>Захватив регион, армии удержат его. Во время войны тап по красному региону — атака, по своему — удержание.</li>' +
+      '<li>Потяните панель снизу вверх: войны, армии, мир. Тап по морю — шаг назад, крестик — снять выбор.</li></ul>' +
       '<h3>Режим кисти</h3><ul>' +
       '<li>Значок <b>«Рука / Кисть»</b> справа внизу переключает режим.</li>' +
       '<li>В режиме кисти один палец рисует, а двигать и масштабировать карту нужно двумя.</li>' +
@@ -1309,7 +1318,7 @@ const UI = (() => {
       setText(v.sub, Names.title(k.race) + ' · ' + rname(k.race));
     });
     const s0 = sec(v);
-    const cmdBtn = actBtn('block primary', 'Командовать', 'command', () => commandKingdom(id, {}));
+    const cmdBtn = actBtn('block primary', 'Выбрать для войны', 'war', () => commandKingdom(id, {}));
     cmdBtn.dataset.act = 'command'; s0.appendChild(cmdBtn);
     v.ups.push(() => { const k = get(); cmdBtn.classList.toggle('hide', !k || cm.kid === id); });
     const s1 = sec(v);
@@ -1363,7 +1372,7 @@ const UI = (() => {
       if (!node.children.length) node.appendChild(el('span', 'muted', '—'));
     });
 
-    const s3 = sec(v, 'Отношения');
+    const s3 = sec(v, 'Дипломатия');
     const rl = el('div'); s3.appendChild(rl);
     const relBars = [];
     slot(v, rl, () => {
@@ -1388,10 +1397,11 @@ const UI = (() => {
         else if (r.truce) { st.appendChild(ico('peace', 16)); st.title = 'Перемирие'; }
         row.appendChild(st);
         wrap.appendChild(row);
+        const sub = el('div', 'relsub'); wrap.appendChild(sub);
         const cz = causesBox(); wrap.appendChild(cz.node);
         bar.addEventListener('click', () => { cz.toggle(); cz.set(id, r.other); });
         node.appendChild(wrap);
-        relBars.push({ other: r.other, fill, tx, cz });
+        relBars.push({ other: r.other, fill, tx, cz, sub });
       });
     });
     v.ups.push(() => {
@@ -1405,6 +1415,13 @@ const UI = (() => {
         setStyle(b.fill, 'width', Math.abs(o) / 2 + '%');
         setStyle(b.fill, 'backgroundColor', opinionColor(o));
         setText(b.tx, (o > 0 ? '+' : '') + o);
+        const bits = [];
+        if (r.contact > 0) bits.push('общая граница');
+        if (r.vassal === 'overlord') bits.push('ваш сюзерен'); else if (r.vassal === 'vassal') bits.push('ваш вассал');
+        if (r.truce && r.state !== Const.REL.WAR) bits.push('перемирие ещё ' + fmtYears(r.truceLeft));
+        if (r.contact > 0 || r.state === Const.REL.WAR) bits.push(ratioInfo(id, b.other).text.toLowerCase());
+        setText(b.sub, bits.join(' · '));
+        setCls(b.sub, 'hide', !bits.length);
         if (b.cz.open) b.cz.set(id, b.other);
       });
     });
@@ -1506,7 +1523,7 @@ const UI = (() => {
       if (!node.children.length) node.appendChild(el('span', 'muted', '—'));
     });
     const s6 = sec(v);
-    const cmdBtn = actBtn('block primary', 'Командовать владельцем', 'command', () => { const r = get(); if (r && r.ownerId) commandKingdom(r.ownerId, {}); });
+    const cmdBtn = actBtn('block primary', 'Выбрать владельца для войны', 'war', () => { const r = get(); if (r && r.ownerId) commandKingdom(r.ownerId, {}); });
     cmdBtn.dataset.act = 'cmd-owner';
     s6.appendChild(cmdBtn);
     v.ups.push(() => { const r = get(); cmdBtn.classList.toggle('hide', !r || !r.ownerId || r.ownerId === cm.kid || !kget(r.ownerId)); });
@@ -1601,8 +1618,9 @@ const UI = (() => {
   function renderSheet() {
     const sh = refs.sheet;
     clear(sh);
-    sh.classList.remove('cmd', 'gm', 'pm', 'am');
-    document.body.classList.remove('cmd-pick');
+    sh.classList.remove('cmd', 'gm', 'pm', 'am', 'hud', 'tc', 'dr');
+    sh._mode = '';
+    document.body.classList.remove('cmd-pick', 'cmd-drawer');
     sh.style.animation = 'none'; void sh.offsetWidth; sh.style.animation = '';
     const v = insp.view;
     const head = el('div', 'sh-head');
@@ -1653,7 +1671,8 @@ const UI = (() => {
     setRegionHL(0, 0);
     if (cm.kid) { showCmdSheet(); return; }          // the command sheet underneath comes back
     refs.bottom.classList.remove('sheet-open');
-    refs.sheet.classList.remove('cmd', 'gm', 'pm', 'am');
+    refs.sheet.classList.remove('cmd', 'gm', 'pm', 'am', 'hud', 'tc', 'dr');
+    refs.sheet._mode = '';
     clear(refs.sheet);
     sheetFresh = true;
     layoutSoon();
@@ -1709,6 +1728,7 @@ const UI = (() => {
     Render.pad.r = Math.round(Math.max(0, bi.w - bi.right - 8));
     document.documentElement.style.setProperty('--top-h', Math.round(top) + 'px');
     document.documentElement.style.setProperty('--bot-h', Math.round(bh) + 'px');
+    document.body.classList.toggle('sheet-open', refs.bottom.classList.contains('sheet-open'));
     updateToolsHint();
   }
 
@@ -1745,13 +1765,25 @@ const UI = (() => {
   }
 
   // ==================================================================================================================
-  // STAGE 2 — command mode (HOI4-style): commanded-kingdom sheet (Война | Армии | Регионы), goal picking on the map,
-  // army orders, peace conference, region highlights / popups.  All Render coupling goes through Render.cmd.
+  // WAR TOOL («Война», ToolDefs id 'command') — map first, two taps:
+  //   1. ATTACKER: tap a country (land / city / unit / army banner / chip) -> Kingdoms.setCommanded(kid) -> a slim HUD at the bottom,
+  //      the country outlined (Render.cmd.sel), every region it may attack lit (War.targetsFor -> Render.cmd.candidates + ckids, tgt = 1),
+  //      unavailable neighbours dimmed (Render.cmd.dim; a tap explains why).
+  //   2. TARGET: tap a lit region -> its owner is the defender -> compact war card (odds, cost vs allowance, casus, allies, route) with
+  //      ONE primary button; more lit regions of the same defender = more goals -> War.declare(a, d, goals, casus) -> «ВОЙНА» banner
+  //      (every declaration, AI ones too: Bus 'warDeclared' + the «объявило войну» log line, which then skips the feed) + camera glide.
+  //   3. AT WAR: the same tap = «Атаковать регион» (War.addGoal if needed + War.order attack for the selected / idle armies); own land =
+  //      Удерживать / Оборонять popup; the HUD pulls up into a drawer (Войны | Армии | Регионы): war cards, «+ Цель», «Мир», armies, regions.
+  //   Sea tap steps back (card -> army -> drawer -> country); ✕ releases; another country's land makes it the attacker.
   // ==================================================================================================================
   const ORD_LABEL = { attack: 'Атака', hold: 'Удерживает', defend: 'Оборона', retreat: 'Отход' };
   const MODE_LABEL = { gather: 'Сбор', march: 'В походе', siege: 'Осада', hold: 'На позиции', retreat: 'Отступает' };
   const NONE = Object.freeze([]);
-  const cm = { kid: 0, page: 'war', goal: null, peace: null, armyId: 0, selRegion: 0, tkid: 0, pop: null, view: null, mapPrev: -1, rc: null, targets: NONE, tgSig: '', tick: 0 };
+  const MAX_GOALS = 4;
+  const cm = {
+    kid: 0, page: 'war', drawer: false, tgt: null, peace: null, armyId: 0, selRegion: 0, pop: null, view: null, mapPrev: -1, rc: null,
+    tgList: NONE, tg: new Map(), tgSig: '', tgDirty: true, tick: 0,
+  };
   const rhl = { rid: 0, timer: 0 };               // transient region highlight (log focus / inspector)
   let tmpCmd = null, sheetFresh = true;
 
@@ -1794,17 +1826,48 @@ const UI = (() => {
   function fmtYears(ticks) { const y = Math.round(ticks / Const.TICKS_PER_YEAR * 10) / 10; return y + ' г.'; }
   function fmtV(v) { const a = Math.abs(v); const s = a < 10 ? String(Math.round(a * 10) / 10) : String(Math.round(a)); return (v < 0 ? '−' : '+') + s; }
   function supplyColor(s) { return s < 30 ? '#ff5b5b' : s < 60 ? '#ffc83d' : '#58e08a'; }
+  function cap1(s) { s = String(s || ''); return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; }
+  function kname(kid) { const k = S.kingdoms.get(kid); return k ? '«' + k.name + '»' : '«?»'; }
+
+  // ---- war targets (War.targetsFor): refreshed ~1 s while a country is selected, at once after war / region events
+  function refreshTargets(force) {
+    if (!cm.kid) return;
+    if (!force && !cm.tgDirty && (++cm.tick & 3) !== 0) return;
+    cm.tgDirty = false;
+    const list = safe(() => War.targetsFor(cm.kid), NONE);
+    let sig = '';
+    for (let i = 0; i < list.length; i++) { const e = list[i]; sig += e.regionId + (e.ok ? 'o' : 'x') + e.defenderKid + (e.atWar ? 'w' + e.warId : '') + (e.goal ? 'g' : '') + ','; }
+    cm.tgList = list;
+    cm.tg = new Map();
+    for (let i = 0; i < list.length; i++) cm.tg.set(list[i].regionId, list[i]);
+    if (sig !== cm.tgSig) { cm.tgSig = sig; rcSync(); }
+  }
+  function okTargets(filter) { const out = []; for (let i = 0; i < cm.tgList.length; i++) { const e = cm.tgList[i]; if (e.ok && (!filter || filter(e))) out.push(e); } return out; }
 
   // ---- Render.cmd bridge
-  function rcMake(kid) { return { kid: kid | 0, regionId: 0, armyId: 0, goals: NONE, candidates: NONE, targetKid: 0 }; }
+  function rcMake(kid) { return { kid: kid | 0, regionId: 0, armyId: 0, goals: NONE, candidates: NONE, targetKid: 0, sel: 0, tgt: 0, ckids: NONE, dim: NONE, arrows: NONE, arrowT0: 0 }; }
+  function armyWarOf(id) { const a = id ? S.armies.get(id) : null; return a ? a.warId : 0; }
   function rcSync() {
     if (!cm.kid) return;
     const rc = cm.rc || (cm.rc = rcMake(cm.kid));
     rc.kid = cm.kid; rc.armyId = cm.armyId | 0;
     rc.regionId = cm.selRegion || rhl.rid || 0;
-    if (cm.goal) { rc.goals = cm.goal.goals; rc.candidates = cm.goal.cand; rc.targetKid = cm.goal.targetKid; }
-    else if (cm.peace) { rc.goals = cm.peace.picks; rc.candidates = cm.peace.cand; rc.targetKid = cm.peace.enemy; }
-    else { rc.goals = NONE; rc.candidates = cm.armyId ? cm.targets : NONE; rc.targetKid = cm.tkid | 0; }
+    rc.arrows = NONE; rc.arrowT0 = 0; rc.dim = NONE; rc.ckids = NONE;
+    if (cm.peace) { rc.sel = 0; rc.tgt = 0; rc.goals = cm.peace.picks; rc.candidates = cm.peace.cand; rc.targetKid = cm.peace.enemy; Render.cmd = rc; return; }
+    const t = cm.tgt, aw = armyWarOf(cm.armyId);
+    const cand = [], ck = [], dim = [];
+    for (let i = 0; i < cm.tgList.length; i++) {
+      const e = cm.tgList[i];
+      if (t && t.goals.indexOf(e.regionId) >= 0) continue;
+      if (aw && !(e.atWar && e.warId === aw)) continue;
+      if (e.ok) { cand.push(e.regionId); ck.push(e.defenderKid); }
+      else if (!e.atWar && dim.length < 24) dim.push(e.regionId);
+    }
+    rc.sel = 1; rc.tgt = 1; rc.candidates = cand; rc.ckids = ck; rc.dim = dim;
+    rc.goals = t && !t.atWar ? t.goals : NONE;
+    if (t && t.atWar) rc.regionId = t.goals[0];
+    rc.targetKid = t ? t.defKid : 0;
+    if (t) { rc.arrows = t.arrows; rc.arrowT0 = t.t0; }
     Render.cmd = rc;
   }
   function applyRegionHL() {
@@ -1821,7 +1884,7 @@ const UI = (() => {
   }
 
   // ---- camera helpers
-  function fitRegions(rids, minZ, maxZ) {
+  function regionsBox(rids) {
     let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9, n = 0;
     for (let i = 0; i < rids.length; i++) {
       const r = regionOf(rids[i]); if (!r) continue;
@@ -1830,20 +1893,35 @@ const UI = (() => {
       else { const rad = Math.sqrt(r.tiles || 60) * 0.55; x0 = Math.min(x0, r.cx - rad); y0 = Math.min(y0, r.cy - rad); x1 = Math.max(x1, r.cx + rad); y1 = Math.max(y1, r.cy + rad); }
       n++;
     }
-    if (!n) return false;
+    return n ? { x0, y0, x1, y1 } : null;
+  }
+  /** glide so the regions fill the free part of the screen; ifNeeded: stay put when they are already fully visible */
+  function fitRegions(rids, minZ, maxZ, ifNeeded) {
+    const b = regionsBox(rids);
+    if (!b) return false;
     const bi = bandInfo();
-    const w = Math.max(6, x1 - x0 + 3), h = Math.max(6, y1 - y0 + 3);
-    const z = Util.clamp(Math.min((bi.right - bi.left) / w, (bi.bot - bi.top) / h), minZ || 5, maxZ || 12);
-    focusVisible((x0 + x1) / 2, (y0 + y1) / 2, z);
+    if (ifNeeded) {
+      const p0 = Render.tileToScreen(b.x0, b.y0), p1 = Render.tileToScreen(b.x1, b.y1);
+      if (p0.x >= bi.left && p1.x <= bi.right - 50 && p0.y >= bi.top && p1.y <= bi.bot && Render.cam.zoom >= (minZ || 5) * 0.9) return true;
+    }
+    const w = Math.max(6, b.x1 - b.x0 + 3), h = Math.max(6, b.y1 - b.y0 + 3);
+    const z = Util.clamp(Math.min((bi.right - bi.left - 50) / w, (bi.bot - bi.top) / h), minZ || 5, maxZ || 12);
+    focusVisible((b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2, z);
     return true;
   }
+  function ownRegionIds(kid) { const ids = []; if (regionsOn()) for (const r of S.regions.values()) if (r.ownerId === kid) ids.push(r.id); return ids; }
   function focusKingdom(kid) {
     const k = kget(kid); if (!k) return;
-    const ids = [];
-    if (regionsOn()) for (const r of S.regions.values()) if (r.ownerId === kid) ids.push(r.id);
+    const ids = ownRegionIds(kid);
     if (ids.length && fitRegions(ids, 6, 11)) return;
     const c = S.cities.get(k.capitalId) || S.cities.get(k.cities[0]);
     if (c) focusVisible(c.x + 0.5, c.y + 0.5, Math.max(Render.cam.zoom, 8));
+  }
+  /** the selected country and everything it can attack in one view (only moves when something is off screen) */
+  function focusAttacker(kid) {
+    const ids = ownRegionIds(kid);
+    cm.tgList.forEach((e) => { if ((e.ok || !e.atWar) && ids.indexOf(e.regionId) < 0) ids.push(e.regionId); });
+    if (!ids.length || !fitRegions(ids, 5, 10, true)) focusKingdom(kid);
   }
   function focusRegion(rid, zoom) {
     const c = safe(() => Render.regionCenter(rid), null);
@@ -1857,11 +1935,6 @@ const UI = (() => {
     const tr = el('div', 'track'), fill = el('div', 'fill'), tx = el('div', 'txt');
     tr.appendChild(fill); tr.appendChild(tx); row.appendChild(tr);
     return { node: row, label: lb, set(f, text, color) { setStyle(fill, 'transform', 'scaleX(' + (Math.round(Util.clamp(f, 0, 1) * 1000) / 1000) + ')'); if (color) setStyle(fill, 'backgroundColor', color); setText(tx, text); } };
-  }
-  function opinionBar() {
-    const bar = el('div', 'bar mid'); const tr = el('div', 'track'), fill = el('div', 'fill'), tx = el('div', 'txt');
-    tr.appendChild(fill); tr.appendChild(tx); bar.appendChild(tr);
-    return { node: bar, set(o) { o = Util.clamp(o | 0, -100, 100); setStyle(fill, 'left', o < 0 ? (50 + o / 2) + '%' : '50%'); setStyle(fill, 'width', Math.abs(o) / 2 + '%'); setStyle(fill, 'backgroundColor', opinionColor(o)); setText(tx, (o > 0 ? '+' : '') + o); } };
   }
   /** opinion breakdown (Diplomacy causes) as small lines; set(a,b) refreshes only when something changed */
   function causesBox() {
@@ -1923,6 +1996,19 @@ const UI = (() => {
     b.appendChild(el('span', '', label));
     return b;
   }
+  /** vertical swipe on a sheet header: fn(dy) (negative = up) */
+  function swipeOn(node, fn) {
+    let y0 = 0, t0 = 0, on = false;
+    node.addEventListener('touchstart', (e) => { if (e.touches.length !== 1) { on = false; return; } on = true; y0 = e.touches[0].clientY; t0 = performance.now(); }, { passive: true });
+    node.addEventListener('touchend', (e) => {
+      if (!on) return;
+      on = false;
+      const t = e.changedTouches && e.changedTouches[0];
+      if (!t) return;
+      const dy = t.clientY - y0;
+      if (Math.abs(dy) > 28 && performance.now() - t0 < 700) fn(dy);
+    }, { passive: true });
+  }
 
   // ---- popups next to a tapped region
   function dismissPop() {
@@ -1932,23 +2018,26 @@ const UI = (() => {
     cm.pop = null;
     if (cm.selRegion === rid) { cm.selRegion = 0; rcSync(); }
   }
-  function showPop(rid, title, sub, kid, buttons) {
+  function showPop(rid, title, sub, kid, buttons, why) {
     dismissPop();
     const host = refs.pops; if (!host) return;
-    const node = el('div', 'cpop');
+    const node = el('div', 'cpop' + (why ? ' why' : ''));
     const hd = el('div', 'cp-head');
     const k = kid ? kget(kid) : null;
     if (k) hd.appendChild(flagEl(k.flag, 24));
     const tx = el('div', 'cp-t'); tx.appendChild(el('b', '', title)); tx.appendChild(el('small', '', sub)); hd.appendChild(tx);
     node.appendChild(hd);
-    const row = el('div', 'cp-btns');
-    buttons.forEach((b) => {
-      const x = btn('cp-btn' + (b.cls ? ' ' + b.cls : ''), b.label, () => { dismissPop(); b.fn(); });
-      if (b.icon) x.appendChild(ico(b.icon, 16));
-      x.appendChild(el('span', '', b.label));
-      row.appendChild(x);
-    });
-    node.appendChild(row);
+    if (buttons.length) {
+      const row = el('div', 'cp-btns');
+      buttons.forEach((b) => {
+        const x = btn('cp-btn' + (b.cls ? ' ' + b.cls : ''), b.label, () => { dismissPop(); b.fn(); });
+        if (b.act) x.dataset.act = b.act;
+        if (b.icon) x.appendChild(ico(b.icon, 16));
+        x.appendChild(el('span', '', b.label));
+        row.appendChild(x);
+      });
+      node.appendChild(row);
+    }
     host.appendChild(node);
     const r = regionOf(rid);
     const c = safe(() => Render.regionCenter(rid), null) || (r ? { x: r.cx + 0.5, y: r.cy + 0.5 } : { x: S.w / 2, y: S.h / 2 });
@@ -1968,7 +2057,7 @@ const UI = (() => {
     if (Math.abs(cam.x - p.x) + Math.abs(cam.y - p.y) > 0.4 || Math.abs(cam.zoom - p.z) > 0.05 || performance.now() - p.born > 9000) dismissPop();
   }
 
-  // ---- commanding a kingdom
+  // ---- selecting / releasing the attacker
   function enterCommandView() {
     cm.mapPrev = state.mapMode;
     if (state.mapMode === 0) { state.mapMode = 1; Render.setMode(MAP_MODES[1].mode); syncMapFab(); }
@@ -1978,101 +2067,198 @@ const UI = (() => {
     if (cm.mapPrev === 0 && state.mapMode === 1) { state.mapMode = 0; Render.setMode(MAP_MODES[0].mode); syncMapFab(); }
     cm.mapPrev = -1;
   }
+  function resetSel() { cm.tgt = null; cm.peace = null; cm.armyId = 0; cm.selRegion = 0; dismissPop(); }
+  /** select a country as the attacker (= Kingdoms.setCommanded). opts: {focus (default true), page (opens the drawer on that page), quiet} */
   function commandKingdom(kid, opts) {
     opts = opts || {};
     if (!ready) return false;
     const k = kget(kid);
     if (!k) { toast('Королевство недоступно', 'bad'); return false; }
-    if (!regionsOn()) { toast('Командование требует карты регионов', 'bad'); return false; }
-    if (cm.kid === kid) { if (opts.focus !== false) focusKingdom(kid); return true; }
+    if (!regionsOn()) { toast('Для войны нужна карта регионов', 'bad'); return false; }
+    if (cm.kid === kid) {
+      if (opts.page) openDrawer(opts.page);
+      else if (opts.focus !== false) focusAttacker(kid);
+      return true;
+    }
     let ok = false;
     try { ok = Kingdoms.setCommanded(kid, true); } catch (e) { ok = false; }
-    if (!ok) { toast('Не удалось взять королевство под командование', 'bad'); return false; }
+    if (!ok) { toast('Не удалось выбрать это королевство', 'bad'); return false; }
     const was = cm.kid;
-    cm.goal = null; cm.peace = null; cm.armyId = 0; cm.selRegion = 0; cm.tkid = 0; dismissPop();
-    cm.kid = kid; cm.page = opts.page || 'war'; cm.rc = rcMake(kid);
+    resetSel();
+    cm.kid = kid; cm.rc = rcMake(kid); cm.drawer = !!opts.page; cm.page = opts.page || 'war';
+    cm.tgList = NONE; cm.tg = new Map(); cm.tgSig = ''; cm.tgDirty = true;
     if (insp) { insp = null; Render.highlight = null; }
     if (!was) enterCommandView();
+    refreshTargets(true);
     rcSync();
     showCmdSheet();
-    if (opts.focus !== false) defer(() => { if (cm.kid === kid && !cm.goal && !cm.peace) focusKingdom(kid); });
-    hintOnce('cmdstart', 'Откройте «Война», выберите соседа и регион для захвата. Армии соберутся сами.');
+    if (opts.focus !== false) defer(() => { if (cm.kid === kid && !cm.tgt && !cm.peace) focusAttacker(kid); });
+    if (was && !opts.quiet) toast('Выбрана страна «' + k.name + '»');
+    else hintOnce('warpick', okTargets().length ? 'Красным подсвечены регионы, куда «' + k.name + '» может напасть. Тапните один из них.' : 'Тапните по соседней стране — подсветятся цели для нападения');
     return true;
   }
   function releaseCommand(quiet) {
     if (!cm.kid) return;
     const kid = cm.kid;
-    cm.goal = null; cm.peace = null; dismissPop();
+    resetSel();
     safe(() => Kingdoms.setCommanded(kid, false), 0);
-    cm.kid = 0; cm.armyId = 0; cm.selRegion = 0; cm.tkid = 0; cm.view = null; cm.rc = null; cm.targets = NONE; cm.tgSig = '';
+    cm.kid = 0; cm.drawer = false; cm.view = null; cm.rc = null; cm.tgList = NONE; cm.tg = new Map(); cm.tgSig = ''; cm.tgDirty = true;
     Render.cmd = null;
     leaveCommandView();
     applyRegionHL();
-    if (!insp) { closeSheetDom(); }
-    if (!quiet) toast('Командование снято: королевство снова живёт само', undefined);
+    if (!insp) closeSheetDom();
+    const k = kget(kid);
+    if (!quiet) toast(k ? 'Выбор снят: «' + k.name + '» снова решает само' : 'Выбор снят');
   }
   function closeSheetDom() {
-    document.body.classList.remove('cmd', 'cmd-pick');
+    document.body.classList.remove('cmd', 'cmd-pick', 'cmd-drawer');
     refs.bottom.classList.remove('sheet-open');
-    refs.sheet.classList.remove('cmd', 'gm', 'pm', 'am');
+    refs.sheet.classList.remove('cmd', 'gm', 'pm', 'am', 'hud', 'tc', 'dr');
+    refs.sheet._mode = '';
     clear(refs.sheet);
     sheetFresh = true;
     layoutSoon();
   }
+  function openDrawer(page) {
+    if (!cm.kid) return;
+    cm.tgt = null; cm.armyId = 0; dismissPop();
+    if (page) cm.page = page;
+    cm.drawer = true;
+    rcSync(); showCmdSheet();
+  }
+  function closeDrawer() { if (!cm.kid || !cm.drawer) return; cm.drawer = false; rcSync(); showCmdSheet(); }
   function setPage(p) {
+    if (!cm.kid) return;
+    if (!cm.drawer || cm.armyId || cm.tgt || cm.peace) { cm.page = p; openDrawer(p); return; }
     if (cm.page === p && cm.view && cm.view.page === p) return;
     cm.page = p;
-    if (cm.armyId && p !== 'armies') { /* selection survives page switches */ }
     if (cm.view && cm.view.pageHost) buildPage(cm.view);
     syncSeg();
-    syncSheetMode();
   }
   function syncSeg() {
     const v = cm.view; if (!v || !v.seg) return;
     [...v.seg.children].forEach((b) => { const on = b.dataset.page === cm.page; b.classList.toggle('on', on); b.setAttribute('aria-selected', on ? 'true' : 'false'); });
   }
 
-  // ---- the command sheet
+  // ---- the bottom sheet of the war tool: HUD (collapsed) | drawer (pages) | army mode | target card | peace conference
+  function sheetMode() { return cm.peace ? 'pm' : cm.tgt ? 'tc' : cm.armyId ? 'am' : cm.drawer ? 'dr' : 'hud'; }
   function showCmdSheet() {
     if (!cm.kid) return;
     const k = kget(cm.kid);
     if (!k) { releaseCommand(true); return; }
-    const sh = refs.sheet;
+    const sh = refs.sheet, mode = sheetMode();
     clear(sh);
-    if (sheetFresh) { sh.style.animation = 'none'; void sh.offsetWidth; sh.style.animation = ''; sheetFresh = false; }
-    sh.classList.add('cmd'); sh.classList.toggle('gm', !!cm.goal); sh.classList.toggle('pm', !!cm.peace);
-    sh.classList.remove('am');
-    document.body.classList.add('cmd'); document.body.classList.toggle('cmd-pick', !!(cm.goal || cm.peace));
+    if (sheetFresh || sh._mode !== mode) { sh.style.animation = 'none'; void sh.offsetWidth; sh.style.animation = ''; sheetFresh = false; }
+    sh._mode = mode;
+    sh.classList.add('cmd');
+    ['pm', 'tc', 'am', 'hud', 'dr', 'gm'].forEach((c) => sh.classList.toggle(c, c === mode));
+    document.body.classList.add('cmd');
+    document.body.classList.toggle('cmd-pick', mode === 'tc' || mode === 'pm');
+    document.body.classList.toggle('cmd-drawer', mode === 'dr' || mode === 'pm');
     refs.bottom.classList.add('sheet-open');
     cm.view = null;
-    if (cm.goal) buildGoalBar(sh);
-    else if (cm.peace) buildPeaceSheet(sh);
-    else buildCmdMain(sh, k);
+    if (mode === 'pm') buildPeaceSheet(sh);
+    else if (mode === 'tc') buildTargetCard(sh, k);
+    else if (mode === 'hud') buildHud(sh, k);
+    else buildDrawer(sh, k);
     layoutSoon();
   }
-  function sumChip(icon, title, unit) {
-    const c = el('span', 'sc'); c.title = title; c.appendChild(ico(icon, 16));
-    const b = el('b', '', '0'); c.appendChild(b);
-    if (unit) c.appendChild(el('small', '', unit));
-    return { node: c, b };
+  function runUps(list) {
+    for (let i = 0; i < list.length; i++) { try { list[i](); } catch (e) { reportOnce('cmd.up', e); } }
   }
-  function buildCmdMain(sh, k) {
+  function grabber(fn, label) {
+    const g = el('div', 'grab');
+    g.setAttribute('role', 'button'); g.setAttribute('aria-label', label);
+    g.addEventListener('click', fn);
+    return g;
+  }
+  function drawerPage() { return warsOf(cm.kid).length ? 'war' : cm.page; }
+  function hudHint(kk) {
+    const war = okTargets((e) => e.atWar).length, peace = okTargets((e) => !e.atWar).length;
+    if (war) return 'Красные регионы — враг рядом: тап по региону — атака.';
+    if (peace) return 'Тапните подсвеченный регион — туда нападёт «' + kk.name + '».';
+    for (let i = 0; i < cm.tgList.length; i++) if (cm.tgList[i].reason) return 'Напасть сейчас не на кого: ' + cm.tgList[i].reason + '.';
+    return 'Рядом нет соседей по суше — воевать не с кем.';
+  }
+  function buildHud(sh, k) {
+    const v = { ups: [], pups: [], page: 'hud' };
+    cm.view = v;
+    sh.appendChild(grabber(() => openDrawer(drawerPage()), 'Развернуть'));
+    const head = el('div', 'sh-head cm-head hud-head');
+    const ava = el('div', 'sh-ava'); const fl = flagEl(k.flag, 32); ava.appendChild(fl); head.appendChild(ava);
+    const tt = btn('sh-title hud-t', 'Подробнее о стране', () => openDrawer(drawerPage())); tt.dataset.act = 'hud-title';
+    const t1 = el('b'); const t2 = el('small'); tt.appendChild(t1); tt.appendChild(t2); head.appendChild(tt);
+    const ex = btn('sh-btn', 'Развернуть: войны, армии, регионы', () => openDrawer(drawerPage())); ex.dataset.act = 'drawer'; ex.appendChild(ico('chevron_up', 24));
+    const cb = btn('sh-btn', 'Снять выбор страны', () => releaseCommand()); cb.dataset.act = 'release'; cb.appendChild(ico('close', 24));
+    head.appendChild(ex); head.appendChild(cb);
+    sh.appendChild(head);
+    swipeOn(head, (dy) => { if (dy < 0) openDrawer(drawerPage()); });
+    const strip = el('div', 'hud-wars hscroll'); sh.appendChild(strip);
+    const hint = el('div', 'hud-hint'); sh.appendChild(hint);
+    let sSig = '', chips = [];
+    v.ups.push(() => {
+      const kk = kget(cm.kid); if (!kk) return;
+      drawFlag(fl, kk.flag);
+      setText(t1, kk.name);
+      const u = S.units.get(kk.rulerId), st = kStats(cm.kid);
+      setText(t2, st.pop + ' жит. · ' + st.regions + ' рег. · ' + (u ? Names.ruler(u.race, u.sex) + ' ' + u.name : 'трон пуст'));
+      const ws = warsOf(cm.kid), arms = armiesOfK(cm.kid);
+      const sg = ws.map((w) => w.id + ':' + enemyLeadOf(w, cm.kid)).join(',') + '|' + (arms.length ? 1 : 0);
+      if (sg !== sSig) {
+        sSig = sg; clear(strip); chips = [];
+        ws.forEach((w) => {
+          const ek = kget(enemyLeadOf(w, cm.kid));
+          const c = btn('hwc', ek ? 'Война с «' + ek.name + '»' : 'Война', () => { openDrawer('war'); defer(() => focusWar(w)); });
+          c.dataset.war = w.id;
+          c.appendChild(ico('war', 16));
+          if (ek) c.appendChild(flagEl(ek.flag, 16));
+          const nm = el('span', 'hn', ek ? ek.name : 'враг'); c.appendChild(nm);
+          const sc = el('b', '', ''); c.appendChild(sc);
+          const gl = el('small', '', ''); c.appendChild(gl);
+          strip.appendChild(c);
+          chips.push({ w, sc, gl });
+        });
+        if (arms.length) {
+          const a = btn('hwc army', 'Армии', () => openDrawer('armies')); a.dataset.act = 'hud-armies';
+          a.appendChild(ico('army', 16)); const an = el('b', '', ''); a.appendChild(an); const aw = el('small', '', 'армии'); a.appendChild(aw);
+          strip.appendChild(a); chips.push({ army: an, word: aw });
+        }
+        strip.classList.toggle('hide', !strip.children.length);
+      }
+      chips.forEach((c) => {
+        if (c.army) { const n = armiesOfK(cm.kid).length; setText(c.army, n); setText(c.word, Util.plural(n, 'армия', 'армии', 'армий')); return; }
+        const e = enemyLeadOf(c.w, cm.kid);
+        setText(c.sc, num(warScore(c.w.id, cm.kid)) + ' : ' + num(warScore(c.w.id, e)));
+        const mine = c.w.goals.filter((g) => wside(c.w, g.kid) === wside(c.w, cm.kid));
+        setText(c.gl, mine.length ? '★ ' + mine.filter((g) => g.done).length + '/' + mine.length : '');
+      });
+      setText(hint, hudHint(kk));
+      setCls(hint, 'idle', !okTargets().length);
+    });
+    runUps(v.ups);
+  }
+  function buildDrawer(sh, k) {
     const v = { ups: [], pups: [], page: '', pageHost: null, seg: null };
     cm.view = v;
+    const am = !!cm.armyId;
+    if (am) cm.page = 'armies';
+    sh.appendChild(grabber(() => collapseSheet(), am ? 'Снять выбор армии' : 'Свернуть'));
     const head = el('div', 'sh-head cm-head');
     const ava = el('div', 'sh-ava'); ava.style.width = '56px';
     const fl = flagEl(k.flag, 32); ava.appendChild(fl); head.appendChild(ava);
     const tt = el('div', 'sh-title'); const t1 = el('b'); const t2 = el('small'); tt.appendChild(t1); tt.appendChild(t2); head.appendChild(tt);
-    const fb = btn('sh-btn primary', 'Показать на карте', () => focusKingdom(cm.kid)); fb.appendChild(ico('focus', 24)); fb.appendChild(el('span', 't', 'На карте'));
-    const cb = btn('sh-btn', 'Снять командование', () => releaseCommand()); cb.dataset.act = 'release'; cb.appendChild(ico('close', 24));
-    head.appendChild(fb); head.appendChild(cb);
+    const col = btn('sh-btn', am ? 'К списку армий' : 'Свернуть', () => collapseSheet()); col.dataset.act = 'collapse';
+    const ci = ico('chevron_up', 24); ci.style.transform = 'rotate(180deg)'; col.appendChild(ci);
+    const cb = btn('sh-btn', 'Снять выбор страны', () => releaseCommand()); cb.dataset.act = 'release'; cb.appendChild(ico('close', 24));
+    head.appendChild(col); head.appendChild(cb);
     sh.appendChild(head);
+    swipeOn(head, (dy) => { if (dy > 0) collapseSheet(); });
     v.ups.push(() => {
       const kk = kget(cm.kid); if (!kk) return;
       drawFlag(fl, kk.flag);
       setText(t1, kk.name);
       const u = S.units.get(kk.rulerId);
-      setText(t2, cm.armyId && cm.page === 'armies' ? 'Тап по региону на карте: враг — атака, свой — удержание' : (u ? Names.ruler(u.race, u.sex) + ' ' + u.name : 'трон пуст') + ' · ' + rname(kk.race));
+      setText(t2, cm.armyId ? 'Тап по региону: враг — атака, свой — удержание' : (u ? Names.ruler(u.race, u.sex) + ' ' + u.name : 'трон пуст') + ' · ' + rname(kk.race));
     });
     // summary strip
     const sum = el('div', 'csum');
@@ -2098,7 +2284,7 @@ const UI = (() => {
     });
     // segmented pages
     const seg = el('div', 'cseg'); seg.setAttribute('role', 'tablist'); v.seg = seg;
-    [['war', 'war', 'Война'], ['armies', 'army', 'Армии'], ['info', 'region', 'Регионы']].forEach(([id, icon, label]) => {
+    [['war', 'war', 'Войны'], ['armies', 'army', 'Армии'], ['info', 'region', 'Регионы']].forEach(([id, icon, label]) => {
       const b = btn('', label, () => setPage(id)); b.dataset.page = id; b.setAttribute('role', 'tab');
       b.appendChild(ico(icon, 16)); b.appendChild(el('span', '', label));
       seg.appendChild(b);
@@ -2111,8 +2297,12 @@ const UI = (() => {
     buildPage(v);
     syncSeg();
   }
-  function runUps(list) {
-    for (let i = 0; i < list.length; i++) { try { list[i](); } catch (e) { reportOnce('cmd.up', e); } }
+  function collapseSheet() { if (cm.armyId) { deselectArmy(); return; } closeDrawer(); }
+  function sumChip(icon, title, unit) {
+    const c = el('span', 'sc'); c.title = title; c.appendChild(ico(icon, 16));
+    const b = el('b', '', '0'); c.appendChild(b);
+    if (unit) c.appendChild(el('small', '', unit));
+    return { node: c, b };
   }
   function buildPage(v) {
     v.pups = [];
@@ -2125,15 +2315,19 @@ const UI = (() => {
     runUps(v.pups);
   }
 
-  // ------------------------------------------------------------------ page: Война
+  // ------------------------------------------------------------------ drawer page: Войны (war cards only; declaring happens on the map)
   function pageWar(v, host) {
     const kid = cm.kid;
-    const sw = el('div', 'sec'); sw.appendChild(el('div', 'sec-h', 'Идущие войны'));
-    const wl = el('div', 'wlist'); sw.appendChild(wl); host.appendChild(sw);
-    listSlot(v.pups, wl, () => warsOf(kid), (w) => w.id, warSig, warCard, 'Мирное время. Выберите соседа ниже и объявите войну за конкретный регион.');
-    const sn = el('div', 'sec'); sn.appendChild(el('div', 'sec-h', 'Соседи'));
-    const nl = el('div', 'nlist'); sn.appendChild(nl); host.appendChild(sn);
-    listSlot(v.pups, nl, neighborItems, (it) => it.kid, neighborSig, neighborRow, 'У королевства нет соседей по границе — воевать пока не с кем.');
+    const wl = el('div', 'wlist'); host.appendChild(wl);
+    listSlot(v.pups, wl, () => warsOf(kid), (w) => w.id, warSig, warCard, null);
+    const empty = el('div', 'wempty');
+    empty.appendChild(el('p', '', 'Мирное время. Тапните подсвеченный регион на карте — туда нападёт ваша страна. Захватив его, армии удержат регион и дальше не пойдут.'));
+    const row = el('div', 'we-row');
+    const pick = actBtn('primary', 'Выбрать цель на карте', 'war', () => closeDrawer()); pick.dataset.act = 'pick-on-map';
+    const dip = actBtn('', 'Дипломатия', 'handshake', () => openInspector('kingdom', kid, { push: true })); dip.dataset.act = 'diplomacy';
+    row.appendChild(pick); row.appendChild(dip); empty.appendChild(row);
+    host.appendChild(empty);
+    v.pups.push(() => { setCls(empty, 'hide', warsOf(kid).length > 0); });
   }
   function warSig(w) {
     const kid = cm.kid;
@@ -2172,7 +2366,7 @@ const UI = (() => {
       c.classList.add('tapc'); c.addEventListener('click', () => { focusRegion(g.regionId, 8); setRegionHL(g.regionId, 3500); });
       goals.appendChild(c);
     });
-    if (!mine.length) goals.appendChild(el('span', 'muted', theirs.length ? 'Своих целей нет — «+ Цель» выберет регион для контрудара' : 'Целей нет — добавьте регион'));
+    if (!mine.length) goals.appendChild(el('span', 'muted', theirs.length ? 'Своих целей нет — «+ Цель» и тап по красному региону: контрудар' : 'Целей нет — добавьте регион'));
     card.appendChild(goals);
     if (mine.length && mine.every((g) => g.done)) {
       card.appendChild(el('div', 'wc-note', 'Цели взяты: армии удерживают регионы и дальше не пойдут. Война продолжается, пока вы не заключите мир или не поставите новую цель.'));
@@ -2188,8 +2382,8 @@ const UI = (() => {
       box.appendChild(r); card.appendChild(box);
     }
     const acts = el('div', 'wc-acts');
-    const add = actBtn('', '+ Цель', 'flag_goal', () => startGoalMode(lead, w.id)); add.dataset.act = 'addgoal';
-    const front = actBtn('', 'Фронт', 'focus', () => focusWar(w));
+    const add = actBtn('', '+ Цель', 'flag_goal', () => addGoalMode(w.id)); add.dataset.act = 'addgoal';
+    const front = actBtn('', 'Фронт', 'focus', () => { closeDrawer(); defer(() => focusWar(w)); }); front.dataset.act = 'front';
     const peace = actBtn('primary', 'Мир', 'handshake', () => openPeace(w.id)); peace.dataset.act = 'peace';
     acts.appendChild(add); acts.appendChild(front); acts.appendChild(peace);
     card.appendChild(acts);
@@ -2200,8 +2394,7 @@ const UI = (() => {
       bEn.set(es / 100, num(es), e ? e.color : '#ff5b5b');
       const wear = safe(() => War.weariness(kid), 0);
       let held = 0; try { held = War.heldRegions(w.id, kid).length; } catch (er) { held = 0; }
-      let sub = (extra > 0 ? '+' + extra + ' ' + Util.plural(extra, 'союзник', 'союзника', 'союзников') + ' · ' : '') + 'удерживаете: ' + held;
-      setText(sm, sub);
+      setText(sm, (extra > 0 ? '+' + extra + ' ' + Util.plural(extra, 'союзник', 'союзника', 'союзников') + ' · ' : '') + 'удерживаете: ' + held);
       setText(info, 'Усталость от войны: ' + num(wear) + '%' + (f && f.stability < 30 ? ' · смута в стране' : ''));
       setCls(info, 'warn', wear >= 60);
       setText(dur, fmtYears(S.tick - w.started));
@@ -2215,232 +2408,302 @@ const UI = (() => {
     if (!ids.length) { const lead = enemyLeadOf(w, kid); focusKingdom(lead); return; }
     fitRegions(ids, 6, 10);
   }
-  function neighborItems() {
-    const kid = cm.kid;
-    const rels = new Map();
-    relationsOf(kid).forEach((r) => rels.set(r.other, r));
-    const out = [];
-    safe(() => Diplomacy.neighbors(kid), []).forEach((n) => { const k2 = kget(n.kid); if (k2) out.push({ kid: n.kid, dist: n.dist, contact: n.contact, rel: rels.get(n.kid) || null, can: null }); });
-    // enemies without a common border (allies of the foe) still deserve a row
-    warsOf(kid).forEach((w) => { warEnemies(w, kid).forEach((e) => { if (kget(e) && !out.some((o) => o.kid === e)) out.push({ kid: e, dist: 0, contact: 0, rel: rels.get(e) || null, can: null }); }); });
-    out.forEach((o) => { o.can = o.rel && o.rel.state === Const.REL.WAR ? { ok: false, reason: 'война уже идёт' } : safe(() => Diplomacy.canDeclare(kid, o.kid), { ok: false, reason: '' }); });
-    return out;
-  }
-  function neighborSig(it) {
-    const k2 = S.kingdoms.get(it.kid), r = it.rel;
-    return it.kid + ':' + (k2 ? k2.name + flagSig(k2.flag) : '') + ':' + (r ? r.state + ':' + (r.truce ? 1 : 0) + ':' + r.vassal : '') + ':' + (it.can.ok ? 1 : 0) + it.can.reason;
-  }
-  function neighborRow(it) {
-    const kid = cm.kid, k2 = S.kingdoms.get(it.kid), r = it.rel;
-    const row = el('div', 'nrow'); row.dataset.kid = it.kid;
-    const top = el('div', 'nr-top');
-    top.appendChild(k2 ? kingdomLink(k2) : el('span', '', '?'));
-    const chips = el('span', 'nr-chips');
-    const st = r ? r.state : Const.REL.PEACE;
-    if (st === Const.REL.WAR) chips.appendChild(chipEl('Война', 'bad', 'war'));
-    else if (st === Const.REL.ALLIANCE) chips.appendChild(chipEl('Союз', 'good', 'heart'));
-    else chips.appendChild(chipEl('Мир', ''));
-    if (r && r.truce && st !== Const.REL.WAR) chips.appendChild(chipEl('Перемирие ' + fmtYears(r.truceLeft), 'warn'));
-    if (r && r.vassal === 'overlord') chips.appendChild(chipEl('Сюзерен', 'gold', 'crown'));
-    if (r && r.vassal === 'vassal') chips.appendChild(chipEl('Вассал', 'gold', 'crown'));
-    top.appendChild(chips);
-    row.appendChild(top);
-    const mid = el('div', 'nr-mid');
-    const ob = opinionBar(); mid.appendChild(ob.node);
-    const sr = el('span', 'chip nr-str'); mid.appendChild(sr);
-    row.appendChild(mid);
-    const cz = causesBox(); row.appendChild(cz.node);
-    ob.node.classList.add('tapc'); ob.node.title = 'Тап: почему такие отношения';
-    ob.node.addEventListener('click', () => { cz.toggle(); cz.set(kid, it.kid); });
-    const bot = el('div', 'nr-bot');
-    if (st !== Const.REL.WAR) {
-      if (it.can.ok) {
-        const b = actBtn('danger', 'Объявить войну', 'war', () => startGoalMode(it.kid, 0)); b.dataset.act = 'declare'; b.dataset.kid = it.kid;
-        bot.appendChild(b);
-      } else {
-        const b = actBtn('', 'Объявить войну', 'war', () => { toast(it.can.reason || 'Сейчас нельзя', 'bad'); }); b.classList.add('off'); b.dataset.act = 'declare'; b.dataset.kid = it.kid;
-        bot.appendChild(b);
-        if (it.can.reason) bot.appendChild(el('span', 'why', it.can.reason));
-      }
-    } else bot.appendChild(el('span', 'why', 'Война идёт — карточка выше'));
-    row.appendChild(bot);
-    const upd = (cur) => {
-      const rr = cur.rel;
-      ob.set(rr ? rr.opinion : 0);
-      const ri = ratioInfo(kid, cur.kid);
-      setText(sr, ri.text); sr.className = 'chip nr-str ' + ri.cls;
-      if (cz.open) cz.set(kid, cur.kid);
-    };
-    return { node: row, upd };
+  /** «+ Цель» of a war card: back to the map, the enemy regions of that war are lit — a tap opens the attack card («Цель» / «Атаковать») */
+  function addGoalMode(warId) {
+    const w = safe(() => War.get(warId), null);
+    if (!w || w.ended) { toast('Война окончена', 'bad'); return; }
+    cm.drawer = false; cm.armyId = 0; cm.tgt = null; cm.tgDirty = true;
+    refreshTargets(true); rcSync(); showCmdSheet();
+    const ids = okTargets((e) => e.atWar && e.warId === warId && !e.goal).map((e) => e.regionId);
+    if (!ids.length) { toast('Новых целей рядом нет: сначала займите соседние земли', 'bad'); return; }
+    defer(() => fitRegions(ids, 6, 10));
+    toast('Тапните регион врага, подсвеченный красным, — он станет новой целью');
   }
 
-  // ------------------------------------------------------------------ goal picking (declare a war / add a goal)
-  function addableGoals(w, kid) {
-    const out = [];
-    const s = wside(w, kid); if (!s) return out;
-    const mates = s === 1 ? w.attackers : w.defenders, foes = s === 1 ? w.defenders : w.attackers;
-    for (let i = 0; i < mates.length; i++) for (let j = 0; j < foes.length; j++) {
-      const list = safe(() => Regions.attackable(mates[i], foes[j]), []);
-      for (let q = 0; q < list.length; q++) {
-        const rid = list[q];
-        if (out.indexOf(rid) >= 0) continue;
-        if (w.goals.some((g) => g.kid === kid && g.regionId === rid)) continue;
-        out.push(rid);
-      }
-    }
-    return out;
-  }
-  function startGoalMode(targetKid, warId) {
-    const kid = cm.kid;
-    if (!kget(kid) || !kget(targetKid)) return;
-    let cand = [];
-    if (warId) { const w = safe(() => War.get(warId), null); if (!w || w.ended) { toast('Война окончена', 'bad'); return; } cand = addableGoals(w, kid); }
-    else {
-      const can = safe(() => Diplomacy.canDeclare(kid, targetKid), { ok: false, reason: '' });
-      if (!can.ok) { toast(can.reason || 'Сейчас нельзя объявить войну', 'bad'); return; }
-      cand = safe(() => War.potentialGoals(kid, targetKid), []).slice();
-    }
-    if (!cand.length) { toast('Нет доступных регионов: цель должна граничить с вашими землями', 'bad'); return; }
-    dismissPop();
-    cm.peace = null; cm.armyId = 0; cm.selRegion = 0; cm.tkid = targetKid;
-    cm.goal = { targetKid, warId: warId | 0, goals: [], cand, allowance: safe(() => War.allowance(kid, targetKid), 40) };
-    rcSync();
-    showCmdSheet();
-    defer(() => { if (cm.goal) fitRegions(cand, 6, 10); });
-    hintOnce('goalpick', 'Тапайте по подсвеченным регионам, чтобы выбрать цели. Захватив, армии удержат их и не пойдут дальше.');
-  }
-  function cancelGoal(silent) {
-    if (!cm.goal) return;
-    cm.goal = null;
-    if (!silent) { rcSync(); showCmdSheet(); }
-  }
-  function goalCost() { let c = 0; if (cm.goal) for (let i = 0; i < cm.goal.goals.length; i++) c += regionCostOf(cm.goal.goals[i]); return c; }
-  function toggleGoal(rid) {
-    const g = cm.goal; if (!g) return;
+  // ------------------------------------------------------------------ the target card (declare a war / attack a region)
+  function arrowFor(rid, from) {
+    const c = safe(() => Render.regionCenter(rid), null); if (!c) return null;
+    if (from) return { x0: from.x, y0: from.y, x1: c.x, y1: c.y };
     const r = regionOf(rid);
-    if (!r) return;
-    const i = g.goals.indexOf(rid);
-    if (i >= 0) g.goals.splice(i, 1);
-    else if (g.cand.indexOf(rid) >= 0) { g.goals.push(rid); if (g.goals.length === 1) hintOnce('goalone', 'Можно выбрать несколько регионов — но чем больше цель, тем труднее победить'); }
-    else {
-      const o = r.ownerId ? kget(r.ownerId) : null;
-      toast(!o ? 'Это ничья земля — войны за неё не бывает' : r.ownerId === cm.kid ? 'Это ваш регион' : r.ownerId === g.targetKid ? 'Регион не граничит с вашими землями' : 'Нужен регион врага рядом с вашими землями', 'bad');
-      return;
+    let best = null, bd = 1e9;
+    if (r) for (let i = 0; i < r.nb.length; i++) {
+      const q = regionOf(r.nb[i]);
+      if (!q || q.controllerId !== cm.kid) continue;
+      const qc = safe(() => Render.regionCenter(q.id), null); if (!qc) continue;
+      const d = (qc.x - c.x) * (qc.x - c.x) + (qc.y - c.y) * (qc.y - c.y);
+      if (d < bd) { bd = d; best = qc; }
     }
-    refreshGoal();
+    if (!best) { const k = kget(cm.kid), cap = k && (S.cities.get(k.capitalId) || S.cities.get(k.cities[0])); if (cap) best = { x: cap.x + 0.5, y: cap.y + 0.5 }; }
+    return best ? { x0: best.x, y0: best.y, x1: c.x, y1: c.y } : null;
   }
-  function confirmGoals() {
-    const g = cm.goal; if (!g || !g.goals.length) return;
-    const kid = cm.kid;
-    if (g.warId) {
-      let n = 0, why = '';
-      g.goals.forEach((rid) => { const ok = safe(() => War.addGoal(g.warId, kid, rid), false); if (ok) n++; else if (!why) why = safe(() => War.lastError, ''); });
-      cm.goal = null; rcSync(); showCmdSheet();
-      if (n) toast(n > 1 ? 'Новых целей: ' + n : 'Новая цель войны: «' + rName(g.goals[0]) + '»', 'good'); else toast(why || 'Цель не принята', 'bad');
-      return;
+  /** source regions (ours, next to the goals) — for the camera */
+  function sourceRegions(rids) {
+    const out = [];
+    rids.forEach((rid) => { const r = regionOf(rid); if (r) r.nb.forEach((n) => { const q = regionOf(n); if (q && q.controllerId === cm.kid && out.indexOf(n) < 0) out.push(n); }); });
+    return out;
+  }
+  function attackArmies(t) {
+    const all = armiesOfK(cm.kid).filter((a) => a.warId === t.warId && a.mode !== 'retreat' && a.order.type !== 'retreat');
+    if (t.armyId) return all.filter((a) => a.id === t.armyId);
+    const idle = all.filter((a) => a.order.type !== 'attack');
+    if (idle.length) return idle;
+    const c = safe(() => Render.regionCenter(t.goals[0]), null);
+    if (!all.length || !c) return [];
+    all.sort((a, b) => Util.dist2(a.x, a.y, c.x, c.y) - Util.dist2(b.x, b.y, c.x, c.y));
+    return [all[0]];
+  }
+  function targetArrows(t) {
+    if (t.atWar) {
+      const arms = attackArmies(t);
+      const out = arms.slice(0, 4).map((a) => arrowFor(t.goals[0], { x: a.x, y: a.y })).filter(Boolean);
+      if (out.length) return out;
     }
-    const w = safe(() => War.declare(kid, g.targetKid, g.goals.slice(), undefined), null);
-    if (!w) { toast(safe(() => War.lastError, '') || 'Не удалось объявить войну', 'bad'); return; }
-    cm.goal = null; cm.page = 'armies'; cm.armyId = 0;
+    return t.goals.map((rid) => arrowFor(rid, null)).filter(Boolean);
+  }
+  function targetInfoOf(t) {
+    const info = safe(() => War.targetInfo(cm.kid, t.goals[0], { route: true }), null);
+    return info || { ok: true, odds: 0.5, ratio: 1, allies: [], friends: [], allowance: 40, cost: regionCostOf(t.goals[0]) };
+  }
+  function pickTarget(rid) {
+    const e = cm.tg.get(rid);
+    if (!cm.kid || !e) return false;
+    if (!e.ok) { explainRegion(rid, e); return false; }
+    dismissPop();
+    const t = cm.tgt;
+    if (t && !t.atWar && !e.atWar && t.defKid === e.defenderKid) { toggleTargetGoal(rid); return true; }
+    const armyId = e.atWar && cm.armyId && armyWarOf(cm.armyId) === e.warId ? cm.armyId : 0;
+    cm.drawer = false; cm.selRegion = 0;
+    cm.tgt = { defKid: e.defenderKid, goals: [rid], warId: e.warId, atWar: e.atWar, armyId, t0: performance.now(), info: null, arrows: NONE, render: null };
+    cm.tgt.info = targetInfoOf(cm.tgt);
+    cm.tgt.arrows = targetArrows(cm.tgt);
     rcSync(); showCmdSheet();
-    toast('Война объявлена! Армии собираются…', 'good');
+    const ids = [rid].concat(sourceRegions([rid]));
+    defer(() => { if (cm.tgt) fitRegions(ids, 5, 11, true); });
+    if (!e.atWar) hintOnce('tgtmore', 'Можно добавить ещё регионы этой страны — тапните их на карте. Чем больше целей, тем труднее война.');
+    return true;
   }
-  function buildGoalBar(sh) {
-    const g = cm.goal;
-    const v = { ups: [], pups: [], page: 'goal' };
-    cm.view = v;
-    const tk = kget(g.targetKid);
-    const head = el('div', 'sh-head gb-head');
-    const ava = el('div', 'sh-ava'); ava.style.width = '56px';
-    if (tk) ava.appendChild(flagEl(tk.flag, 32)); else ava.appendChild(ico('war', 32));
-    head.appendChild(ava);
-    const tt = el('div', 'sh-title');
-    tt.appendChild(el('b', '', g.warId ? 'Новая цель войны' : 'Война против «' + (tk ? tk.name : '?') + '»'));
-    tt.appendChild(el('small', '', 'Тап по региону на карте'));
-    head.appendChild(tt);
-    const cb = btn('sh-btn', 'Отмена', () => cancelGoal()); cb.appendChild(ico('close', 24)); head.appendChild(cb);
-    sh.appendChild(head);
-    const body = el('div', 'sh-body gb-body'); sh.appendChild(body); refs.sheetBody = body;
-    const chipsBox = el('div', 'chips gb-chips'); body.appendChild(chipsBox);
-    const bar = miniBar('Цена'); bar.node.classList.add('gb-bar'); body.appendChild(bar.node);
-    const hint = el('div', 'gb-hint'); body.appendChild(hint);
-    const foot = el('div', 'sh-foot');
-    const no = actBtn('', 'Отмена', null, () => cancelGoal()); no.dataset.act = 'goal-cancel';
-    const go = actBtn('danger', 'Начать войну', 'war', () => confirmGoals()); go.dataset.act = 'goal-go';
-    foot.appendChild(no); foot.appendChild(go); sh.appendChild(foot);
-    let sig = '';
-    g.render = () => {
-      const kid = cm.kid;
-      const s = g.goals.join(',');
-      if (s !== sig) {
-        sig = s; clear(chipsBox);
-        g.goals.forEach((rid) => {
-          const c = chipEl(rName(rid) + ' · ' + regionCostOf(rid), 'gold', 'star'); c.classList.add('tapc'); c.title = 'Тап: убрать цель';
-          c.appendChild(el('i', 'x', '×'));
-          c.addEventListener('click', () => toggleGoal(rid));
-          chipsBox.appendChild(c);
-        });
-        if (!g.goals.length) chipsBox.appendChild(el('span', 'muted', 'Цели не выбраны — подсвеченные регионы можно захватить'));
-      }
-      const cost = goalCost(), allow = Math.max(1, g.allowance || 40);
-      bar.set(cost / allow, cost + ' / ' + num(allow), cost <= allow ? '#58e08a' : '#ff9a3a');
-      let claims = 0;
-      g.goals.forEach((rid) => { if (safe(() => Regions.hasClaim(rid, kid), false)) claims++; });
-      let t, cls = '';
-      if (!g.goals.length) t = g.warId ? 'Выберите регион врага рядом с вашими землями.' : 'Выберите хотя бы один регион для захвата.';
-      else if (cost > allow) { t = 'Аппетиты велики: победа будет трудной, а мир — далёким.'; cls = 'warn'; }
-      else if (claims === g.goals.length) { t = 'Законные притязания: война справедлива, дурная слава растёт слабо.'; cls = 'good'; }
-      else t = 'Захватив регион, армия удержит его. Война закончится только миром.';
-      setText(hint, t); hint.className = 'gb-hint ' + cls;
-      go.disabled = !g.goals.length;
-      setText(go.lastChild, g.warId ? 'Добавить цель' : 'Начать войну');
-    };
-    g.render();
-  }
-  function refreshGoal() { if (cm.goal && cm.goal.render) cm.goal.render(); rcSync(); }
-
-  // ------------------------------------------------------------------ page: Армии
-  function armyById(id) { const a = id ? S.armies.get(id) : null; return a && a.kingdomId === cm.kid ? a : null; }
-  /** enemy regions this army may be ordered to attack (enemy land next to ours, or our land lost to the enemy) — shown as dashed outlines */
-  function refreshTargets() {
-    const a = cm.armyId ? S.armies.get(cm.armyId) : null;
-    const w = a ? S.wars.get(a.warId) : null;
-    let out = NONE;
-    if (a && w && !w.ended) {
-      const side = wside(w, cm.kid), mates = side === 1 ? w.attackers : w.defenders, foes = side === 1 ? w.defenders : w.attackers;
-      const friend = (x) => !!x && wside(w, x) === side, foe = (x) => !!x && wside(w, x) === 3 - side;
-      out = [];
-      for (let i = 0; i < mates.length; i++) for (let j = 0; j < foes.length; j++) {
-        const list = safe(() => Regions.attackable(mates[i], foes[j]), []);
-        for (let q = 0; q < list.length; q++) { const r = regionOf(list[q]); if (r && !friend(r.controllerId) && out.indexOf(r.id) < 0) out.push(r.id); }
-      }
-      for (const r of S.regions.values()) if (friend(r.ownerId) && foe(r.controllerId) && out.indexOf(r.id) < 0) out.push(r.id);
+  function toggleTargetGoal(rid) {
+    const t = cm.tgt; if (!t) return;
+    const i = t.goals.indexOf(rid);
+    if (i >= 0) {
+      if (t.goals.length === 1) { cancelTarget(); return; }
+      t.goals.splice(i, 1);
+      if (i === 0) t.info = targetInfoOf(t);
+    } else {
+      const e = cm.tg.get(rid);
+      if (!e || !e.ok || e.atWar || e.defenderKid !== t.defKid) { if (e && !e.ok) explainRegion(rid, e); return; }
+      if (t.goals.length >= MAX_GOALS) { toast('Не больше ' + MAX_GOALS + ' целей за одну войну', 'bad'); return; }
+      t.goals.push(rid);
     }
-    const sig = out.join(',');
-    if (sig !== cm.tgSig) { cm.tgSig = sig; cm.targets = out.length ? out : NONE; rcSync(); }
+    t.arrows = targetArrows(t); t.t0 = performance.now();
+    rcSync();
+    if (t.render) t.render(true);
   }
+  function cancelTarget() {
+    if (!cm.tgt) return;
+    cm.tgt = null;
+    rcSync(); showCmdSheet();
+  }
+  function goalsCost(t) { let c = 0; for (let i = 0; i < t.goals.length; i++) c += regionCostOf(t.goals[i]); return c; }
+  /** «Объявить войну»: War.declare(attacker, defender, exactly the chosen goals, casus) */
+  function confirmTarget() {
+    const t = cm.tgt, kid = cm.kid;
+    if (!t || t.atWar || !t.goals.length) return false;
+    const casus = t.goals.every((rid) => safe(() => Regions.hasClaim(rid, kid), false)) ? 'claim' : 'conquest';
+    const goals = t.goals.slice();
+    const w = safe(() => War.declare(kid, t.defKid, goals, casus), null);
+    if (!w) { toast(cap1(safe(() => War.lastError, '') || 'не удалось объявить войну'), 'bad'); cm.tgDirty = true; refreshTargets(true); return false; }
+    cm.tgt = null; cm.drawer = false; cm.armyId = 0; cm.tgDirty = true;
+    clearToasts();
+    refreshTargets(true); rcSync(); showCmdSheet();
+    const ids = goals.concat(sourceRegions(goals));
+    defer(() => { if (cm.kid === kid) fitRegions(ids, 6, 10); });
+    hintOnce('warstarted', 'Армии собираются сами и пойдут к цели. Взяв регион, они удержат его. Войны, армии и мир — в панели снизу.');
+    return true;
+  }
+  /** «Атаковать»: the goal (if it is not one yet and the region is the enemy's) + an attack order for the selected / idle armies */
+  function attackTarget() {
+    const t = cm.tgt, kid = cm.kid;
+    if (!t || !t.atWar) return false;
+    const rid = t.goals[0], r = regionOf(rid);
+    const w = safe(() => War.get(t.warId), null);
+    if (!w || w.ended || !r) { toast('Война окончена', 'bad'); cancelTarget(); return false; }
+    let goal = false;
+    if (r.ownerId !== kid && !(t.info && t.info.goal)) goal = !!safe(() => War.addGoal(w.id, kid, rid), false);
+    const arms = attackArmies(t);
+    const ok = arms.length ? !!safe(() => War.order(kid, arms.map((a) => a.id), { type: 'attack', regionId: rid }), false) : false;
+    const keepArmy = t.armyId;
+    cm.tgt = null; cm.armyId = keepArmy && armyById(keepArmy) ? keepArmy : 0; cm.tgDirty = true;
+    refreshTargets(true);
+    if (ok) {
+      toast('Атака на «' + r.name + '»: ' + (arms.length === 1 ? 'армия ' + (armyLabel(arms[0]).replace(/^Армия /, '')) + ' выступает' : arms.length + ' ' + Util.plural(arms.length, 'армия', 'армии', 'армий') + ' выступают'), 'good');
+      cm.selRegion = rid; setTimeout(() => { if (cm.selRegion === rid) { cm.selRegion = 0; rcSync(); } }, 1600);
+    } else if (goal) toast('Новая цель войны: «' + r.name + '». ' + (arms.length ? 'Армии пока не могут выступить' : 'Армий нет — они соберутся для этой цели'), arms.length ? 'bad' : undefined);
+    else toast(cap1(safe(() => War.lastError, '') || 'армиям некуда идти'), 'bad');
+    rcSync(); showCmdSheet();
+    return ok || goal;
+  }
+  /** «Цель»: only a new war goal (the War AI sends the idle armies of a commanded kingdom to the first open goal by itself) */
+  function goalOnly() {
+    const t = cm.tgt, kid = cm.kid;
+    if (!t || !t.atWar) return false;
+    const rid = t.goals[0];
+    const ok = !!safe(() => War.addGoal(t.warId, kid, rid), false);
+    if (ok) toast('Новая цель войны: «' + rName(rid) + '» — свободные армии пойдут туда', 'good'); else toast(cap1(safe(() => War.lastError, '') || 'цель не принята'), 'bad');
+    cm.tgt = null; cm.tgDirty = true; refreshTargets(true); rcSync(); showCmdSheet();
+    return ok;
+  }
+  function oddsWords(r) {
+    if (r >= 1.6) return { t: 'явный перевес', cls: 'good' };
+    if (r >= 1.15) return { t: 'перевес', cls: 'good' };
+    if (r >= 0.87) return { t: 'силы равны', cls: 'warn' };
+    if (r >= 0.6) return { t: 'враг сильнее', cls: 'bad' };
+    return { t: 'враг намного сильнее', cls: 'bad' };
+  }
+  function ratioText(r) { if (!(r > 0)) return '0 : 1'; if (r >= 1) return (r >= 9.9 ? '10+' : r.toFixed(1)) + ' : 1'; const q = 1 / r; return '1 : ' + (q >= 9.9 ? '10+' : q.toFixed(1)); }
+  function namesOf(list) { return list.map((o) => kname(o.kid) + (o.sure ? '' : ' (вероятно)')).join(', '); }
+  function tcLine(parent, icon, text, cls) { const l = el('div', 'tc-line' + (cls ? ' ' + cls : '')); l.appendChild(ico(icon, 16)); l.appendChild(el('span', '', text)); parent.appendChild(l); return l; }
+  function buildTargetCard(sh, k) {
+    const t = cm.tgt, kid = cm.kid;
+    const v = { ups: [], pups: [], page: 'target' };
+    cm.view = v;
+    const dk = kget(t.defKid);
+    const head = el('div', 'sh-head tc-head');
+    const vs = el('div', 'tc-vs');
+    const a1 = el('span', 'tc-side a'); a1.appendChild(flagEl(k.flag, 24)); a1.appendChild(el('b', '', k.name));
+    const x = el('span', 'tc-x'); x.appendChild(ico('war', 16));
+    const d1 = el('span', 'tc-side d'); if (dk) d1.appendChild(flagEl(dk.flag, 24)); d1.appendChild(el('b', '', dk ? dk.name : '?'));
+    vs.appendChild(a1); vs.appendChild(x); vs.appendChild(d1);
+    const ttl = el('div', 'tc-tt'); ttl.appendChild(vs);
+    const sub = el('small', 'tc-sub'); ttl.appendChild(sub);
+    head.appendChild(ttl);
+    const cb = btn('sh-btn', 'Отмена', () => cancelTarget()); cb.dataset.act = 'tgt-close'; cb.appendChild(ico('close', 24)); head.appendChild(cb);
+    sh.appendChild(head);
+    const body = el('div', 'sh-body tc-body'); sh.appendChild(body); refs.sheetBody = body;
+    const goals = el('div', 'chips tc-goals'); body.appendChild(goals);
+    const odds = el('div', 'tc-odds');
+    odds.appendChild(el('label', '', t.atWar ? 'На месте' : 'Силы'));
+    const ob = el('div', 'tc-ob'); const oa = el('i'), od = el('i'); ob.appendChild(oa); ob.appendChild(od); ob.appendChild(el('span', 'mid')); odds.appendChild(ob);
+    const ot = el('b'); odds.appendChild(ot);
+    body.appendChild(odds);
+    const note = el('div', 'tc-note hide'); body.appendChild(note);
+    const cost = miniBar('Цена'); cost.node.classList.add('tc-cost'); body.appendChild(cost.node);
+    const lines = el('div', 'tc-lines'); body.appendChild(lines);
+    const foot = el('div', 'sh-foot tc-foot');
+    const no = actBtn('', 'Отмена', null, () => cancelTarget()); no.dataset.act = 'tgt-cancel';
+    foot.appendChild(no);
+    let goalBtn = null;
+    if (t.atWar) { goalBtn = actBtn('', 'Цель', 'star', () => goalOnly()); goalBtn.dataset.act = 'tgt-goal'; foot.appendChild(goalBtn); }
+    const go = actBtn('danger', t.atWar ? 'Атаковать' : 'Объявить войну', 'war', () => (t.atWar ? attackTarget() : confirmTarget())); go.dataset.act = 'tgt-go';
+    foot.appendChild(go);
+    sh.appendChild(foot);
+    let gSig = '', lSig = '';
+    t.render = (force) => {
+      if (cm.tgt !== t) return;
+      const info = t.info || {};
+      const ka = kget(kid), kd = kget(t.defKid);
+      // goals as chips (tap: remove); a hint that more regions of the same country can be added
+      const more = t.atWar ? 0 : okTargets((e) => !e.atWar && e.defenderKid === t.defKid && t.goals.indexOf(e.regionId) < 0).length;
+      const gs = t.goals.join(',') + '|' + more + '|' + (info.goal ? 1 : 0);
+      if (force || gs !== gSig) {
+        gSig = gs; clear(goals);
+        t.goals.forEach((rid) => {
+          const r = regionOf(rid);
+          const nc = r ? r.cityIds.length : 0;
+          const c = chipEl(rName(rid) + (nc ? ' · ' + nc + ' ' + Util.plural(nc, 'город', 'города', 'городов') : ''), t.atWar ? (info.goal ? 'gold' : 'bad') : 'gold', t.atWar ? (info.goal ? 'star' : 'region') : 'star');
+          c.dataset.rid = rid;
+          if (!t.atWar) { c.classList.add('tapc'); c.title = 'Тап: убрать цель'; c.appendChild(el('i', 'x', '×')); c.addEventListener('click', () => toggleTargetGoal(rid)); }
+          goals.appendChild(c);
+        });
+        if (t.atWar) goals.appendChild(el('span', 'tmore', info.goal ? 'цель войны' : (regionOf(t.goals[0]) && regionOf(t.goals[0]).ownerId === kid ? 'ваша земля в руках врага' : 'пока не цель войны')));
+        else if (more && t.goals.length < MAX_GOALS) goals.appendChild(el('span', 'tmore', '+ ещё ' + more + ' ' + Util.plural(more, 'регион', 'региона', 'регионов') + ' — тап на карте'));
+      }
+      const n = t.goals.length, r0 = regionOf(t.goals[0]);
+      setText(sub, t.atWar ? 'Атаковать регион «' + rName(t.goals[0]) + '»' : (n > 1 ? 'Цели: ' + n + ' ' + Util.plural(n, 'регион', 'региона', 'регионов') : 'Цель — регион «' + rName(t.goals[0]) + '»'));
+      // odds: our side vs theirs, both colours in one bar, honest words
+      const ratio = info.ratio > 0 ? info.ratio : (info.myPow > 0 ? 9.9 : 0);
+      const share = Util.clamp(info.odds === undefined ? 0.5 : info.odds, 0.04, 0.96);
+      setStyle(oa, 'width', Math.round(share * 1000) / 10 + '%'); setStyle(oa, 'backgroundColor', ka ? ka.color : '#58c7ff');
+      setStyle(od, 'width', Math.round((1 - share) * 1000) / 10 + '%'); setStyle(od, 'backgroundColor', kd ? kd.color : '#ff5b5b');
+      const noArmy = t.atWar && !(info.myPow > 0);
+      const ow = noArmy ? { t: 'армий нет', cls: 'bad' } : oddsWords(ratio);
+      setText(ot, noArmy ? ow.t : ratioText(ratio) + ' · ' + ow.t);
+      ot.className = ow.cls;
+      let nt = '', ncls = '';
+      if (!t.atWar && ratio < 0.6) { nt = 'Честно: скорее всего, война будет проиграна — враг намного сильнее' + ((info.allies || []).length ? ' и у него есть союзники' : '') + '.'; ncls = 'bad'; }
+      else if (!t.atWar && ratio < 0.87) { nt = 'Враг сильнее: регион можно не удержать, а противник ответит ударом.'; ncls = 'warn'; }
+      else if (t.atWar && !noArmy && ratio < 0.85) { nt = 'Защитников больше: атака может захлебнуться.'; ncls = 'warn'; }
+      setText(note, nt); note.className = 'tc-note ' + (nt ? ncls : 'hide');
+      // cost: vs the comfortable budget (declare) / vs our war score (what the peace table will ask for it)
+      const c = goalsCost(t);
+      if (t.atWar) setCls(cost.node, 'hide', true);
+      else { const al = Math.max(1, info.allowance || 40); cost.set(c / al, c + ' / ' + num(al), c <= al ? '#58e08a' : '#ff9a3a'); }
+      // the rest: casus, allies, route, armies
+      const arms = t.atWar ? attackArmies(t) : NONE;
+      const ls = [t.goals.join(','), Math.round(info.score || 0), (info.allies || []).length, (info.friends || []).length, info.routeOk, arms.map((a) => a.id + ':' + a.supply).join(','), c > (info.allowance || 40) ? 1 : 0].join('|');
+      if (force || ls !== lSig) {
+        lSig = ls; clear(lines);
+        if (!t.atWar) {
+          const claim = t.goals.every((rid) => safe(() => Regions.hasClaim(rid, kid), false));
+          if (claim) tcLine(lines, 'flag_goal', 'Законное притязание: дурная слава +3, соседи поймут', 'good');
+          else tcLine(lines, 'crown', 'Без повода: дурная слава +' + (info.infamy || 10) + ', отношения с соседями испортятся', 'warn');
+          if ((info.allies || []).length) tcLine(lines, 'shield', 'За «' + (kd ? kd.name : '?') + '» вступятся: ' + namesOf(info.allies), 'bad');
+          if ((info.friends || []).length) tcLine(lines, 'handshake', 'На вашей стороне: ' + namesOf(info.friends), 'good');
+          if (c > (info.allowance || 40)) tcLine(lines, 'star', 'Аппетиты велики: победа будет трудной, а мир — далёким', 'warn');
+        } else {
+          if (!arms.length) tcLine(lines, 'army', 'Армий нет: цель будет поставлена, новые войска соберутся', 'warn');
+          else if (t.armyId) tcLine(lines, 'army', 'Пойдёт ' + armyLabel(arms[0]).replace(/^Армия/, 'армия') + ' — ' + arms[0].size + ' ' + Util.plural(arms[0].size, 'солдат', 'солдата', 'солдат'));
+          else tcLine(lines, 'army', 'Пойдут: ' + arms.length + ' ' + Util.plural(arms.length, 'армия', 'армии', 'армий') + ' (' + arms.reduce((s, a) => s + a.size, 0) + ' солд.)');
+          const low = arms.filter((a) => a.supply < 30);
+          if (low.length) tcLine(lines, 'supply', (low.length === 1 ? armyLabel(low[0]) + ' вне снабжения' : 'Армии вне снабжения') + ': солдаты слабеют', 'bad');
+          if (r0 && r0.ownerId === kid) tcLine(lines, 'shield', 'Это ваш регион — освободите его');
+          else { const sc = info.score || 0; tcLine(lines, 'handshake', 'На переговорах регион стоит ' + c + ' ' + Util.plural(c, 'очко', 'очка', 'очков') + ' войны, у вас ' + num(sc), c <= sc ? 'good' : ''); }
+        }
+        if (info.routeOk === false) tcLine(lines, 'supply', 'Долгий поход: в пути армии выйдут из снабжения', 'warn');
+      }
+      if (goalBtn) { goalBtn.disabled = !!info.goal || !r0 || r0.ownerId === kid; }
+      go.disabled = !t.goals.length;
+    };
+    v.ups.push(() => t.render(false));
+    t.render(true);
+  }
+  function explainRegion(rid, e) {
+    const r = regionOf(rid); if (!r) return;
+    const info = e && e.reason ? e : safe(() => War.targetInfo(cm.kid, rid), null);
+    const why = info && info.reason ? info.reason : 'сюда напасть нельзя';
+    const o = kget(r.ownerId);
+    const btns = [];
+    if (o && o.id !== cm.kid && !(info && info.atWar)) btns.push({ label: 'Выбрать страну', icon: 'war', act: 'pop-select', fn: () => commandKingdom(o.id, {}) });
+    btns.push({ label: 'О регионе', icon: 'region', act: 'pop-info', fn: () => openInspector('region', rid, { push: true }) });
+    cm.selRegion = rid; rcSync();
+    showPop(rid, r.name + (o ? ' · «' + o.name + '»' : ''), cap1(why), r.ownerId, btns, true);
+  }
+  /** compat: the old two-step entry points */
+  function startGoalMode(targetKid, warId) {
+    if (!cm.kid) return;
+    if (warId) { addGoalMode(warId); return; }
+    const e = okTargets((x) => !x.atWar && x.defenderKid === targetKid)[0];
+    if (e) { pickTarget(e.regionId); return; }
+    const any = cm.tgList.find((x) => x.defenderKid === targetKid);
+    toast(cap1(any && any.reason ? any.reason : 'нет доступных регионов рядом с вашими землями'), 'bad');
+  }
+
+  // ------------------------------------------------------------------ drawer page: Армии
+  function armyById(id) { const a = id ? S.armies.get(id) : null; return a && a.kingdomId === cm.kid ? a : null; }
   function selectArmy(id, opts) {
     opts = opts || {};
     const a = armyById(id);
     if (!a) return false;
-    cm.armyId = id; cm.selRegion = 0; cm.tgSig = '~';
+    cm.armyId = id; cm.selRegion = 0; cm.tgt = null; cm.page = 'armies';
     dismissPop();
-    if (cm.page !== 'armies') setPage('armies');
-    refreshTargets();
-    rcSync();
-    const av = safe(() => War.armiesOf(cm.kid), []).find((x) => x.id === id);
+    rcSync(); showCmdSheet();
+    const av = armiesOfK(cm.kid).find((x) => x.id === id);
     if (opts.focus !== false && av) focusVisible(av.x, av.y, Math.max(Render.cam.zoom, 8));
-    hintOnce('armysel', 'Теперь тапните регион на карте: вражеский — атака, свой — удержание или оборона.');
-    updatePage();
+    hintOnce('armysel', 'Армия выбрана: тап по красному региону — атака, по своему — удержание или оборона.');
     return true;
   }
-  function deselectArmy() { if (!cm.armyId) return; cm.armyId = 0; cm.targets = NONE; cm.tgSig = ''; rcSync(); updatePage(); }
-  function updatePage() { syncSheetMode(); const v = cm.view; if (v && v.pups) runUps(v.pups); }
-  /** with an army selected the sheet shrinks to that army (the map is what the player needs next) */
-  function syncSheetMode() {
-    const on = !!(cm.kid && cm.armyId && cm.page === 'armies' && !cm.goal && !cm.peace && !insp);
-    if (refs.sheet.classList.contains('am') !== on) { refs.sheet.classList.toggle('am', on); layoutSoon(); }
-  }
+  function deselectArmy() { if (!cm.armyId) return; cm.armyId = 0; rcSync(); showCmdSheet(); }
+  function updatePage() { const v = cm.view; if (v && v.pups) runUps(v.pups); }
   function pageArmies(v, host) {
     const kid = cm.kid;
     const bulk = el('div', 'abulk');
@@ -2525,6 +2788,7 @@ const UI = (() => {
       toast(type === 'retreat' ? 'Армия отходит домой' : 'Приказ: ' + orderText(type, rid), 'good');
       if (rid) { cm.selRegion = rid; rcSync(); setTimeout(() => { if (cm.selRegion === rid) { cm.selRegion = 0; rcSync(); } }, 1600); }
     } else toast(safe(() => War.lastError, '') || 'Приказ не принят', 'bad');
+    cm.tgDirty = true;
     updatePage();
     return ok;
   }
@@ -2540,35 +2804,48 @@ const UI = (() => {
     toast(n ? 'Держат позицию: ' + n + (skip ? ' (остальные вне своей земли)' : '') : 'Некому держать: армии стоят не на своей земле', n ? 'good' : 'bad');
     updatePage();
   }
-  /** map tap while an army is selected: enemy region = attack, own / held region = popup (hold / defend) */
+  /** own / held region with an army selected: popup Удерживать / Оборонять */
   function orderTap(rid) {
     const a = armyById(cm.armyId);
     if (!a) { deselectArmy(); return false; }
     const r = regionOf(rid); if (!r) return false;
     const w = S.wars.get(a.warId);
     if (!w || w.ended) { toast('Эта армия уже не воюет', 'bad'); return true; }
-    const kid = cm.kid, side = wside(w, kid);
-    const friend = (x) => !!x && wside(w, x) === side;
-    const foe = (x) => !!x && wside(w, x) === 3 - side;
-    if (friend(r.controllerId) || (friend(r.ownerId) && !foe(r.controllerId))) {
-      const ok = r.ownerId ? kget(r.ownerId) : null;
-      showPop(rid, r.name, r.ownerId === kid ? 'ваш регион' : 'занятая земля' + (ok ? ' · «' + ok.name + '»' : ''), r.ownerId, [
-        { label: 'Удерживать', icon: 'shield', cls: 'primary', fn: () => giveOrder([a.id], 'hold', rid) },
-        { label: 'Оборонять', icon: 'shield', fn: () => giveOrder([a.id], 'defend', rid) },
-      ]);
-      cm.selRegion = rid; rcSync();
-      return true;
-    }
-    if (foe(r.ownerId) || foe(r.controllerId)) { giveOrder([a.id], 'attack', rid); return true; }
-    toast('Этот регион не принадлежит ни вам, ни врагу', 'bad');
+    const kid = cm.kid;
+    const ok = r.ownerId ? kget(r.ownerId) : null;
+    showPop(rid, r.name, r.ownerId === kid ? 'ваш регион' : 'занятая земля' + (ok ? ' · «' + ok.name + '»' : ''), r.ownerId, [
+      { label: 'Удерживать', icon: 'shield', cls: 'primary', act: 'pop-hold', fn: () => giveOrder([a.id], 'hold', rid) },
+      { label: 'Оборонять', icon: 'shield', act: 'pop-defend', fn: () => giveOrder([a.id], 'defend', rid) },
+    ]);
+    cm.selRegion = rid; rcSync();
     return true;
   }
+  function nearestFreeArmy(rid) {
+    const c = safe(() => Render.regionCenter(rid), null);
+    const all = armiesOfK(cm.kid).filter((a) => a.mode !== 'retreat' && a.order.type !== 'retreat');
+    if (!c || !all.length) return null;
+    all.sort((a, b) => (a.order.type === 'attack') - (b.order.type === 'attack') || Util.dist2(a.x, a.y, c.x, c.y) - Util.dist2(b.x, b.y, c.x, c.y));
+    return all[0];
+  }
+  /** own territory without an army selected: region card (+ «Оборонять» for the nearest free army in a war) */
+  function ownRegionTap(rid) {
+    if (cm.armyId) { orderTap(rid); return; }
+    const r = regionOf(rid); if (!r) return;
+    const kid = cm.kid;
+    const occ = r.controllerId && r.controllerId !== r.ownerId ? kget(r.controllerId) : null;
+    const sub = r.ownerId === kid ? (occ ? 'ваш регион · занят «' + occ.name + '»' : 'ваш регион') : 'занят вашими войсками';
+    const btns = [{ label: 'О регионе', icon: 'region', act: 'pop-info', fn: () => openInspector('region', rid, { push: true }) }];
+    const free = warsOf(kid).length ? nearestFreeArmy(rid) : null;
+    if (free) btns.unshift({ label: 'Оборонять', icon: 'shield', cls: 'primary', act: 'pop-defend', fn: () => giveOrder([free.id], 'defend', rid) });
+    cm.selRegion = rid; rcSync();
+    showPop(rid, r.name, sub, r.ownerId, btns);
+  }
 
-  // ------------------------------------------------------------------ page: Регионы
+  // ------------------------------------------------------------------ drawer page: Регионы
   function pageRegions(v, host) {
     const kid = cm.kid;
     const s0 = el('div', 'sec');
-    const kb = actBtn('block', 'Карточка королевства', 'crown', () => openInspector('kingdom', kid, { push: true })); kb.dataset.act = 'kingdom-card';
+    const kb = actBtn('block', 'Карточка страны и дипломатия', 'crown', () => openInspector('kingdom', kid, { push: true })); kb.dataset.act = 'kingdom-card';
     s0.appendChild(kb); host.appendChild(s0);
     const s1 = el('div', 'sec'); s1.appendChild(el('div', 'sec-h', 'Ваши регионы')); const l1 = el('div', 'rlist'); s1.appendChild(l1); host.appendChild(s1);
     listSlot(v.pups, l1, () => regionItems(kid, 'own'), (it) => it.rid, regionSig, regionRow, 'У королевства нет регионов.');
@@ -2640,7 +2917,7 @@ const UI = (() => {
     let cost = 0; const allow0 = safe(() => War.allowanceFor(warId, kid, goals), 0);
     held.forEach((rid) => { if (goals.indexOf(rid) >= 0) { const c = regionCostOf(rid); if (cost + c <= allow0) { picks.push(rid); cost += c; } } });
     dismissPop();
-    cm.goal = null; cm.armyId = 0; cm.selRegion = 0; cm.tkid = enemy;
+    cm.tgt = null; cm.armyId = 0; cm.selRegion = 0;
     cm.peace = { warId, enemy, held, goals, list, picks, cand: held.filter((r) => picks.indexOf(r) < 0), vassal: false, result: null };
     rcSync();
     showCmdSheet();
@@ -2649,9 +2926,10 @@ const UI = (() => {
   }
   function closePeace() {
     if (!cm.peace) return;
-    cm.peace = null; cm.tkid = 0;
+    cm.peace = null; cm.drawer = true; cm.page = 'war';
     rcSync(); showCmdSheet();
   }
+  function peaceDone() { cm.peace = null; cm.drawer = false; cm.armyId = 0; cm.tgDirty = true; refreshTargets(true); rcSync(); showCmdSheet(); }
   function peaceVassalCost() {
     const p = cm.peace; if (!p) return 0;
     return 50 + 4 * kStats(p.enemy).regions;
@@ -2681,7 +2959,7 @@ const UI = (() => {
     const res = safe(() => War.peaceOffer(p.warId, cm.kid, terms), { ok: false, reason: safe(() => War.lastError, '') || 'Предложение не принято' });
     if (res.ok && res.accepted) {
       toast('Мир заключён: ' + (res.reason || 'условия приняты'), 'good');
-      cm.peace = null; cm.tkid = 0; cm.page = 'war'; cm.armyId = 0; rcSync(); showCmdSheet();
+      peaceDone();
       return;
     }
     p.result = { kind: res.pending ? 'warn' : 'bad', text: (res.pending ? '… ' : '✗ ') + (res.reason || 'Противник отказался') };
@@ -2692,7 +2970,7 @@ const UI = (() => {
     const ok = safe(() => War.forcePeace(p.warId, { winner: cm.kid, regions: p.picks.slice(), vassalize: p.vassal }), false);
     if (!ok) { toast(safe(() => War.lastError, '') || 'Не удалось навязать мир', 'bad'); return; }
     toast('Бог навязал мир: условия выполнены', 'good');
-    cm.peace = null; cm.tkid = 0; cm.page = 'war'; cm.armyId = 0; rcSync(); showCmdSheet();
+    peaceDone();
   }
   function buildPeaceSheet(sh) {
     const p = cm.peace, kid = cm.kid;
@@ -2779,44 +3057,52 @@ const UI = (() => {
     runUps(v.ups);
   }
 
-  // ------------------------------------------------------------------ map taps in command mode
-  function clearSelection() {
-    let changed = false;
-    if (cm.armyId) { cm.armyId = 0; cm.targets = NONE; cm.tgSig = ''; changed = true; }
-    if (cm.selRegion) { cm.selRegion = 0; changed = true; }
-    if (cm.pop) { dismissPop(); changed = true; }
-    if (changed) { rcSync(); updatePage(); }
+  // ------------------------------------------------------------------ map taps with the war tool
+  //   priority: army banner of ours > a lit target > own territory (orders / card) > a dimmed or enemy region (why) >
+  //   another country (it becomes the attacker) > wild land (hint) > sea (one step back: card, army, drawer, country)
+  function stepBack() {
+    if (cm.tgt) { cancelTarget(); return; }
+    if (cm.armyId) { deselectArmy(); return; }
+    if (cm.selRegion) { cm.selRegion = 0; rcSync(); return; }
+    if (cm.drawer) { closeDrawer(); return; }
+    releaseCommand();
   }
+  function ownSide(r) { return r.ownerId === cm.kid || r.controllerId === cm.kid; }
   function cmdTap(tx, ty) {
     if (insp) { closeInspector(); if (cm.kid) return; }
+    const hadPop = !!cm.pop;
     dismissPop();
     const sp = Render.tileToScreen(tx, ty);
     const aid = safe(() => Render.armyAtScreen(sp.x, sp.y), 0);
     const rid = safe(() => Render.regionAt(tx, ty), 0);
-    if (cm.goal) { if (rid) toggleGoal(rid); return; }
     if (cm.peace) { if (rid) togglePick(rid); return; }
     if (aid) {
       const a = S.armies.get(aid);
-      if (a && !cm.kid && kget(a.kingdomId)) { if (commandKingdom(a.kingdomId, { focus: false })) { cm.page = 'armies'; selectArmy(aid, { focus: false }); setPage('armies'); } return; }
-      if (a && a.kingdomId === cm.kid) { selectArmy(aid, { focus: false }); return; }
+      if (a && cm.kid && a.kingdomId === cm.kid) { selectArmy(aid, { focus: false }); return; }
+      if (a && !cm.kid && kget(a.kingdomId)) { if (commandKingdom(a.kingdomId, { focus: false })) selectArmy(aid, { focus: false }); return; }
     }
     if (!cm.kid) {
       const t = safe(() => Powers.kingdomAt(tx, ty), null);
-      if (t && t.kid) { commandKingdom(t.kid, {}); return; }
-      if (rid) toast('Это ничья земля. Тапните по королевству, чтобы взять его под командование.', undefined);
+      if (t && t.kid && kget(t.kid)) { commandKingdom(t.kid, {}); return; }
+      if (rid) toast('Это ничья земля. Тапните по стране — она станет нападающей.');
       return;
     }
-    if (!rid) { clearSelection(); return; }
+    if (!rid) { if (!hadPop) stepBack(); return; }
     const r = regionOf(rid); if (!r) return;
-    if (cm.armyId && orderTap(rid)) return;
-    // no army selected: region card with actions
-    const o = r.ownerId ? kget(r.ownerId) : null;
-    cm.selRegion = rid; rcSync();
-    const btns = [];
-    if (o && o.id !== cm.kid) btns.push({ label: 'Командовать', icon: 'command', cls: 'primary', fn: () => commandKingdom(o.id, {}) });
-    btns.push({ label: 'О регионе', icon: 'region', fn: () => openInspector('region', rid, { push: true }) });
-    const ctl = r.controllerId && r.controllerId !== r.ownerId ? kget(r.controllerId) : null;
-    showPop(rid, r.name, (o ? (o.id === cm.kid ? 'ваш регион' : '«' + o.name + '»') : 'ничья земля') + (ctl ? ' · занят «' + ctl.name + '»' : ''), r.ownerId, btns);
+    const e = cm.tg.get(rid);
+    if (e && e.ok) {
+      if (cm.armyId && !(e.atWar && armyWarOf(cm.armyId) === e.warId)) cm.armyId = 0;
+      if (cm.tgt && !cm.tgt.atWar && !e.atWar && cm.tgt.defKid === e.defenderKid) { toggleTargetGoal(rid); return; }
+      pickTarget(rid);
+      return;
+    }
+    if (ownSide(r)) { ownRegionTap(rid); return; }
+    const ow = r.ownerId ? kget(r.ownerId) : null;
+    // a dimmed region, or deeper land of a country we fight / could fight: explain (switching the attacker stays one tap away in the popup)
+    const known = ow && (cm.tgList.some((x) => x.defenderKid === ow.id) || safe(() => War.atWar(cm.kid, ow.id), false));
+    if (e || known || (cm.tgt && r.ownerId === cm.tgt.defKid)) { explainRegion(rid, e); return; }
+    if (ow) { commandKingdom(ow.id, { focus: false }); return; }
+    toast('Ничья земля: её заселяют, а не завоёвывают');
   }
   function cmdPaint(tx, ty, phase) {
     if (phase === 'start') { cmdPaint.moved = false; cmdPaint.x = tx; cmdPaint.y = ty; }
@@ -2829,44 +3115,119 @@ const UI = (() => {
     if (!cm.kid) return;
     if (insp) return;
     const k = kget(cm.kid);
-    if (!k) { toast('Командуемое королевство пало', 'bad'); releaseCommand(true); return; }
+    if (!k) { toast('Выбранная страна пала', 'bad'); releaseCommand(true); return; }
     updatePop();
-    if (cm.armyId && !armyById(cm.armyId)) { cm.armyId = 0; cm.targets = NONE; cm.tgSig = ''; rcSync(); }
-    else if (cm.armyId && (++cm.tick & 3) === 0) refreshTargets();
-    if (cm.goal) {
-      const g = cm.goal;
-      const tk = kget(g.targetKid);
-      const w = g.warId ? safe(() => War.get(g.warId), null) : null;
-      if (!tk || (g.warId && (!w || w.ended))) { toast('Цель больше недоступна', 'bad'); cancelGoal(); return; }
-      if (!g.warId && safe(() => War.atWar(cm.kid, g.targetKid), false)) { cancelGoal(); return; }
+    if (cm.armyId && !armyById(cm.armyId)) { cm.armyId = 0; if (cm.tgt) cm.tgt.armyId = 0; rcSync(); if (!cm.tgt) { showCmdSheet(); return; } }
+    refreshTargets(false);
+    if (cm.tgt) {
+      const t = cm.tgt;
+      const w = t.warId ? safe(() => War.get(t.warId), null) : null;
+      if (!kget(t.defKid) || (t.atWar && (!w || w.ended))) { toast('Цель больше недоступна', 'bad'); cancelTarget(); return; }
+      if (!t.atWar && safe(() => War.atWar(cm.kid, t.defKid), false)) { cancelTarget(); return; }
+      const keep = t.goals.filter((rid) => { const e = cm.tg.get(rid); return e && e.ok && e.defenderKid === t.defKid && !!e.atWar === t.atWar; });
+      if (!keep.length) { toast('Цель больше недоступна', 'bad'); cancelTarget(); return; }
+      if (keep.length !== t.goals.length) { const first = keep[0] !== t.goals[0]; t.goals = keep; if (first) t.info = targetInfoOf(t); t.arrows = targetArrows(t); rcSync(); t.render && t.render(true); }
+      if ((cm.tick & 7) === 0) { const ni = safe(() => War.targetInfo(cm.kid, t.goals[0]), null); if (ni && t.info) { ni.route = t.info.route; ni.routeOk = t.info.routeOk; t.info = ni; } }
       if (cm.view && cm.view.ups) runUps(cm.view.ups);
-      g.render && g.render();
       return;
     }
     if (cm.peace) {
       const w = safe(() => War.get(cm.peace.warId), null);
-      if (!w || w.ended) { cm.peace = null; cm.tkid = 0; rcSync(); showCmdSheet(); toast('Война окончена', undefined); return; }
+      if (!w || w.ended) { cm.peace = null; rcSync(); showCmdSheet(); toast('Война окончена', undefined); return; }
       if (cm.view && cm.view.ups) runUps(cm.view.ups);
       return;
     }
     const v = cm.view; if (!v) return;
     runUps(v.ups); runUps(v.pups);
   }
+
+  // ------------------------------------------------------------------ «ВОЙНА» banner: every declaration (the player's and the AI's)
+  const DECL_RE = /объявило войну/;
+  const bnr = { q: [], cur: null, seen: [], timers: [] };
+  function queueBanner(item) {
+    if (bnr.q.length >= 4) { const old = bnr.q.shift(); if (old.e && feedPass(old.e)) feed.pending.push(old.e); }
+    bnr.q.push(item);
+  }
+  function findWarOf(e) {
+    let best = null;
+    for (const w of S.wars.values()) if (w.aggressor === e.kid && w.started <= e.tick && (!best || w.started > best.started)) best = w;
+    return best && e.tick - best.started <= 2 ? best : null;
+  }
+  function processBanner() {
+    if (bnr.cur || !bnr.q.length) return;
+    const it = bnr.q.shift();
+    const w = it.warId ? S.wars.get(it.warId) || null : (it.e ? findWarOf(it.e) : null);
+    if (w && bnr.seen.indexOf(w.id) >= 0) return;
+    if (w) { bnr.seen.push(w.id); if (bnr.seen.length > 40) bnr.seen.shift(); }
+    if (modalOpen() || document.hidden) { if (it.e && feedPass(it.e)) feed.pending.push(it.e); return; }
+    if (!showBanner(w, it.e) && it.e && feedPass(it.e)) feed.pending.push(it.e);
+  }
+  function hideBanner(now) {
+    bnr.timers.forEach((t) => clearTimeout(t)); bnr.timers = [];
+    const c = bnr.cur; bnr.cur = null;
+    if (!c) return;
+    if (now || !c.node.parentNode) { if (c.node.parentNode) c.node.parentNode.removeChild(c.node); return; }
+    c.node.classList.add('out');
+    setTimeout(() => { if (c.node.parentNode) c.node.parentNode.removeChild(c.node); }, 380);
+  }
+  function showBanner(w, e) {
+    const host = refs.banner; if (!host) return false;
+    let ka = null, kd = null, rid = 0, allies = false;
+    if (w) {
+      ka = S.kingdoms.get(w.aggressor) || null; kd = S.kingdoms.get(w.defender) || null;
+      const g = w.goals.find((x) => x.kid === w.aggressor) || w.goals[0];
+      rid = g ? g.regionId : 0;
+      allies = w.attackers.length + w.defenders.length > 2;
+    } else if (e) {
+      ka = S.kingdoms.get(e.kid) || null;
+      const names = (e.msg.match(/«([^»]+)»/g) || []).map((s) => s.slice(1, -1));
+      for (const k of S.kingdoms.values()) if (names.length > 1 && k.name === names[1]) { kd = k; break; }
+      if (e.x >= 0) rid = safe(() => Render.regionAt(e.x + 0.5, e.y + 0.5), 0);
+    }
+    if (!ka || !kd) return false;
+    const mine = !!(cm.kid && w && wside(w, cm.kid));
+    const card = el('button', 'wb-card' + (mine ? ' mine' : ''));
+    card.type = 'button';
+    card.setAttribute('aria-label', 'Война: «' + ka.name + '» против «' + kd.name + '»');
+    const row = el('div', 'wb-row');
+    const fa = flagEl(ka.flag, 48); fa.classList.add('wb-fl', 'a');
+    const fd = flagEl(kd.flag, 48); fd.classList.add('wb-fl', 'd');
+    const ttl = el('div', 'wb-t');
+    ttl.appendChild(ico('war', 24));
+    ttl.appendChild(el('b', '', 'ВОЙНА'));
+    ttl.appendChild(ico('war', 24));
+    row.appendChild(fa); row.appendChild(ttl); row.appendChild(fd);
+    card.appendChild(row);
+    const nm = el('div', 'wb-n');
+    nm.appendChild(el('span', 'a', '«' + ka.name + '»')); nm.appendChild(el('i', '', 'против')); nm.appendChild(el('span', 'd', '«' + kd.name + '»'));
+    card.appendChild(nm);
+    const sub = (rid ? 'цель — регион «' + rName(rid) + '»' : '') + (allies ? (rid ? ' · ' : '') + 'вступают союзники' : '');
+    if (sub) card.appendChild(el('div', 'wb-s', sub));
+    card.addEventListener('click', () => { if (rid) { focusRegion(rid, 8); setRegionHL(rid, 3000); } hideBanner(false); });
+    hideBanner(true);
+    host.appendChild(card);
+    bnr.cur = { node: card, warId: w ? w.id : 0, born: performance.now(), text: card.textContent };
+    bnr.timers.push(setTimeout(() => hideBanner(false), mine ? 2900 : 2500));
+    return true;
+  }
   function initCommandHooks() {
     Bus.on('warDeclared', (w) => {
-      if (!cm.kid || !w || wside(w, cm.kid) !== 2) return;
-      const ag = kget(w.aggressor);
-      if (w.defender === cm.kid || w.defenders.indexOf(cm.kid) >= 0) toast('На вас напали' + (ag ? ': «' + ag.name + '»' : '') + '! Армии защищают регионы сами — или отдайте приказы.', 'bad');
+      if (!w) return;
+      queueBanner({ warId: w.id });
+      cm.tgDirty = true;
+      if (cm.kid && wside(w, cm.kid) === 2) hintOnce('attacked', 'На вас напали! Армии защищают свои регионы сами — или отдайте им приказы.');
     });
     Bus.on('regionControl', (r, oldK, newK) => {
+      cm.tgDirty = true;
       if (!cm.kid || !r || newK !== cm.kid || !r.ownerId || r.ownerId === cm.kid) return;
       toast('Регион «' + r.name + '» занят — армия удерживает его', 'good');
       hintOnce('holdinfo', 'Армия держит позицию и дальше не идёт. Война продолжается, пока вы не заключите мир («Мир» в карточке войны).');
     });
+    Bus.on('regionOwner', () => { cm.tgDirty = true; });
     Bus.on('warEnded', (w, how) => {
+      cm.tgDirty = true;
       if (!cm.kid || !w || wside(w, cm.kid) === 0) return;
       if (cm.peace && cm.peace.warId === w.id) return;
-      if (cm.goal && cm.goal.warId === w.id) return;
       toast(how === 'exhaustion' || how === 'collapse' ? 'Война закончилась: стороны истощены' : 'Война закончилась', undefined);
     });
   }
@@ -2877,7 +3238,7 @@ const UI = (() => {
     refs.top = $('top'); refs.topwrap = $('topwrap'); refs.yearVal = $('yearVal'); refs.counters = $('counters'); refs.speeds = $('speeds');
     refs.pausedTag = $('pausedTag'); refs.menuBtn = $('btnMenu'); refs.feed = $('feed'); refs.bottom = $('bottom'); refs.fabs = $('fabs');
     refs.toasts = $('toasts'); refs.sheet = $('sheet'); refs.dock = $('dock'); refs.tabs = $('tabs'); refs.kbar = $('kbar'); refs.tools = $('tools');
-    refs.hint = $('hint'); refs.brushbox = $('brushbox'); refs.modals = $('modals'); refs.pops = $('pops');
+    refs.hint = $('hint'); refs.brushbox = $('brushbox'); refs.modals = $('modals'); refs.pops = $('pops'); refs.banner = $('banner');
     refs.toolswrap = $('toolswrap'); refs.moreR = $('tmoreR'); refs.moreL = $('tmoreL');
     if (refs.moreR) { refs.moreR.appendChild(ico('chevron_up', 16)); refs.moreL.appendChild(ico('chevron_up', 16)); }
     safe(() => Kingdoms.setCommanded(0, false), 0);            // a save made while commanding must not leave the AI of that kingdom switched off
@@ -2889,7 +3250,11 @@ const UI = (() => {
     buildFabs();
     ready = true;
     selectTab(state.tab);
-    Bus.on('log', (e) => { if (ready && feedPass(e)) { feed.pending.push(e); if (feed.pending.length > 24) feed.pending.splice(0, feed.pending.length - 24); } });
+    Bus.on('log', (e) => {
+      if (!ready || !e) return;
+      if (e.kind === 'war' && DECL_RE.test(e.msg)) { queueBanner({ e }); return; }      // a declaration is announced by the «ВОЙНА» banner, not a feed line
+      if (feedPass(e)) { feed.pending.push(e); if (feed.pending.length > 24) feed.pending.splice(0, feed.pending.length - 24); }
+    });
     document.addEventListener('click', (ev) => { const b = ev.target && ev.target.closest ? ev.target.closest('button') : null; if (b && ev.detail > 0) b.blur(); });
     // keyboard shortcuts (desktop testing)
     window.addEventListener('keydown', (ev) => {
@@ -2898,9 +3263,8 @@ const UI = (() => {
         if (modals.length) modals[modals.length - 1].close();
         else if (cm.pop) dismissPop();
         else if (insp) closeInspector();
-        else if (cm.goal) cancelGoal();
         else if (cm.peace) closePeace();
-        else if (cm.kid) releaseCommand();
+        else if (cm.kid) stepBack();
       }
       else if (ev.key === ' ') { ev.preventDefault(); Main.setSpeed(Main.getSpeed() === 0 ? 1 : 0); }
     });
@@ -2922,7 +3286,7 @@ const UI = (() => {
   function update(dtMs) {
     if (!ready) return;
     const now = performance.now();
-    try { flushFeed(now); fadeFeed(now); } catch (e) { /* keep running */ }
+    try { flushFeed(now); fadeFeed(now); if (bnr.q.length) processBanner(); } catch (e) { reportOnce('ui.feed', e); }
     accFast += dtMs; accStats += dtMs; accSlow += dtMs;
     if (accFast >= 250) {
       accFast = 0;
@@ -2946,9 +3310,10 @@ const UI = (() => {
   function reportOnce(k, e) { if (!warned[k]) { warned[k] = 1; console.error(k, e); } }
   function onWorldReplaced() {
     if (!ready) return;
-    cm.goal = null; cm.peace = null; dismissPop();
+    cm.tgt = null; cm.peace = null; dismissPop();
     releaseCommand(true);
     cm.kid = 0; cm.view = null; cm.rc = null; Render.cmd = null; tmpCmd = null; rhl.rid = 0;
+    bnr.q.length = 0; bnr.seen.length = 0; hideBanner(true);
     safe(() => Kingdoms.setCommanded(0, false), 0);
     closeInspector();
     closeAllModals();
@@ -2964,10 +3329,23 @@ const UI = (() => {
 
   return {
     init, update, toast, state, handleTap, handlePaint, openInspector, closeInspector, onWorldReplaced,
-    // stage 2: command mode
+    // war tool (map first): attacker -> target region -> war card -> War.declare / attack orders
     commandKingdom, releaseCommand, startGoalMode, openPeace, selectArmy, setRegionHL, setPage,
+    pickTarget, confirmTarget, attackTarget, cancelTarget, openDrawer, closeDrawer,
     get cmdKid() { return cm.kid; },
-    get cmd() { return { kid: cm.kid, page: cm.page, goal: cm.goal ? { targetKid: cm.goal.targetKid, warId: cm.goal.warId, goals: cm.goal.goals.slice(), cand: cm.goal.cand.slice() } : null, peace: cm.peace ? { warId: cm.peace.warId, picks: cm.peace.picks.slice(), held: cm.peace.held.slice() } : null, armyId: cm.armyId, selRegion: cm.selRegion, pop: !!cm.pop }; },
+    get cmd() {
+      const t = cm.tgt;
+      return {
+        kid: cm.kid, page: cm.page, drawer: !!cm.drawer, mode: cm.kid ? sheetMode() : '',
+        target: t ? { defKid: t.defKid, goals: t.goals.slice(), warId: t.warId, atWar: !!t.atWar, armyId: t.armyId, info: t.info ? { ok: t.info.ok, odds: t.info.odds, ratio: t.info.ratio, allowance: t.info.allowance, route: t.info.route, routeOk: t.info.routeOk, casus: t.info.casus, allies: (t.info.allies || []).map((a) => a.kid) } : null } : null,
+        goal: t && !t.atWar ? { targetKid: t.defKid, warId: 0, goals: t.goals.slice(), cand: okTargets((e) => !e.atWar && e.defenderKid === t.defKid).map((e) => e.regionId) } : null,
+        peace: cm.peace ? { warId: cm.peace.warId, picks: cm.peace.picks.slice(), held: cm.peace.held.slice() } : null,
+        armyId: cm.armyId, selRegion: cm.selRegion, pop: !!cm.pop,
+        targets: okTargets().map((e) => e.regionId), dim: cm.tgList.filter((e) => !e.ok && !e.atWar).map((e) => e.regionId),
+      };
+    },
+    get targets() { return cm.tgList.map((e) => Object.assign({}, e)); },
+    get banner() { return bnr.cur ? { warId: bnr.cur.warId, text: bnr.cur.text } : null; },
     // extras
     openMenu, openLog, openWorld, openHelp, selectTab, selectTool, setMode, setBrush, layout, focusVisible, ensureVisible, visibleCenter, bandInfo, modalOpen, closeAllModals,
     get inspector() { return insp ? { type: insp.type, id: insp.id } : null; },

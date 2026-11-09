@@ -1091,6 +1091,63 @@ section('fuzz: god-style abuse during wars (erase, destroy cities / kingdoms, te
   }
 });
 
+section('UI targets: targetsFor / targetInfo = the legal set (potentialGoals), reasons (own, wild, far, truce, ally), war targets, read-only (no RNG, no mutation)', () => {
+  const { ctx, a } = mkArena();
+  const { S, War, Regions, Diplomacy, R, Const } = ctx;
+  const { A, B, chain } = a;
+  const snap = () => JSON.stringify({ r: R.getState(), w: [...S.wars.values()], ar: [...S.armies.values()], rg: [...S.regions.values()].map(r => [r.id, r.ownerId, r.controllerId]), k: [...S.kingdoms.values()].map(k => [k.id, k.infamy, k.cmd]), rel: [...S.rels.values()] });
+  const s0 = snap();
+  const t = War.targetsFor(A);
+  const okB = t.filter(e => e.ok && e.defenderKid === B).map(e => e.regionId).sort((x, y) => x - y);
+  const pot = War.potentialGoals(A, B).slice().sort((x, y) => x - y);
+  assert.deepEqual(okB, pot, 'ok targets against B = War.potentialGoals(A, B)');
+  assert.ok(okB.includes(chain[1]), 'the neighbouring region of B is a target');
+  assert.ok(!t.some(e => e.regionId === chain[2]), 'B\'s far region is not listed (not adjacent)');
+  for (const e of t) {
+    assert.ok(Regions.attackable(A, e.defenderKid).includes(e.regionId) || e.atWar, 'every listed region touches our land');
+    assert.ok(e.odds >= 0 && e.odds <= 1 && e.ratio >= 0 && e.cost === War.regionCost(e.regionId) && e.atWar === false && e.warId === 0, 'entry fields ' + JSON.stringify(e));
+  }
+  const far = War.targetInfo(A, chain[2]);
+  assert.ok(!far.ok && /не граничит/.test(far.reason) && far.defenderKid === B, 'far region: ' + far.reason);
+  const own = War.targetInfo(A, chain[0]);
+  assert.ok(!own.ok && own.own && /ваш регион/.test(own.reason), 'own region: ' + own.reason);
+  const wild = [...S.regions.values()].find(r => !r.ownerId);
+  if (wild) { const wi = War.targetInfo(A, wild.id); assert.ok(!wi.ok && /ничья/.test(wi.reason), 'wild: ' + wi.reason); }
+  const info = War.targetInfo(A, chain[1], { route: true });
+  assert.ok(info.ok && info.defenderKid === B && info.allowance > 0 && (info.casus === 'conquest' || info.casus === 'claim') && info.infamy > 0 && Array.isArray(info.allies) && Array.isArray(info.friends), 'details ' + JSON.stringify(info));
+  assert.ok(Number.isFinite(info.route) && info.routeOk === (info.route <= 14), 'route check ' + info.route);
+  assert.equal(snap(), s0, 'targetsFor / targetInfo (with a route check) neither mutate the world nor roll the RNG');
+  // truce: every region of B is listed but refused with the year of the end of the truce
+  const until = S.tick + 600;
+  War.truceUntil(A, B); S.mod.war.truce[A < B ? A + '_' + B : B + '_' + A] = until;
+  const tt = War.targetsFor(A).filter(e => e.defenderKid === B);
+  const yr = Const.START_YEAR + Math.floor(until / Const.TICKS_PER_YEAR);
+  assert.ok(tt.length >= 1 && tt.every(e => !e.ok && e.reason.includes('перемирие') && e.reason.includes(String(yr))), 'truce reason ' + JSON.stringify(tt.map(e => e.reason)));
+  assert.ok(/перемирие/.test(War.targetInfo(A, chain[2]).reason), 'truce explains far regions too');
+  delete S.mod.war.truce[A < B ? A + '_' + B : B + '_' + A];
+  // alliance
+  Diplomacy.setState(A, B, Const.REL.ALLIANCE);
+  assert.ok(War.targetsFor(A).filter(e => e.defenderKid === B).every(e => !e.ok && /союзник/.test(e.reason)), 'ally reason');
+  Diplomacy.setState(A, B, Const.REL.PEACE);
+  assert.ok(War.targetsFor(A).some(e => e.ok && e.regionId === chain[1]), 'target is back after the alliance ended');
+  // war: the declared goal becomes a war target (atWar, warId, goal flag) and the enemy's far region is still refused
+  const w = War.declare(A, B, [chain[1]], 'conquest');
+  assert.ok(w && w.goals.length === 1 && w.goals[0].regionId === chain[1], 'declared');
+  const tw = War.targetsFor(A);
+  const g = tw.find(e => e.regionId === chain[1]);
+  assert.ok(g && g.ok && g.atWar && g.warId === w.id && g.goal && g.defenderKid === B, 'war target ' + JSON.stringify(g));
+  const fi = War.targetInfo(A, chain[2], { route: true });
+  assert.ok(!fi.ok && fi.atWar && fi.warId === w.id && /не граничит/.test(fi.reason), 'far enemy region during the war: ' + fi.reason);
+  const wi2 = War.targetInfo(A, chain[1], { route: true });
+  assert.ok(wi2.ok && wi2.atWar && Number.isFinite(wi2.myPow) && Number.isFinite(wi2.theirPow) && wi2.goal === true && Number.isFinite(wi2.route), 'war details ' + JSON.stringify(wi2));
+  // a held region is listed but refused; dead ids never throw
+  run(ctx, 10);
+  assert.deepEqual(War.targetsFor(99999), []);
+  const bad = War.targetInfo(A, 99999); assert.ok(!bad.ok && bad.reason, 'bad region');
+  const bad2 = War.targetInfo(99999, chain[1]); assert.ok(!bad2.ok && bad2.reason, 'bad kingdom');
+  note(`targets of A: ${t.length} (${okB.length} ok vs B), far: «${far.reason}», route ${info.route} unsupplied tiles, war odds ${wi2.odds.toFixed(2)}`);
+});
+
 // ==== SECTIONS-END ====
 const failed = results.filter(r => !r.ok);
 console.log(`\n${results.length - failed.length}/${results.length} sections passed`);

@@ -702,7 +702,7 @@ body.lite .glass { background: var(--panel-solid); -webkit-backdrop-filter: none
 .sc .mb { position: relative; width: 36px; height: 7px; border-radius: 4px; background: rgba(255, 255, 255, .14); overflow: hidden; }
 .sc .mb i { position: absolute; left: 0; top: 0; bottom: 0; width: 100%; border-radius: 4px; background: var(--good); transform-origin: 0 50%; transform: scaleX(0); transition: transform .25s ease, background-color .25s ease; }
 .cseg { flex: none; display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; margin: 8px 12px 0; padding: 3px; border-radius: 13px; background: rgba(0, 0, 0, .3); border: 1px solid var(--line2); }
-.cseg button { min-height: 40px; border-radius: 10px; display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 13px; font-weight: 800; color: var(--dim); transition: background .12s ease, color .12s ease; }
+.cseg button { min-height: 44px; border-radius: 10px; display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 13px; font-weight: 800; color: var(--dim); transition: background .12s ease, color .12s ease; }
 .cseg button.on { background: linear-gradient(rgba(var(--acc-rgb), .28), rgba(var(--acc-rgb), .12)); color: #fff; box-shadow: 0 0 0 1px rgba(var(--acc-rgb), .7); }
 .cseg button canvas { opacity: .8; }
 .cseg button.on canvas { opacity: 1; }
@@ -862,8 +862,137 @@ body.cmd-pick #toasts { bottom: calc(100% + 8px); }
 .check.sm { min-height: 46px; margin-top: 6px; font-size: 13.5px; }
 .check.sm .box { width: 22px; height: 22px; }
 
+/* =====================================================================
+ * WAR TOOL — map first: slim HUD (selected country), pull-up drawer, target war card, «ВОЙНА» banner
+ * ===================================================================== */
+#sheet .grab { flex: none; position: relative; height: 14px; margin-bottom: -4px; cursor: pointer; }
+#sheet .grab::before { content: ""; position: absolute; left: 50%; top: 5px; width: 40px; height: 4px; margin-left: -20px; border-radius: 2px; background: rgba(255, 255, 255, .26); transition: background .15s ease; }
+#sheet .grab:active::before { background: rgba(255, 255, 255, .5); }
+/* HUD: the selected country in one slim bar */
+#sheet.hud { max-height: none; }
+.hud-head { min-height: 56px; padding-top: 2px; padding-bottom: 4px; border-bottom: 0; }
+.hud-t { text-align: left; min-height: 48px; display: flex; flex-direction: column; justify-content: center; border-radius: 10px; }
+.hud-t:active { background: var(--fill); }
+.hud-wars { display: flex; gap: 6px; padding: 2px 12px 6px; }
+.hwc { flex: none; display: inline-flex; align-items: center; gap: 6px; height: 44px; padding: 0 12px 0 9px; border-radius: 13px; background: linear-gradient(rgba(255, 91, 91, .2), rgba(255, 91, 91, .08)); border: 1px solid rgba(255, 91, 91, .5); font-size: 12.5px; font-weight: 800; white-space: nowrap; transition: transform .1s ease; }
+.hwc:active { transform: scale(.96); }
+.hwc .hn { max-width: 104px; overflow: hidden; text-overflow: ellipsis; }
+.hwc b { font-variant-numeric: tabular-nums; color: #fff; }
+.hwc small { color: #ffd38a; font-weight: 800; font-size: 11.5px; }
+.hwc.army { background: var(--fill); border-color: var(--line); }
+.hwc.army small { color: var(--dim); font-weight: 600; }
+.hud-hint { padding: 0 14px calc(var(--sb) + 10px); font-size: 12.5px; line-height: 1.3; color: #c9d5f2; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.hud-hint::before { content: ""; display: inline-block; width: 8px; height: 8px; margin-right: 7px; border-radius: 50%; background: #ff5a3c; box-shadow: 0 0 8px #ff5a3c; vertical-align: 1px; animation: pulse 1.4s ease-in-out infinite; }
+/* drawer: war page empty state */
+.wempty p { margin: 2px 2px 10px; font-size: 13px; line-height: 1.4; color: #cfd9f2; }
+.we-row { display: grid; grid-template-columns: 1.35fr 1fr; gap: 6px; }
+.we-row .cbtn { padding: 0 8px; }
+/* target card */
+#sheet.tc { max-height: calc(var(--vh, 1vh) * 60); }
+.tc-head { gap: 8px; padding: 7px 8px 7px 12px; min-height: 60px; }
+.tc-tt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.tc-vs { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.tc-side { display: flex; align-items: center; gap: 6px; min-width: 0; flex: 0 1 auto; }
+.tc-side b { font-size: 15px; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.tc-side canvas { box-shadow: 0 0 0 1px rgba(0, 0, 0, .6); }
+.tc-x { flex: none; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; border-radius: 50%; background: rgba(255, 91, 91, .2); border: 1px solid rgba(255, 91, 91, .6); animation: tc-pulse 1.6s ease-in-out infinite; }
+@keyframes tc-pulse { 50% { transform: scale(1.12); box-shadow: 0 0 12px rgba(255, 91, 91, .6); } }
+.tc-sub { font-size: 12px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tc-body { padding-top: 8px; }
+.tc-goals { margin-bottom: 8px; align-items: center; }
+.tc-goals .chip { min-height: 30px; padding: 4px 10px; font-size: 12.5px; }
+.tc-goals .tmore { font-size: 11.5px; color: var(--faint); }
+.tc-odds { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.tc-odds > label { flex: none; width: 52px; color: var(--dim); font-size: 11.5px; white-space: nowrap; }
+.tc-ob { position: relative; flex: 1; min-width: 40px; height: 16px; border-radius: 6px; overflow: hidden; display: flex; background: rgba(255, 255, 255, .08); border: 1px solid var(--line2); }
+.tc-ob i { display: block; height: 100%; transition: width .35s ease, background-color .25s ease; }
+.tc-ob i + i { box-shadow: inset 2px 0 0 rgba(8, 10, 20, .85); }
+.tc-ob .mid { position: absolute; left: 50%; top: 0; bottom: 0; width: 1px; background: rgba(255, 255, 255, .55); }
+.tc-odds > b { flex: none; text-align: right; font-weight: 800; font-size: 12.5px; white-space: nowrap; }
+.tc-odds > b.good { color: #9af0b8; }
+.tc-odds > b.warn { color: #ffc27a; }
+.tc-odds > b.bad { color: #ff9a9a; }
+.tc-note { margin: 0 0 7px; padding: 6px 9px; border-radius: 10px; font-size: 12px; line-height: 1.3; }
+.tc-note.bad { background: rgba(255, 91, 91, .14); border: 1px solid rgba(255, 91, 91, .45); color: #ffc0c0; }
+.tc-note.warn { background: rgba(255, 154, 58, .12); border: 1px solid rgba(255, 154, 58, .4); color: #ffd6a8; }
+.tc-cost { margin-bottom: 2px; }
+.tc-lines { display: grid; gap: 5px; margin-top: 7px; }
+.tc-line { display: flex; align-items: flex-start; gap: 8px; font-size: 12.5px; line-height: 1.3; color: #cfd9f2; }
+.tc-line canvas { margin-top: 0; }
+.tc-line.good { color: #a6f2c2; }
+.tc-line.warn { color: #ffd0a0; }
+.tc-line.bad { color: #ffb4b4; }
+.tc-foot .cbtn:first-child { flex: 0 0 30%; }
+.tc-foot .cbtn.danger { flex: 1.6; font-size: 14px; }
+/* popup with a reason ("why not") */
+.cpop.why .cp-t small { white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; color: #ffcfb8; line-height: 1.3; margin-top: 2px; }
+.cpop.why { max-width: min(300px, calc(100% - 16px)); }
+/* kingdom card: diplomacy line under each relation */
+.relsub { font-size: 11.5px; color: var(--dim); margin: 1px 0 6px 2px; line-height: 1.3; }
+/* «ВОЙНА» banner (every declaration) */
+#banner { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+.wb-card {
+  position: absolute; left: 0; right: 0; top: 27%;
+  pointer-events: auto; touch-action: manipulation;
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  padding: 14px max(16px, var(--sr)) 13px max(16px, var(--sl));
+  background: linear-gradient(90deg, rgba(48, 4, 8, 0) 0%, rgba(70, 6, 10, .9) 14%, rgba(96, 10, 14, .95) 50%, rgba(70, 6, 10, .9) 86%, rgba(48, 4, 8, 0) 100%);
+  border-top: 1px solid rgba(255, 130, 100, .55); border-bottom: 1px solid rgba(255, 130, 100, .55);
+  box-shadow: 0 10px 40px rgba(0, 0, 0, .55), inset 0 0 40px rgba(255, 60, 40, .18);
+  color: #fff; text-align: center;
+  animation: wb-in .34s cubic-bezier(.2, .9, .3, 1.12) both;
+  transition: opacity .35s ease, transform .35s ease;
+}
+.wb-card.mine { border-color: rgba(255, 210, 110, .7); }
+.wb-card.out { opacity: 0; transform: translateY(-12px) scaleY(.9); }
+@keyframes wb-in { from { opacity: 0; transform: scaleY(.12); } 60% { opacity: 1; } to { opacity: 1; transform: none; } }
+.wb-row { display: flex; align-items: center; justify-content: center; gap: 16px; max-width: 100%; }
+.wb-fl { border-radius: 3px; box-shadow: 0 0 0 2px rgba(10, 4, 4, .9), 0 0 16px rgba(255, 90, 60, .45); }
+.wb-fl.a { animation: wb-fa .5s cubic-bezier(.2, .9, .3, 1.1) both; }
+.wb-fl.d { animation: wb-fd .5s cubic-bezier(.2, .9, .3, 1.1) both; }
+@keyframes wb-fa { from { opacity: 0; transform: translateX(-36px); } }
+@keyframes wb-fd { from { opacity: 0; transform: translateX(36px); } }
+.wb-t { display: flex; align-items: center; gap: 8px; }
+.wb-t b { font-size: 30px; font-weight: 900; letter-spacing: .3em; padding-left: .3em; line-height: 1; text-shadow: 0 0 18px rgba(255, 70, 50, .9), 0 2px 0 rgba(0, 0, 0, .6); animation: wb-t .5s ease-out both; }
+@keyframes wb-t { from { opacity: 0; transform: scale(1.35); letter-spacing: .6em; } }
+.wb-n { display: flex; align-items: baseline; justify-content: center; flex-wrap: wrap; gap: 0 7px; font-size: 15px; font-weight: 800; max-width: 100%; }
+.wb-n span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 42vw; }
+.wb-n i { font-style: normal; font-weight: 600; font-size: 12.5px; color: #ffc9b8; }
+.wb-s { font-size: 12.5px; color: #ffd9cc; }
+/* the floating buttons never collide with the war panels on short portrait screens */
+@media (max-height: 700px) and (orientation: portrait) {
+  body.cmd .fab.mapfab { display: none; }
+  body.cmd-drawer #fabs { display: none; }
+  #sheet.tc { max-height: calc(var(--vh, 1vh) * 50); }
+  .wb-card { top: 24%; }
+}
+@media (max-width: 345px) {
+  .tc-side b { font-size: 14px; }
+  .wb-t b { font-size: 26px; }
+  .hwc .hn { max-width: 78px; }
+}
+
 /* landscape: the sheet is a full-height side panel (declared last so it beats the portrait max-heights above) */
 @media (max-height: 520px) and (orientation: landscape) {
   #sheet.cmd, #sheet.cmd.gm, #sheet.cmd.pm, #sheet.am { max-height: none; }
   #sheet.am .sh-title small { -webkit-line-clamp: 2; }
+  #sheet.cmd.hud, #sheet.cmd.tc { top: auto; max-height: calc(100% - var(--top-h, 56px) - 6px); }
+  .wb-card { top: 30%; padding-top: 9px; padding-bottom: 9px; }
+  .wb-t b { font-size: 26px; }
+  .tc-head { min-height: 52px; padding-top: 4px; padding-bottom: 4px; }
+}
+.hud-hint.idle::before { background: #8a96b3; box-shadow: none; animation: none; }
+@media (max-width: 345px) {
+  .ac-acts .cbtn canvas { display: none; }
+}
+/* landscape with a side / corner panel: toasts use the free map area above the floating buttons */
+@media (max-height: 520px) and (orientation: landscape) and (min-width: 560px) {
+  #bottom.sheet-open #toasts { bottom: 74px; padding: 0 12px 0 max(12px, var(--sl)); }
+}
+/* landscape: the event feed stays left of the side / corner panel */
+@media (max-height: 520px) and (orientation: landscape) {
+  body.sheet-open #feed { max-width: calc(100% - min(52vw, 430px)); }
+}
+@media (max-height: 520px) and (orientation: landscape) and (max-width: 760px) {
+  .ac-acts .cbtn canvas { display: none; }
 }

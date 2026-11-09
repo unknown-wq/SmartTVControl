@@ -170,8 +170,8 @@ const ToolDefs = [
   { id: 'rain',  tab: 'powers', group: 'bless', name: 'Дождь',       icon: 'rain',  brush: true, drag: true,  hint: 'Дождь: тушит огонь, растит лес' },
   { id: 'heal',  tab: 'powers', group: 'bless', name: 'Исцеление',   icon: 'heal',  brush: true, drag: true,  hint: 'Исцелить' },
   { id: 'bless', tab: 'powers', group: 'bless', name: 'Благословение', icon: 'bless', brush: true, drag: false, hint: 'Временный буст' },
-  // ---- kingdoms: command a country (HOI4-style) — handled by UI (no Powers.apply effect) ----
-  { id: 'command', tab: 'kingdoms', group: 'command', name: 'Командовать', icon: 'command', brush: false, drag: false, hint: 'Тап по королевству: взять под командование (войны, приказы, мир)' },
+  // ---- kingdoms: the war tool (map first: a country, then the region it attacks) — handled by UI (no Powers.apply effect) ----
+  { id: 'command', tab: 'kingdoms', group: 'command', name: 'Война', icon: 'war', brush: false, drag: false, hint: 'Выберите страну, затем регион, куда она нападёт' },
   // ---- kingdoms: diplomacy powers (single tap on a king / unit / city / territory) ----
   { id: 'war_whisper', tab: 'kingdoms', group: 'diplomacy', name: 'Шёпот войны', icon: 'war_whisper', brush: false, drag: false, hint: 'Тапните по королю: королевство объявит войну соседу' },
   { id: 'peace',       tab: 'kingdoms', group: 'diplomacy', name: 'Мир',         icon: 'peace',       brush: false, drag: false, hint: 'Тапните по королевству: прекратить войны' },
