@@ -396,3 +396,8 @@ Tool `command` (tab Королевства): tap a kingdom's land/city/unit (or 
 3. **Армии** page: list armies (size, supply, order, region); tap army (list or marker) to select; then tap a region on the map: enemy region ⇒ attack order; own/controlled region ⇒ hold/defend (a small popup lets choose Attack/Hold/Defend); buttons «Все: удерживать», «Все: отступить».
 4. **Мир**: peace conference sheet: pick occupied regions to take (cost vs. score), «Предложить мир» (result text), white peace option.
 5. Region inspector (Info tool or tapping a region): name, owner, controller, cities, claims, neighbours, value. Menu toggle «Авто‑мир при истощении» (`War.setAutoPeace`). Tapping with the command tool on an already commanded kingdom's army/region does the above actions instead of re-selecting.
+
+### 8.6 Glue API (exists in the stubs now; real versions must keep it)
+* `War.atWar(a,b)` is the single truth about wars (S.wars). `Diplomacy.atWar(a,b)` forwards to it; `Diplomacy.state(a,b)` = WAR if atWar else ALLIANCE/PEACE from the relation. Both must be O(1) (keep a pair cache rebuilt in afterLoad / on war start & end; `Units.isHostile` calls it a lot).
+* `Diplomacy.alliesOf(kid) → [kids]`, `Diplomacy.inTruce(a,b)`, `Diplomacy.setTruce(a,b,untilTick)`, `Diplomacy.setState(a,b,state)`, `Diplomacy.canDeclare(a,b) → {ok,reason}`, `Diplomacy.declareWar(a,b,casus,goals)` (→ `War.declare(a,b,goals,casus)`).
+* The existing stage-1 module tests (world, cities, units, sim, save, powers, sprites, render, ui, save.browser) are the regression suite: every agent must leave them green (update a test only when its expectation was invalidated by §8, and say so in the report).
