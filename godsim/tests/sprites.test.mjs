@@ -95,7 +95,7 @@ test('tile atlas + drawTile for every terrain/variant', () => {
 test('icons: every ToolDefs / Tabs icon + contract keys are real (not the fallback "?")', () => {
   const need = new Set();
   ToolDefs.forEach(t => need.add(t.icon)); Tabs.forEach(t => need.add(t.icon));
-  'raise lower grass sand forest hill mountain snow lava human orc elf erase lightning meteor fire earthquake plague tornado rain heal bless war_whisper peace split inspect tab_land tab_life tab_powers tab_kingdoms tab_info play pause speed1 speed2 speed4 menu hand brush save load newworld close map_normal map_borders map_culture crown sword heart food wood stone iron gold skull coin chevron_up chevron_down plus minus check log focus'.split(' ').forEach(k => need.add(k));
+  'raise lower grass sand forest hill mountain snow lava human orc elf erase lightning meteor fire earthquake plague tornado rain heal bless war_whisper peace split inspect tab_land tab_life tab_powers tab_kingdoms tab_info play pause speed1 speed2 speed4 menu hand brush save load newworld close map_normal map_borders map_culture crown sword heart food wood stone iron gold skull coin chevron_up chevron_down plus minus check log focus command region army shield arrow star supply war flag_goal handshake help target scales scroll infamy drawer'.split(' ').forEach(k => need.add(k));
   const known = new Set(Sprites.iconKeys());
   for (const k of need) { assert.ok(known.has(k), 'missing icon ' + k); for (const s of [16, 24, 32, 48, 56, 64]) { const c = Sprites.icon(k, s); assert.equal(c.width, s); assert.equal(c.height, s); assert.ok(opaque(c) > 8, k + ' is empty at ' + s); } assert.equal(Sprites.icon(k, 48), Sprites.icon(k, 48)); }
   const fb = Sprites.icon('definitely_not_an_icon', 32); assert.ok(opaque(fb) > 0);
@@ -185,7 +185,7 @@ test('flags: all patterns x symbols, sizes 16..96, cache identity', () => {
 
 test('drawFx: every type, age sweep, radii, scales - no throw, no NaN', () => {
   const ctx = recCtx(), before = badArgs;
-  const types = ['lightning', 'explosion', 'fire', 'smoke', 'heal', 'bless', 'plague', 'quake', 'dust', 'spark', 'splash', 'blood', 'whisper', 'ash', 'rain_drop', 'unknown_type'];
+  const types = ['lightning', 'explosion', 'fire', 'smoke', 'heal', 'bless', 'plague', 'quake', 'dust', 'spark', 'splash', 'blood', 'whisper', 'ash', 'rain_drop', 'heart', 'soul', 'flagraise', 'levelup', 'unknown_type'];
   for (const type of types) for (const scale of [3, 6, 12, 16, 24, 48]) for (const r of [undefined, 0.5, 2, 8]) for (let i = 0; i <= 10; i++) {
     const ttl = i === 10 ? 0 : 0.8;
     Sprites.drawFx(ctx, { type, x: 12.5, y: 33.25, ttl, age: i * 0.08, r, dx: 0.3, dy: -0.2, n: 5, color: '#cdb78c' }, 100 + i, 120, scale, 1000 * i);
@@ -207,12 +207,102 @@ test('drawEffect: meteor / tornado / rain / quake', () => {
   assert.equal(badArgs, before, 'non finite draw args: ' + badLog.join(' | '));
 });
 
+
+test('unit poses (attack / work / sleep), carried goods, look 0..7 (bit 2 = female): all build, cache, differ and stay on the canvas', () => {
+  const tints = [null, '#e53935'];
+  let n = 0;
+  for (let r = 0; r < 3; r++) for (const st of ['child', 'adult', 'elder']) for (let po = 0; po < 9; po++) for (let f = 0; f < 2; f++) for (const t of tints) for (const lk of [0, 5]) for (const [w, a] of [[0, 0], [2, 2], [3, 3]]) for (const ca of [0, 1, 3, 5]) {
+    const c = Sprites.unit(r, st, f, t, w, a, lk, po, ca); n++;
+    assert.equal(c.width, 16); assert.equal(c.height, 16); assert.ok(opaque(c) > 12, 'empty pose ' + [r, st, po, f]);
+    assert.equal(c, Sprites.unit(r, st, f, t, w, a, lk, po, ca));
+  }
+  console.log('       ' + n + ' pose sprites built, cache=' + Sprites.stats().units);
+  const U = (r, f, po, ca, lk, w, a, t) => Sprites.unit(r, 'adult', f, t === undefined ? '#e53935' : t, w === undefined ? 2 : w, a || 0, lk | 0, po | 0, ca | 0);
+  for (let r = 0; r < 3; r++) {
+    assert.ok(!same(U(r, 0, 1), U(r, 1, 1)), 'attack frames differ');
+    assert.ok(!same(U(r, 1, 0), U(r, 1, 1)), 'attack differs from walking');
+    for (let po = 2; po <= 8; po++) { if (po === 6) continue; assert.ok(!same(U(r, 0, po, 0, 0, 0), U(r, 1, po, 0, 0, 0)), 'work frames differ: pose ' + po); }
+    for (let po = 3; po <= 5; po++) assert.ok(!same(U(r, 0, 2, 0, 0, 0), U(r, 0, po, 0, 0, 0)), 'tools differ: ' + po);
+    assert.ok(!same(U(r, 1, 6), U(r, 1, 0)), 'sleeping differs');
+    assert.ok(!same(U(r, 1, 6, 0, 0, 0, 0, '#e53935'), U(r, 1, 6, 0, 0, 0, 0, '#1e88e5')), 'blanket takes the kingdom colour');
+    for (let ca = 1; ca <= 5; ca++) assert.ok(!same(U(r, 1, 0, ca, 0, 0), U(r, 1, 0, 0, 0, 0)), 'carry ' + ca + ' visible');
+    assert.ok(!same(U(r, 1, 0, 0, 0), U(r, 1, 0, 0, 4)), 'women look different');
+    // sleeping / lying figure is wider than tall
+    const bb = bbox(U(r, 1, 6)); assert.ok(bb.w > bb.h, 'lying figure is horizontal ' + [r, bb.w, bb.h]);
+  }
+  // armoured soldiers keep the kingdom colour on shield / banner / cloak: more tint pixels than the bare chest
+  const red = (c) => { const d = px(c); let k = 0; for (let i = 0; i < d.length; i += 4) if (d[i + 3] > 40 && d[i] > 150 && d[i + 1] < 90 && d[i + 2] < 90) k++; return k; };
+  for (let r = 0; r < 3; r++) assert.ok(red(U(r, 1, 0, 0, 0, 2, 3)) >= 6, 'race ' + r + ' tier 3 shows the colours: ' + red(U(r, 1, 0, 0, 0, 2, 3)));
+  // extra args never throw
+  for (const po of [-1, 9, 99, 1.5, NaN, undefined]) for (const ca of [-1, 6, 99, NaN, undefined]) Sprites.unit(1, 1, 0, null, 1, 1, 9, po, ca);
+});
+
+test('building modes (damaged / burnt / construction stages), looks, landmarks', () => {
+  const B = Const.B;
+  for (const t of Const.BUILDING_TYPES) for (let r = 0; r < 3; r++) for (let lv = 1; lv <= 3; lv++) {
+    assert.ok(!same(Sprites.building(t, r, lv, true, null, 0), Sprites.building(t, r, lv, true, null, 1)), 'damaged differs: ' + [t, r, lv]);
+    assert.ok(!same(Sprites.building(t, r, lv, true, null, 1), Sprites.building(t, r, lv, true, null, 2)), 'burnt differs: ' + [t, r, lv]);
+    const s0 = Sprites.building(t, r, lv, false, null, 0), s1 = Sprites.building(t, r, lv, false, null, 1), s2 = Sprites.building(t, r, lv, false, null, 2);
+    assert.ok(!same(s0, s1) && !same(s1, s2), 'construction stages differ: ' + [t, r, lv]);
+    for (const c of [s0, s1, s2]) assert.ok(opaque(c) > 20);
+    assert.equal(Sprites.building(t, r, lv, true, null, 1), Sprites.building(t, r, lv, true, null, 1));
+  }
+  assert.ok(opaque(Sprites.building(B.TOWNHALL, 0, 2, false, null, 2)) > opaque(Sprites.building(B.TOWNHALL, 0, 2, false, null, 0)), 'later stages show more building');
+  for (let r = 0; r < 3; r++) { assert.ok(!same(Sprites.building(B.HOUSE, r, 2, true, null, 0, 0), Sprites.building(B.HOUSE, r, 2, true, null, 0, 1)), 'house look 1'); assert.ok(!same(Sprites.building(B.HOUSE, r, 2, true, null, 0, 1), Sprites.building(B.HOUSE, r, 2, true, null, 0, 2)), 'house look 2'); }
+  assert.equal(Sprites.building(B.TOWNHALL, 0, 2, true, null, 0, 1), Sprites.building(B.TOWNHALL, 0, 2, true, null, 0, 0), 'looks only affect houses / markets');
+  // landmarks: 16x24, null where there is none, the 16x16 art keeps its footing (bottom rows identical in silhouette)
+  for (let r = 0; r < 3; r++) {
+    for (const [t, lv] of [[B.TOWNHALL, 2], [B.TOWNHALL, 3], [B.TEMPLE, 2], [B.TEMPLE, 3], [B.BARRACKS, 3]]) for (const m of [0, 1, 2]) {
+      const c = Sprites.landmark(t, r, lv, '#e53935', m); assert.ok(c, 'landmark ' + [t, r, lv]); assert.equal(c.width, 16); assert.equal(c.height, 24);
+      assert.equal(c, Sprites.landmark(t, r, lv, '#e53935', m)); const bb = bbox(c); assert.ok(bb.y0 <= 3 && bb.y1 >= 21, 'rises above the 16x16 grid and stands on the ground ' + [t, r, lv, bb.y0, bb.y1]);
+    }
+    assert.equal(Sprites.landmark(B.HOUSE, r, 3, null, 0), null); assert.equal(Sprites.landmark(B.TOWNHALL, r, 1, null, 0), null); assert.equal(Sprites.landmark(B.BARRACKS, r, 2, null, 0), null);
+  }
+  assert.ok(!same(Sprites.landmark(B.TOWNHALL, 0, 3, '#e53935', 0), Sprites.landmark(B.TOWNHALL, 0, 3, '#1e88e5', 0)), 'landmark pennant takes the tint');
+});
+
+test('features: tree species 4..8, decals; flags: small symbols; icons: help', () => {
+  const R = Const.RES;
+  const sp = []; for (let v = 0; v <= 8; v++) { const c = Sprites.feature(R.TREE, v); assert.ok(opaque(c) > 20, 'tree ' + v); sp.push(c); }
+  for (let i = 0; i < sp.length; i++) for (let j = i + 1; j < sp.length; j++) assert.ok(!same(sp[i], sp[j]), 'tree species differ ' + i + ' ' + j);
+  for (let v = 0; v < 8; v++) { const d = Sprites.decal('scorch', v); assert.equal(d.width, 16); assert.ok(opaque(d) > 30); assert.equal(d, Sprites.decal('scorch', v)); }
+  assert.ok(!same(Sprites.decal('scorch', 0), Sprites.decal('scorch', 1)));
+  const f = (s) => Sprites.flag({ pattern: 1, symbol: s, c1: '#e53935', c2: '#fdd835', c3: '#ffffff' }, 16, 10);
+  for (let a = 1; a < 10; a++) assert.ok(!same(f(0), f(a)), 'tiny flag symbols differ: ' + a);
+  assert.ok(Sprites.iconKeys().includes('help')); assert.ok(opaque(Sprites.icon('help', 48)) > 100);
+  assert.ok(Sprites.chimney(Const.B.HOUSE, 0, 2) !== null && Sprites.chimney(Const.B.FARM, 0, 1) === null);
+});
+
+test('render helpers: arrow, smoke, bird, fish - no NaN, no throw', () => {
+  const ctx = recCtx(), before = badArgs;
+  for (const S of [4, 8, 16, 24, 48]) for (let i = 0; i <= 10; i++) {
+    Sprites.drawArrow(ctx, 10, 20, 90 + i, 5, i / 10, S); Sprites.drawArrow(ctx, 50, 50, 50, 50, i / 10, S);
+    Sprites.drawSmoke(ctx, 50, 50, S, 1000 * i, 7 + i, i & 1 ? 1 : 0.5, !!(i & 2)); Sprites.drawBird(ctx, 30, 30, S, 137 * i, i); Sprites.drawFishJump(ctx, 40, 40, S, i / 10);
+  }
+  assert.equal(badArgs, before, 'non finite draw args: ' + badLog.join(' | '));
+});
+
+test('determinism: a fresh module instance renders identical pixels (poses, buildings, landmarks, decals)', () => {
+  const m = new Function('document', '"use strict";\n' + code + '\nreturn { Sprites, Const };')(fakeDoc);
+  const B = m.Const.B;
+  const pairs = [
+    [Sprites.unit(0, 'adult', 1, '#e53935', 3, 3, 5, 1, 0), m.Sprites.unit(0, 'adult', 1, '#e53935', 3, 3, 5, 1, 0)],
+    [Sprites.unit(1, 'elder', 0, '#1e88e5', 1, 2, 3, 6, 0), m.Sprites.unit(1, 'elder', 0, '#1e88e5', 1, 2, 3, 6, 0)],
+    [Sprites.unit(2, 'adult', 0, null, 2, 1, 2, 0, 3), m.Sprites.unit(2, 'adult', 0, null, 2, 1, 2, 0, 3)],
+    [Sprites.building(B.HOUSE, 0, 2, true, '#e53935', 1, 2), m.Sprites.building(B.HOUSE, 0, 2, true, '#e53935', 1, 2)],
+    [Sprites.landmark(B.TEMPLE, 2, 3, null, 2), m.Sprites.landmark(B.TEMPLE, 2, 3, null, 2)],
+    [Sprites.building(B.TOWNHALL, 1, 2, false, null, 1), m.Sprites.building(B.TOWNHALL, 1, 2, false, null, 1)],
+    [Sprites.decal('scorch', 3), m.Sprites.decal('scorch', 3)], [Sprites.feature(Const.RES.TREE, 5), m.Sprites.feature(Const.RES.TREE, 5)],
+  ];
+  pairs.forEach(([a, b], i) => assert.ok(same(a, b), 'pair ' + i));
+});
+
 test('no per-call allocation on cache hits (heap stays flat) and hits are fast', () => {
   // warm everything we are going to hit
   const keys = [];
-  for (let r = 0; r < 3; r++) for (let s = 0; s < 3; s++) for (let f = 0; f < 2; f++) for (let t = 0; t < 4; t++) keys.push([r, ['child', 'adult', 'elder'][s], f, [null, '#e53935', '#1e88e5', '#43a047'][t], (r + s + t) & 3, (r + f + t) & 3, t]);
+  for (let r = 0; r < 3; r++) for (let s = 0; s < 3; s++) for (let f = 0; f < 2; f++) for (let t = 0; t < 4; t++) keys.push([r, ['child', 'adult', 'elder'][s], f, [null, '#e53935', '#1e88e5', '#43a047'][t], (r + s + t) & 3, (r + f + t) & 3, t | ((s & 1) << 2), (r + s + t) % 9, (r * 3 + t) % 6]);
   for (const k of keys) Sprites.unit(...k);
-  Sprites.building(5, 0, 3, true, '#e53935'); Sprites.feature(1, 0); Sprites.icon('sword', 48);
+  Sprites.building(5, 0, 3, true, '#e53935', 1, 1); Sprites.landmark(5, 0, 3, '#e53935', 0); Sprites.feature(1, 0); Sprites.icon('sword', 48);
   const fl = { pattern: 3, symbol: 4, c1: '#e53935', c2: '#fdd835', c3: '#fff' }; Sprites.flag(fl, 32, 20);
   const stats0 = JSON.stringify(Sprites.stats()), cv0 = canvasesMade;
   gc(); gc(); const h0 = process.memoryUsage().heapUsed;
@@ -220,8 +310,8 @@ test('no per-call allocation on cache hits (heap stays flat) and hits are fast',
   const t0 = performance.now();
   for (let i = 0; i < N; i++) {
     const k = keys[i % keys.length];
-    sink += Sprites.unit(k[0], k[1], k[2], k[3], k[4], k[5], k[6]).width;
-    if ((i & 15) === 0) { sink += Sprites.building(5, 0, 3, true, '#e53935').width + Sprites.feature(1, 0).width + Sprites.flag(fl, 32, 20).width + Sprites.icon('sword', 48).width; }
+    sink += Sprites.unit(k[0], k[1], k[2], k[3], k[4], k[5], k[6], k[7], k[8]).width;
+    if ((i & 15) === 0) { sink += Sprites.building(5, 0, 3, true, '#e53935', 1, 1).width + Sprites.landmark(5, 0, 3, '#e53935', 0).width + Sprites.feature(1, 0).width + Sprites.flag(fl, 32, 20).width + Sprites.icon('sword', 48).width; }
   }
   const dt = performance.now() - t0;
   gc(); gc(); const h1 = process.memoryUsage().heapUsed;

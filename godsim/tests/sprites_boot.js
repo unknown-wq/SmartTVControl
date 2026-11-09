@@ -51,11 +51,11 @@
 
   SEC.features = () => {
     const RES = Const.RES, names = ['TREE', 'ROCK', 'IRON', 'GOLD', 'BERRY'], kinds = [RES.TREE, RES.ROCK, RES.IRON, RES.GOLD, RES.BERRY];
-    const sc = 6, cw = 16 * sc + 8, c = mk(80 + 6 * cw, 5 * (cw) + 40), x = c.getContext('2d');
+    const sc = 6, cw = 16 * sc + 8, c = mk(80 + 10 * cw, 6 * (cw) + 40), x = c.getContext('2d');
     x.fillStyle = '#14161c'; x.fillRect(0, 0, c.width, c.height);
     for (let k = 0; k < 5; k++) {
       label(x, names[k], 6, 40 + k * cw + 50);
-      const vs = k === 4 ? [0, 1, 2, 3, 9] : [0, 1, 2, 3];
+      const vs = k === 4 ? [0, 1, 2, 3, 9] : k === 0 ? [0, 1, 2, 3, 4, 5, 6, 7, 8] : [0, 1, 2, 3];
       vs.forEach((v, i) => {
         const px = 80 + i * cw, py = 30 + k * cw;
         // grass backdrop for realism
@@ -66,9 +66,10 @@
         label(x, 'v' + v, px + 2, py + 12, '#fff');
       });
       // on sand + hill
-      const px = 80 + 5 * cw, py = 30 + k * cw;
+      const px = 80 + 9 * cw, py = 30 + k * cw;
       Sprites.drawTile(x, 5, px, py, 16 * sc, 1); x.drawImage(Sprites.feature(kinds[k], 1), px, py, 16 * sc, 16 * sc);
     }
+    for (let i = 0; i < 4; i++) { const px = 80 + i * cw, py = 30 + 5 * cw; for (let a = 0; a < 2; a++) for (let b = 0; b < 2; b++) Sprites.drawTile(x, 3, px - 8 + a * 8 * sc, py - 8 + b * 8 * sc, 8 * sc, 0); Sprites.drawTile(x, 3, px, py, 16 * sc, i); x.drawImage(Sprites.decal('scorch', i), px, py, 16 * sc, 16 * sc); label(x, 'scorch' + i, px + 2, py + 12, '#fff'); }
     return c;
   };
 
@@ -120,6 +121,69 @@
     return c;
   };
 
+
+  // poses: rows = race x stage; cols = poses (frame 0 / 1 pairs), then carry + sleep ; opts.o: 0 plain, 1 armed+armored, 2 female
+  SEC.poses = (o) => {
+    const mode = (o && o.mode) | 0, sc = (o && o.sc) || 6, cw = 16 * sc;
+    const allc = [[0, 0], [0, 1], [1, 0], [1, 1], [2, 0], [2, 1], [3, 0], [3, 1], [4, 0], [4, 1], [5, 0], [5, 1], [7, 0], [7, 1], [8, 0], [8, 1], [6, 0]];
+    const part = (o && o.part) | 0;
+    const cols = part === 0 ? allc.slice(0, 8) : part === 1 ? allc.slice(8) : [];
+    const ccols = part === 1 || part === 2 ? [1, 2, 3, 4, 5] : [];
+    const rows = [];
+    for (let r = 0; r < 3; r++) for (const st of ['adult', 'elder']) rows.push([r, st]);
+    const c = mk(70 + (cols.length + ccols.length) * cw, rows.length * cw + 24), x = c.getContext('2d');
+    x.fillStyle = '#14161c'; x.fillRect(0, 0, c.width, c.height);
+    const headAll = ['walk0','walk1','atk0','atk1','chop0','chop1','mine0','mine1','farm0','farm1','build0','build1','fish0','fish1','forage0','forage1','sleep'], head = part === 0 ? headAll.slice(0, 8) : headAll.slice(8);
+    cols.forEach((cl, i) => label(x, head[i], 70 + i * cw + 4, 14, '#fff', 10));
+    ccols.forEach((cc, i) => label(x, 'carry' + cc, 70 + (cols.length + i) * cw + 4, 14, '#fff', 10));
+    rows.forEach((rw, ri) => {
+      const Y = 20 + ri * cw, r = rw[0], st = rw[1];
+      label(x, ['human','orc','elf'][r] + ' ' + st, 4, Y + 40, '#9aa4b8', 10);
+      const kc = KC[r === 0 ? 1 : r === 1 ? 0 : 2];
+      const w = mode === 1 ? 2 : (mode === 3 ? 3 : (r === 2 ? 2 : 1)), a = mode === 1 ? 2 : mode === 3 ? 3 : 0, lk = (mode === 2 ? 4 : 0) + ri;
+      cols.forEach((cl, i) => {
+        const X = 70 + i * cw;
+        Sprites.drawTile(x, 3, X, Y, cw, (ri + i) & 7);
+        x.drawImage(Sprites.unit(r, st, cl[1], kc, w, a, lk, cl[0]), X, Y, cw, cw);
+      });
+      ccols.forEach((cc, i) => {
+        const X = 70 + (cols.length + i) * cw;
+        Sprites.drawTile(x, 3, X, Y, cw, (ri + i + 3) & 7);
+        x.drawImage(Sprites.unit(r, st, i & 1, kc, w, a, lk, 0, cc), X, Y, cw, cw);
+      });
+    });
+    return c;
+  };
+
+
+  // landmarks (16x24) and building states: per race rows = TOWNHALL L2/L3, TEMPLE L2/L3, BARRACKS L3; cols = normal | damaged | burnt
+  SEC.landmarks = (o) => {
+    const B = Const.B, sc = (o && o.sc) || 6, cw = 16 * sc + 4, ch = 24 * sc + 4;
+    const rowsL = [[B.TOWNHALL, 2], [B.TOWNHALL, 3], [B.TEMPLE, 2], [B.TEMPLE, 3], [B.BARRACKS, 3]];
+    const c = mk(10 + 3 * (3 * cw + 16), rowsL.length * ch + 30), x = c.getContext('2d');
+    x.fillStyle = '#14161c'; x.fillRect(0, 0, c.width, c.height);
+    for (let r = 0; r < 3; r++) rowsL.forEach((rw, ri) => [0, 1, 2].forEach(m => {
+      const X = 10 + r * (3 * cw + 16) + m * cw, Y = 24 + ri * ch;
+      for (let a = 0; a < 3; a++) for (let b2 = 0; b2 < 4; b2++) Sprites.drawTile(x, 3, X + a * 8 * sc, Y + b2 * 8 * sc, 8 * sc, (a + b2 + ri) & 7);
+      const lm = Sprites.landmark(rw[0], r, rw[1], KC[(r * 5 + 1) % 16], m);
+      if (lm) x.drawImage(lm, X, Y, 16 * sc, 24 * sc);
+    }));
+    label(x, 'landmark 16x24: normal | damaged | burnt   (human | orc | elf)', 10, 14, '#fff', 12);
+    return c;
+  };
+  SEC.construction = (o) => {
+    const B = Const.B, sc = (o && o.sc) || 5, cw = 16 * sc + 4, types = [B.HOUSE, B.FARM, B.STORAGE, B.BARRACKS, B.TOWNHALL, B.TEMPLE, B.MARKET];
+    const c = mk(10 + 3 * (4 * cw + 12), types.length * cw + 30), x = c.getContext('2d');
+    x.fillStyle = '#14161c'; x.fillRect(0, 0, c.width, c.height);
+    for (let r = 0; r < 3; r++) types.forEach((t, ti) => [0, 1, 2, 3].forEach(k => {
+      const X = 10 + r * (4 * cw + 12) + k * cw, Y = 24 + ti * cw;
+      Sprites.drawTile(x, 3, X, Y, 16 * sc, (t + k) & 7);
+      x.drawImage(Sprites.building(t, r, 2, k === 3, KC[(r * 5 + 1) % 16], k === 3 ? 1 : k), X, Y, 16 * sc, 16 * sc);
+    }));
+    label(x, 'construction stage 0 / 1 / 2 / damaged   (human | orc | elf)', 10, 14, '#fff', 12);
+    return c;
+  };
+
   SEC.buildings = (o) => {
     const sc = (o && o.sc) || 5, cw = 16 * sc + 4, names = ['HOUSE', 'FARM', 'STORAGE', 'BARRACKS', 'TOWNHALL', 'TEMPLE', 'MARKET'];
     const cols = 4, c = mk(70 + 3 * (cols * cw + 14), 7 * cw + 24), x = c.getContext('2d');
@@ -150,7 +214,7 @@
     const keys = [];
     const add = k => { if (k && keys.indexOf(k) < 0) keys.push(k); };
     ToolDefs.forEach(t => add(t.icon)); Tabs.forEach(t => add(t.icon));
-    'play pause speed1 speed2 speed4 menu hand brush save load newworld close map_normal map_borders map_culture crown sword heart food wood stone iron gold skull coin chevron_up chevron_down plus minus check log focus human orc elf'.split(' ').forEach(add);
+    'play pause speed1 speed2 speed4 menu hand brush save load newworld close map_normal map_borders map_culture crown sword heart food wood stone iron gold skull coin chevron_up chevron_down plus minus check log focus human orc elf command region army shield arrow star supply war flag_goal handshake help target scales scroll infamy drawer'.split(' ').forEach(add);
     add('bogus_key');
     const size = (o && o.size) || 48, cw = size + 24, per = 11, rows = Math.ceil(keys.length / per);
     const c = mk(per * cw + 10, rows * (cw + 14) + 60 + 80), x = c.getContext('2d');
@@ -183,14 +247,14 @@
   };
 
   SEC.fx = () => {
-    const types = ['lightning', 'explosion', 'fire', 'smoke', 'heal', 'bless', 'plague', 'quake', 'dust', 'spark', 'splash', 'blood', 'whisper', 'ash', 'rain_drop'];
+    const types = ['lightning', 'explosion', 'fire', 'smoke', 'heal', 'bless', 'plague', 'quake', 'dust', 'spark', 'splash', 'blood', 'whisper', 'ash', 'rain_drop', 'heart', 'soul', 'flagraise', 'levelup'];
     const ps = [0.12, 0.35, 0.6, 0.85], cw = 150, ch = 150, c = mk(70 + ps.length * cw, types.length * ch / 1.25 + 10), x = c.getContext('2d');
     x.fillStyle = '#14161c'; x.fillRect(0, 0, c.width, c.height);
     const rowH = ch / 1.25;
     types.forEach((tp, i) => ps.forEach((p, j) => {
       const X = 70 + j * cw, Y = i * rowH;
       for (let a = 0; a < 5; a++) for (let b = 0; b < 4; b++) Sprites.drawTile(x, 3, X + a * 32, Y + b * 32, 32, (a + b * 3) & 7);
-      const fx = { type: tp, x: 5 + i, y: 7 + j, ttl: 1, age: p, r: 2.2 };
+      const fx = { type: tp, x: 5 + i, y: 7 + j, ttl: 1, age: p, r: 2.2, color: KC[3] };
       Sprites.drawFx(x, fx, X + cw / 2 - 5, Y + rowH * 0.62, 32, 5000 + p * 1000);
       if (j === 3) Sprites.drawFx(x, { type: tp, x: 5 + i, y: 7 + j, ttl: 1, age: 0.4, r: 2.2 }, X + cw - 22, Y + rowH * 0.8, 12, 5400);
       if (j === 0) label(x, tp, 4, Y + 20, '#fff');

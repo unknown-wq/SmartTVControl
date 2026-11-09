@@ -24,6 +24,7 @@ const jobs = [];
 for (const n of names) {
   if (only && !only.includes(n)) continue;
   if (n === 'units') for (let r = 0; r < 3; r++) jobs.push([n, { race: r }, `units_${['human', 'orc', 'elf'][r]}`]);
+  else if (n === 'poses') { const md = +(args.mode || 0); for (let pt = 0; pt < 3; pt++) jobs.push([n, { mode: md, part: pt, sc: +(args.sc || 8) }, 'poses_m' + md + '_p' + pt]); }
   else if (n === 'scene') { jobs.push([n, { zoom: 4, frame: 0 }, 'scene']); jobs.push([n, { zoom: 2, frame: 1 }, 'scene_z2']); jobs.push([n, { zoom: 1, frame: 0 }, 'scene_z1']); }
   else jobs.push([n, { sc: args.sc ? +args.sc : undefined }, n + (args.sc ? '_x' + args.sc : '')]);
 }
