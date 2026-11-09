@@ -16,7 +16,7 @@ Source: `src/NN_*.js` (20 files, one shared scope) + `style.css` + `template.htm
 | **Save / load** | done | Versioned, RLE + LZ packed, typed layers + column tables, checksum, rollback; loads are bit-identical (also in the middle of a war). |
 
 ## Notification filter («Войны» / «Все»)
-A floating button at the top of the right-hand button column hides the noise: **«Войны»** (default) keeps only `war` and `peace` log kinds in the event feed (war declarations, occupations/liberations, peace deals, vassalisation by treaty); **«Все»** shows every event. The choice is stored in `localStorage` (`godsim.ui.feedWar`) and the full log panel opens on the matching chip («Войны» / «Все»). Alliances are logged as `kingdom` (diplomacy), not as `peace`. Test: `tests/ui3.test.mjs`.
+A floating button at the top of the right-hand button column hides the noise: **«Войны»** (default) keeps only `war` and `peace` log kinds in the event feed (war declarations, occupations/liberations, peace deals, vassalisation by treaty); **«Все»** shows every event. The choice is stored in `localStorage` key `godsim.ui` (field `feedWar`) and the full log panel opens on the matching chip («Войны» / «Все»). Alliances are logged as `kingdom` (diplomacy), not as `peace`. Test: `tests/ui3.test.mjs`.
 
 ## Approximated / simplified
 
