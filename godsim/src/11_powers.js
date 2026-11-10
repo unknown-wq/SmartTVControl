@@ -581,6 +581,7 @@ const Powers = (() => {
         Units.heal(u, u.maxHp);
         u.hp = u.maxHp;
         u.sick = 0;
+        if (u.rad) u.rad = 0;                                 // radiation sickness (nuke fallout, src/18_power_nuke.js) is cured too
         if (needs) { n++; if (shown < 5) { shown++; fx('heal', u.x, u.y, { ttl: 0.9, r: 0.8 }); } }
       }
       if (k === pts - 1) fx('heal', px, py, { ttl: 0.9, r: r + 0.5 });
