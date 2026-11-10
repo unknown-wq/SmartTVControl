@@ -181,3 +181,17 @@ const ToolDefs = [
 ];
 ToolDefs.byId = {};
 ToolDefs.forEach(t => { ToolDefs.byId[t.id] = t; });
+/** Plugin groups (id -> Russian label), e.g. ToolDefs.groupLabels.arsenal = 'Арсенал'. UI falls back to this. */
+ToolDefs.groupLabels = {};
+/** Register a tool from a plugin file (call at load time). The tool is inserted after the last tool of its group (def.group) on its tab,
+ *  or - for a NEW group - after the last tool of group def.afterGroup (default: the end of the tab). def.short = optional short button label. */
+ToolDefs.add = function (def) {
+  if (ToolDefs.byId[def.id]) return ToolDefs.byId[def.id];
+  let at = -1;
+  for (let i = 0; i < ToolDefs.length; i++) if (ToolDefs[i].tab === def.tab && ToolDefs[i].group === def.group) at = i;
+  if (at < 0 && def.afterGroup) for (let i = 0; i < ToolDefs.length; i++) if (ToolDefs[i].tab === def.tab && ToolDefs[i].group === def.afterGroup) at = i;
+  if (at < 0) for (let i = 0; i < ToolDefs.length; i++) if (ToolDefs[i].tab === def.tab) at = i;
+  if (at < 0) ToolDefs.push(def); else ToolDefs.splice(at + 1, 0, def);
+  ToolDefs.byId[def.id] = def;
+  return def;
+};

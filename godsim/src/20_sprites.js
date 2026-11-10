@@ -1773,6 +1773,7 @@ const Sprites = (() => {
     }
   }
 
+  const ICON_HELP = { ring, thick, tri, shadeDisc };
   const ICONS = {
     // ---- terrain tools ----
     bell: ['.....yy.....', '....yyyy....', '...yywyyY...', '...ywyyyY...', '..yywyyyyY..', '..ywyyyyyY..', '..ywyyyyyY..', '.yywyyyyyyY.', '.ywyyyyyyyY.', 'yyyyyyyyyyYY', 'YYYYYYYYYYYY', '....oooo....', '.....oo.....'],
@@ -2168,6 +2169,12 @@ const Sprites = (() => {
     const b = new Buf(TS, TS);
     if (IFN[key]) {                            // code-drawn glyph: centre its bounding box inside the 14x14 inner area
       const g = new Buf(TS, TS); IFN[key](g);
+      const bb = g.bbox();
+      if (bb) { b.over(g, bb.w <= 14 ? 1 + ((14 - bb.w) >> 1) - bb.x0 : 0, bb.h <= 14 ? 1 + ((14 - bb.h) >> 1) - bb.y0 : 0); }
+      b.outline(ICON_OUT);
+    }
+    else if (GfxPlugins.icons[key]) {            // plugin icon (src/3x_gfx_*.js): same centring + outline as code-drawn glyphs
+      const g = new Buf(TS, TS); GfxPlugins.icons[key](g, IP, ICON_HELP);
       const bb = g.bbox();
       if (bb) { b.over(g, bb.w <= 14 ? 1 + ((14 - bb.w) >> 1) - bb.x0 : 0, bb.h <= 14 ? 1 + ((14 - bb.h) >> 1) - bb.y0 : 0); }
       b.outline(ICON_OUT);
@@ -2647,14 +2654,17 @@ const Sprites = (() => {
     ctx.drawImage(cv, Math.round(px - d.ax * scale / 16), Math.round(py - d.ay * scale / 16), dw, dh);
     return true;
   }
+  /** helpers handed to plugin fx / persistent-effect draw functions (src/3x_gfx_*.js): R4 = pixel rect on the virtual 16-px-per-tile grid (X,Y,u,gx,gy,w,h), hf = hash noise 0..1, fxSeed(fx) = stable per-fx integer,
+   *  snapU, discRows / ringRows = pixel discs and rings, TAU, FR(ctx,x,y,w,h) = fillRect, screen(ctx) -> {w,h} device px of the canvas */
+  const FX_HELP = { R4, hf, TAU, fxSeed, snapU, discRows, ringRows, FR, screen(ctx) { return { w: ctx.canvas.width, h: ctx.canvas.height }; } };
   function drawFx(ctx, fx, px, py, scale, now) {
-    const f = FXD[fx.type];
+    const f = FXD[fx.type] || GfxPlugins.fx[fx.type];      // plugin fx (src/3x_gfx_*.js) are drawn directly (no baked frames): keep them cheap
     if (f === undefined) return;
     const ttl = fx.ttl > 0 ? fx.ttl : 0.8;
     let p = fx.age / ttl; p = p < 0 ? 0 : p > 1 ? 1 : p;
     const d = FXC[fx.type];
     if (d !== undefined && scale > 0 && drawFxCached(ctx, d, fx, px, py, scale, p, now || 0)) return;
-    f(ctx, fx, px, py, scale, scale / 16, p, now || 0);
+    f(ctx, fx, px, py, scale, scale / 16, p, now || 0, FX_HELP);
   }
 
   /* ---------------- helpers drawn by Render (not Fx entries): arrows, smoke columns, birds, jumping fish ---------------- */
@@ -2880,8 +2890,8 @@ const Sprites = (() => {
     init, drawTile, tileAtlas, feature, decal, unit, building, landmark, flag, icon, drawFx, drawEffect, drawArrow, drawSmoke, drawBird, drawFishJump, chimney, stats,
     /** test hooks: FX cache descriptors and a bake of one cached frame (used by tests/sprites_sheet bounds check) */
     fxCache: { desc: FXC, bake(type, fi, vi, color) { return bakeFx(FXC[type], { color, n: undefined }, fi, vi); }, smoke(kind, vi, fi) { return bakeSmoke(kind, vi, fi); }, SMK: { n: SMK_N, w: SMK_W, h: SMK_H } },
-    LOOKS, TILE_PX: TS,
+    LOOKS, TILE_PX: TS, fxHelpers: FX_HELP,
     /** all icon keys known to the sprite sheet */
-    iconKeys() { return Object.keys(IFN).concat(Object.keys(ICONS).filter(k => ICONS[k] && ICONS[k].length && !IFN[k])); },
+    iconKeys() { return Object.keys(IFN).concat(Object.keys(ICONS).filter(k => ICONS[k] && ICONS[k].length && !IFN[k]), Object.keys(GfxPlugins.icons).filter(k => !IFN[k] && !ICONS[k])); },
   };
 })();

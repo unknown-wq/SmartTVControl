@@ -49,7 +49,9 @@ export function loadSim(opts = {}) {
   for (const m of SIM_MODULES) {
     if (!declared.has(m)) { stubs.push(`const ${m} = __stubModule(${JSON.stringify(m)});`); declared.add(m); }
   }
-  const body = parts.join('\n\n') + '\n' + stubs.join('\n') + `\nreturn { ${[...declared].join(', ')} };`;
+  // opts.extra = [absolute paths]: extra JS appended in the same scope (plugin fixtures, test plugins)
+  const extra = (opts.extra || []).map(f => `/* extra ${path.basename(f)} */\n` + fs.readFileSync(f, 'utf8')).join('\n\n');
+  const body = parts.join('\n\n') + '\n' + stubs.join('\n') + '\n' + extra + `\nreturn { ${[...declared].join(', ')} };`;
   const fakeStorage = (() => { const m = new Map(); return { getItem: k => (m.has(k) ? m.get(k) : null), setItem: (k, v) => { m.set(k, String(v)); }, removeItem: k => { m.delete(k); }, key: i => [...m.keys()][i] ?? null, get length() { return m.size; } }; })();
   const fn = new Function('__stubModule', 'localStorage', 'window', 'document', '"use strict";\n' + body);
   return fn(stubModule, fakeStorage, undefined, undefined);

@@ -621,6 +621,7 @@ const Save = (() => {
       meteors: Array.isArray(eff.meteors) ? eff.meteors : [], tornados: Array.isArray(eff.tornados) ? eff.tornados : [],
       rains: Array.isArray(eff.rains) ? eff.rains : [], quakes: Array.isArray(eff.quakes) ? eff.quakes : [],
     };
+    for (const k of Object.keys(eff)) if (out.eff[k] === undefined && Array.isArray(eff[k])) out.eff[k] = eff[k].filter(e => e && typeof e === 'object');   // plugin powers keep their persistent effects in S.eff.<name> (CONTRACT section 10)
     out.mod = data.mod && typeof data.mod === 'object' && !Array.isArray(data.mod) ? data.mod : {};
     const st = data.stats && typeof data.stats === 'object' ? data.stats : {};
     out.stats = Object.assign({ year: Const.START_YEAR, pop: [0, 0, 0], popTotal: 0, kingdoms: 0, cities: 0, wars: 0, buildings: 0 }, st);

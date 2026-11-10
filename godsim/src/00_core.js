@@ -150,6 +150,25 @@ const Fx = {
   clear() { this.list.length = 0; },
 };
 
+/* ---------- Plugin registries (new god powers, their graphics, UI badges) ----------
+ * Plugin files push into these at LOAD time (allowed: they only touch core globals). Consumers (Powers, Sprites, Render, UI) read them lazily.
+ *   PowerPlugins : sim side (src/15..19_power_*.js). {ids:[toolIds], apply(id,x,y,r,first,lx,ly,host) -> bool, step(tick), newWorld(), afterLoad()}
+ *   GfxPlugins   : client side (src/30..39_gfx_*.js). icons / fx / persistent effects / unit status tints
+ *   UIPlugins    : client UI hooks (unit status badges in the inspector)
+ * See docs/CONTRACT.md section 10. */
+const PowerPlugins = [];
+const GfxPlugins = {
+  icons: {},        // icon key -> (b, IP, H): draw a glyph (<= 14x14) with the Buf API into b using palette letters IP; the dark outline is added automatically
+  fx: {},           // Fx.add type -> (ctx, fx, px, py, scale, u, p, now, H): px,py = device-px centre, scale = device px per tile, u = scale/16, p = age/ttl 0..1
+  effects: [],      // persistent S.eff arrays: {key:'name', margin:tiles, draw(ctx, e, px, py, scale, now, H, alpha)}  (px,py = device px of e.x,e.y)
+  unitTints: [],    // [{field:'poison', color:'rgba(r,g,b,a)'}]: while u[field] > S.tick the unit sprite is tinted
+  addEffect(def) { this.effects.push(def); return def; },
+  addUnitTint(field, color) { this.unitTints.push({ field, color }); },
+};
+const UIPlugins = {
+  unitBadges: [],   // (u) -> {t:'Отравлен', cls:'bad'|'warn'|'good'|'gold'} | null   (chips in the unit card)
+};
+
 /* ---------- Global mutable game state ---------- */
 const S = {
   w: 0, h: 0, seed: 1, tick: 0,

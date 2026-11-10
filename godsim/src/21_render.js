@@ -53,6 +53,7 @@ const Render = (() => {
   // view (recomputed every frame)
   let Z = 16, ox = 0, oy = 0, vx0 = 0, vy0 = 0, vx1 = 0, vy1 = 0, zoomCss = 8, texel = 1;
   let curAlpha = 1, curNow = 0;
+  let shakeX = 0, shakeY = 0;                    // camera shake (device px), see shakeOffset()
 
   function mk(w, h) { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; }
   function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
@@ -429,7 +430,24 @@ const Render = (() => {
     }
     map.set(cv, v);
     return v;
+  }  const unitTints = GfxPlugins.unitTints, plugMaps = [];
+  /** unit sprite tinted with GfxPlugins.unitTints[t].color (cached per source sprite) */
+  function variantPlugin(cv, t) {
+    let map = plugMaps[t];
+    if (!map) map = plugMaps[t] = new Map();
+    let v = map.get(cv);
+    if (v) return v;
+    v = mk(cv.width, cv.height);
+    const g = v.getContext('2d');
+    g.imageSmoothingEnabled = false;
+    g.drawImage(cv, 0, 0);
+    g.globalCompositeOperation = 'source-atop';
+    g.fillStyle = unitTints[t].color;
+    g.fillRect(0, 0, cv.width, cv.height);
+    map.set(cv, v);
+    return v;
   }
+
 
   // flame frames (16x16 pixel art, 4 frames)
   let flames = null;
@@ -847,6 +865,7 @@ const Render = (() => {
     let spr = Sprites.unit(u.race, stage, frame, kd ? kd.color : null, u.weapon, u.armor, (u.id & 3) | (zoomCss >= 8 && u.sex === 1 ? 4 : 0), pose, carry);
     if (u.face < 0) spr = variantOf(spr, 0);
     if (u.sick > S.tick) spr = variantOf(spr, 2);
+    for (let t = 0; t < unitTints.length; t++) { if (u[unitTints[t].field] > S.tick) { spr = variantPlugin(spr, t); break; } }      // plugin status tints (GfxPlugins.unitTints)
     if (hitUntil[li] > curNow) spr = variantOf(spr, 3);                // hit flash
     const sz = 16 * texel;
     const sx = Math.round(ox + ix * Z), sy = Math.round(oy + (iy + 0.55) * Z);
@@ -1111,7 +1130,47 @@ const Render = (() => {
     for (let i = 0; i < a.length; i++) { const e = a[i]; if (e.x < vx0 - 6 || e.x > vx1 + 6 || e.y < vy0 - 6 || e.y > vy1 + 6) continue; Sprites.drawEffect(ctx, 'tornado', e, ox + e.x * Z, oy + e.y * Z, Z, now); }
     a = eff.meteors || NONE;
     for (let i = 0; i < a.length; i++) { const e = a[i], m = (e.r || 2) + 16; if (e.x < vx0 - m || e.x > vx1 + m || e.y < vy0 - m || e.y > vy1 + m) continue; Sprites.drawEffect(ctx, 'meteor', e, ox + e.x * Z, oy + e.y * Z, Z, now); }
+    // plugin powers (CONTRACT section 10): GfxPlugins.effects = [{key, margin, draw(ctx, e, px, py, scale, now, H, alpha)}] over S.eff[key]
+    const pe = GfxPlugins.effects;
+    for (let k = 0; k < pe.length; k++) {
+      const d = pe[k], arr = eff[d.key];
+      if (!arr || !arr.length) continue;
+      const m = d.margin || 4;
+      for (let i = 0; i < arr.length; i++) {
+        const e = arr[i];
+        if (!e || e.x < vx0 - m || e.x > vx1 + m || e.y < vy0 - m - 2 || e.y > vy1 + m) continue;
+        try { ctx.globalAlpha = 1; d.draw(ctx, e, ox + e.x * Z, oy + e.y * Z, Z, now, Sprites.fxHelpers, curAlpha); } catch (err) { report('effect ' + d.key, err); }
+      }
+    }
     ctx.globalAlpha = 1;
+  }
+  /** built-in generic Fx for every power: Fx.add('flash', x, y, {ttl, color, a}) = full-screen flash; 'shake' is handled in draw() (camera shake) */
+  function drawFlashes() {
+    const fl = Fx.list;
+    for (let i = 0; i < fl.length; i++) {
+      const f = fl[i];
+      if (f.type !== 'flash') continue;
+      const p = f.age / (f.ttl > 0 ? f.ttl : 0.5), k = 1 - (p < 0 ? 0 : p > 1 ? 1 : p);
+      ctx.globalAlpha = Math.min(1, (f.a > 0 ? f.a : 0.8) * k * k);
+      ctx.fillStyle = f.color || '#ffffff';
+      ctx.fillRect(0, 0, cw, ch);
+    }
+    ctx.globalAlpha = 1;
+  }
+  /** camera shake offset in device px from live Fx.add('shake', x, y, {amp (css px), ttl}) entries */
+  function shakeOffset(now) {
+    const fl = Fx.list;
+    let amp = 0;
+    for (let i = 0; i < fl.length; i++) {
+      const f = fl[i];
+      if (f.type !== 'shake') continue;
+      const p = f.age / (f.ttl > 0 ? f.ttl : 0.5), a = (f.amp > 0 ? f.amp : 5) * (1 - (p < 0 ? 0 : p > 1 ? 1 : p));
+      if (a > amp) amp = a;
+    }
+    if (amp <= 0.2) { shakeX = shakeY = 0; return; }
+    amp *= dpr;
+    shakeX = Math.round(Math.sin(now * 0.071) * amp + Math.sin(now * 0.173 + 1.7) * amp * 0.5);
+    shakeY = Math.round(Math.cos(now * 0.083) * amp + Math.cos(now * 0.151 + 0.4) * amp * 0.5);
   }
 
   // ------------------------------------------------------------------ city labels
@@ -2178,7 +2237,8 @@ const Render = (() => {
     Z = cam.zoom * dpr;
     const tz = Z * 0.85 / 16;                     // units are drawn at ~85% of a tile; whole texels when big
     texel = tz >= 4 ? Math.round(tz) : tz;
-    ox = Math.round(cw / 2 - cam.x * Z); oy = Math.round(ch / 2 - cam.y * Z);
+    shakeOffset(curNow);
+    ox = Math.round(cw / 2 - cam.x * Z) + shakeX; oy = Math.round(ch / 2 - cam.y * Z) + shakeY;
     vx0 = Math.max(0, Math.floor(-ox / Z)); vy0 = Math.max(0, Math.floor(-oy / Z));
     vx1 = Math.min(W, Math.ceil((cw - ox) / Z)); vy1 = Math.min(H, Math.ceil((ch - oy) / Z));
     ctx.fillStyle = BG; ctx.fillRect(0, 0, cw, ch);
@@ -2205,6 +2265,7 @@ const Render = (() => {
       } catch (e) { report('war', e); }
       try { drawHighlight(curNow); drawBrush(curNow); } catch (e) { report('overlays', e); }
     }
+    try { drawFlashes(); } catch (e) { report('flash', e); }
     ctx.globalAlpha = 1;
     updateStats(t0);
   }

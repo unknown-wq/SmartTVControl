@@ -257,7 +257,7 @@ const UI = (() => {
     const b = btn('tool', def.name, null);
     b.dataset.tool = def.id;
     b.appendChild(ico(def.icon, 32));
-    b.appendChild(el('span', '', label || SHORT[def.id] || def.name));
+    b.appendChild(el('span', '', label || SHORT[def.id] || def.short || def.name));
     return b;
   }
   function renderTools() {
@@ -274,7 +274,7 @@ const UI = (() => {
     });
     groups.forEach((g) => {
       const gb = el('div', 'grp');
-      if (groups.length > 1) { const gl = el('div', 'grp-lbl'); gl.appendChild(el('span', '', GROUP_LABEL[g.id] || g.id)); gb.appendChild(gl); }
+      if (groups.length > 1) { const gl = el('div', 'grp-lbl'); gl.appendChild(el('span', '', GROUP_LABEL[g.id] || (ToolDefs.groupLabels && ToolDefs.groupLabels[g.id]) || g.id)); gb.appendChild(gl); }
       g.defs.forEach((d) => {
         const b = toolBtn(d);
         b.addEventListener('click', () => selectTool(d.id));
@@ -1140,6 +1140,7 @@ const UI = (() => {
       if (u.sick > S.tick) a.push({ t: 'Болеет', cls: 'bad' });
       if (u.burning > S.tick) a.push({ t: 'Горит', cls: 'warn' });
       if (u.buffUntil > S.tick) a.push({ t: 'Благословлён', cls: 'good' });
+      for (let i = 0; i < UIPlugins.unitBadges.length; i++) { const bd = UIPlugins.unitBadges[i](u); if (bd) a.push(bd); }      // plugin powers (e.g. poison)
       if (u.hunger > 85) a.push({ t: 'Голодает', cls: 'bad' });
       if (u.armyId) a.push({ t: 'В армии', cls: 'warn' });
       return a;

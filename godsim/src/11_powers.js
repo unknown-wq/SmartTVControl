@@ -814,7 +814,22 @@ const Powers = (() => {
       case 'command': return msg('', false);                 // command mode is handled by the UI (no god power behind it)
       case 'inspect': { const p = pick(x, y); return msg(p ? 'Осмотр' : 'Вне карты', !!p); }
     }
+    const pl = pluginFor(id);                               // new powers live in plugin files (src/15..19_power_*.js, CONTRACT section 10)
+    if (pl) return !!pl.apply(id, x, y, r, first, lx, ly, host);
     return msg('Неизвестный инструмент', false);
+  }
+  function pluginFor(id) {
+    for (let i = 0; i < PowerPlugins.length; i++) { const p = PowerPlugins[i]; if (p && p.ids && p.ids.indexOf(id) >= 0 && typeof p.apply === 'function') return p; }
+    return null;
+  }
+  /** helpers handed to plugin.apply (and available as Powers.host) */
+  const host = { msg, fx, num, rInt, inMap, report, kingdomAt: (x, y) => kingdomAt(x, y), nearestCity, eff };
+  function eachPlugin(fn, name, tick) {
+    for (let i = 0; i < PowerPlugins.length; i++) {
+      const p = PowerPlugins[i];
+      if (!p || typeof p[fn] !== 'function') continue;
+      try { p[fn](tick, host); } catch (err) { report(err, (p.name || (p.ids && p.ids[0]) || 'plugin') + ' ' + name); }
+    }
   }
   function rainTool(x, y, r, first, lx, ly) {
     if (first) return rain(x, y, Math.max(2, r));
@@ -833,6 +848,7 @@ const Powers = (() => {
     stepList(e.quakes, stepQuake, tick, 'quake');
     stepList(e.tornados, stepTornado, tick, 'tornado');
     stepList(e.rains, stepRain, tick, 'rain');
+    if (PowerPlugins.length) eachPlugin('step', 'step', tick);
   }
   /** runs fn over every effect, drops finished (fn returned false) or broken ones (exceptions are logged once) */
   function stepList(L, fn, tick, name) {
@@ -869,14 +885,14 @@ const Powers = (() => {
     lastMessage = '';
     buf.length = 0;
   }
-  function newWorld() { reset(); eff(); }
-  function afterLoad() { reset(); clean(); }
+  function newWorld() { reset(); eff(); eachPlugin('newWorld', 'newWorld', S.tick); }
+  function afterLoad() { reset(); clean(); eachPlugin('afterLoad', 'afterLoad', S.tick); }
 
   return {
     apply, pick, step, newWorld, afterLoad,
     lightning, meteor, earthquake, plague, tornado, rain, bless, fire, heal,
     // extras
-    kingdomAt,
+    kingdomAt, host,
     /** number of active persistent effects, for UI / tests */
     active() { const e = eff(); return { meteors: e.meteors.length, tornados: e.tornados.length, rains: e.rains.length, quakes: e.quakes.length }; },
     get lastMessage() { return lastMessage; },

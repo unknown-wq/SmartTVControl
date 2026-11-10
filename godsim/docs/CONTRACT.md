@@ -431,3 +431,60 @@ Tool `command` (tab Королевства, label «Война», icon `war`). O
 * **Event feed**: the death of a ruler of a living kingdom is reported once (the succession line of Kingdoms); Units only logs rulers without a kingdom.
 * **Known behaviour kept on purpose**: a war never ends because a goal was taken; `autoPeace` ends it after 4800 ticks without a controller change (default ON).
 * **Tests added**: `tests/system.test.mjs` (long runs, balance, perf, mid-war save / load, god chaos), `tests/long.mjs` / `tests/longlib.mjs` (CLI + library), `tests/playtest.mjs` (iPhone-viewport soak + command mode + menu save / load), `tests/perf.mjs` (frame-cost split in Chromium). `tests/politics.test.mjs` expectations changed: settle period of the AI war rate (4200 ticks), target population in the controlled setting (26 instead of 4).
+
+---
+
+# 10. PLUGINS — new god powers (and their graphics) live in their own files
+
+Goal: several people/agents add powers in parallel **without editing the same files**. A power = one sim plugin file + one graphics plugin file + one test file. The plumbing already exists
+(`PowerPlugins`, `GfxPlugins`, `UIPlugins` in `src/00_core.js`; `ToolDefs.add` in `src/02_data.js`; dispatch in `Powers`; fallbacks in `Sprites`/`Render`/`UI`; `Save` keeps unknown `S.eff.*` arrays). **Do not edit Powers/Sprites/Render/UI/Save/core for a new power** unless you find a real bug in the plumbing (then fix it minimally and say so). Demo + executable spec: `tests/fixtures/plugin_demo.js` and `tests/plugins.test.mjs` (read both first).
+
+## 10.1 Files and naming
+| file | contents | loaded by |
+|---|---|---|
+| `src/1N_power_<name>.js` (N = 5..9: dynamite 15, rocket 16, poison 17, nuke 18, volcano 19) | sim plugin: `const Power<Name> = (() => { ToolDefs.add({...}); ...; PowerPlugins.push(api); return api; })();` | node harness (`tests/harness.mjs` loads every `src/NN_*.js` with NN < 20) and the browser build |
+| `src/3N_gfx_<name>.js` (N = 0..4 in the same order) | client graphics plugin: icon, fx, persistent effect drawing, unit tints (registrations only, no DOM at load time) | browser build only |
+| `tests/power_<name>.test.mjs` | headless test (+ optional browser part like `tests/plugins.test.mjs`) | you |
+
+Only the six core globals + `PowerPlugins/GfxPlugins/UIPlugins/ToolDefs/Names/Fx/...` may be touched at load time (same rule as every module). Everything else (Units, World, Buildings, Cities, Kingdoms, Powers, Sprites...) only inside functions.
+
+## 10.2 Sim plugin
+```js
+const PowerExample = (() => {
+  ToolDefs.groupLabels.arsenal = 'Арсенал';                       // only for a NEW group
+  ToolDefs.add({ id: 'example', tab: 'powers', group: 'arsenal', afterGroup: 'destroy',   // inserted after the 'destroy' group (before «Благословение»); existing group => after its last tool
+                 name: 'Пример', short: 'Пример', icon: 'example', brush: true /* radius slider 1..8 */, drag: false /* true = may be applied continuously while painting */, hint: 'Подсказка' });
+  const api = {
+    name: 'example', ids: ['example'],
+    apply(id, x, y, r, first, lx, ly, host) { ...; return host.msg('Русский текст для тоста', true); },   // x,y float tile coords; r = brush radius 1..8 (1 when brush:false); first = start of a gesture (a tap is always first);
+                                                                                                        // for drag tools later calls have first=false (+ lx,ly = previous point); Powers rate-limits drags (0.5 tile / 3 ticks) but heavy powers should throttle themselves
+    step(tick, host) { ... },                                    // every sim tick (cheap!); expire / advance your effects here
+    newWorld() { ... },  afterLoad() { ... },                    // reset private caches; state must come from S.eff / S.mod only
+  };
+  PowerPlugins.push(api);
+  return api;
+})();
+```
+* **State**: persistent effects → `S.eff.<yourKey>` (array of JSON-safe objects, `{x,y,...}` tile coords so Render can cull; created lazily by you); anything else → `S.mod.<yourName>`. The save/load determinism test must pass: after `Save.deserialize` the continuation must be identical (see `tests/plugins.test.mjs`). Private non-persistent caches are fine only if rebuilt in `afterLoad` and they do not change simulation results. All randomness via `R`.
+* **host** (`Powers.host`): `msg(text, ok)` (toast text, returns ok), `fx(type,x,y,opts)`, `num`, `rInt(r,lo,hi,def)`, `inMap(x,y)`, `report(err, where)`, `kingdomAt(x,y)`, `nearestCity(x,y,maxD)`, `eff()`.
+* **Damage / world APIs you will want** (all public, defensive, never throw): `Units.nearby(x,y,r,fn)` (callback must not kill units: collect first), `Units.inRadius`, `Units.damage(u,dmg,cause,attacker)`, `Units.damageAt(x,y,dmg,cause)`, `Units.kill`, `Units.heal`, `Units.infect`, unit fields you may read/write: `hp, x, y, state, sick, burning, buffUntil` (+ your own status field e.g. `u.poison = untilTick`, any extra field is saved with the unit); `Buildings.damageAt(x,y,dmg,cause)`, `Buildings.destroyAt`, `Buildings.at(x,y)`; `World.setTile(x,y,t)`, `World.brush(id,cx,cy,r)`, `World.ignite(x,y)`, `World.extinguish(x,y,r)`, `World.harvest`, `World.resAt`, `Tiles`/`Const.T`; `Cities.destroy(cityId,cause)`, `Kingdoms.*` (rulers die → succession by itself); `Log.add(msg, Const.LOG.DISASTER|GOD, x, y)` for notable results only (a city destroyed, a king killed — never one line per victim); `Hist.add(entity, text)`. Mass kills: kill via `Units.kill(u,'cause',null)` / `Units.damage`; death causes are free text (Russian, shown in the unit history).
+* **Budgets**: `step` < 0.3 ms average with the plugin's effects active at 1500 units; cap the number of live effects (e.g. ≤ 60) and per-tick work; no per-tick allocation in hot loops; heavy one-off work (big craters) is fine in one tick if it stays < 8 ms (measure) or is spread over a few ticks.
+* **UX rules**: Russian names/hints/messages; a tap must always show feedback (Fx + toast via `host.msg`); never throw on out-of-map taps; clamp radius; tools with `brush:false` ignore `r`; all effects must end (no immortal particles) unless the design says otherwise (then cap them).
+* **Generic Fx you can use from the sim** (`Fx.add(type, x, y, opts)`, real-time seconds): `flash` (full-screen flash: `{ttl, a:0..1, color}`), `shake` (camera shake: `{ttl, amp /*css px*/}`), plus every built-in: `explosion, lightning, fire, smoke, dust, spark, blood, ash, heal, bless, plague, quake, splash, whisper, heart, soul, levelup, slash`. Your own types are drawn by your graphics plugin.
+
+## 10.3 Graphics plugin (`src/3N_gfx_<name>.js`, no DOM at load time)
+```js
+GfxPlugins.icons.example = (b, IP, H) => { b.rect(...); b.disc(7, 7, 4, IP.r); H.ring(b, 7, 7, 3, 5, IP.w); ... };   // 14x14 glyph, Buf API: set, rect, hline, vline, line, disc, ell, art(rows,IP,ox,oy), over; palette letters in IP (k w W g G r R o O y Y l e E c b B s p P m n N t T f F h H d z u); H = {ring, thick, tri, shadeDisc}; the dark outline is added automatically; the icon key = ToolDefs icon
+GfxPlugins.fx.example_fx = (ctx, fx, px, py, scale, u, p, now, H) => { ... };     // one Fx entry (ctx has an identity transform, device px). p = age/ttl 0..1, u = scale/16 = one virtual pixel; H = Sprites.fxHelpers {R4,hf,TAU,fxSeed,snapU,discRows,ringRows,FR,screen(ctx)}
+GfxPlugins.addEffect({ key: 'example', margin: 6 /*tiles around the viewport kept for culling*/, draw(ctx, e, px, py, scale, now, H, alpha) { ... } });   // draws every S.eff.example entry (px,py = device px of e.x,e.y; alpha = tick interpolation 0..1)
+GfxPlugins.addUnitTint('poison', 'rgba(150,70,210,0.5)');                           // while u.poison > S.tick the unit sprite is tinted
+UIPlugins.unitBadges.push((u) => (u.poison > S.tick ? { t: 'Отравлен', cls: 'bad' } : null));   // chip in the unit card (cls: good | bad | warn | gold)
+```
+* **Pixel-art style** must match the existing game (chunky pixels, dark outlines, light from the top-left, saturated colours). Icons are 16x16 grids scaled by integer factors: design them to read at 32 px on a dark UI.
+* **Draw budgets (important — the art pass had a perf regression once)**: fx/effect draw functions run per frame for every live entry in view. Avoid hundreds of `fillRect` per entry: pre-render animation frames to small offscreen canvases (cache by numeric key: type, frame index quantised from `p`/`now`, radius bucket) and `drawImage` them; cap what you draw per frame (e.g. nearest 12 entries), skip cosmetic detail when `scale < 6` device px per tile, no allocation per frame, no `shadowBlur`/filters/gradients per frame (a few cached gradient sprites are fine). Target: ≤ 0.5 ms per frame with your maximum number of live effects in view at zoom 8 and zoom 14 on a 1500-unit world (`node tests/perf.mjs` must stay within +10% on every scene).
+* The camera and flash overlays are shared: use `Fx.add('shake'|'flash', ...)` from the sim plugin instead of drawing full-screen things yourself.
+
+## 10.4 Deliverables of a power agent
+1. `src/1N_power_<name>.js`, `src/3N_gfx_<name>.js`, `tests/power_<name>.test.mjs` (headless: apply on a populated world, each documented effect asserted, no exceptions over thousands of ticks with other powers mixed in, JSON round-trip + save/load continuation identical, perf numbers, caps; plus a browser visual test with screenshots you LOOK at and iterate on until it looks great, 390x844 @2x, zoom 8/14/24).
+2. A short section in `docs/STATUS.md` ("God powers") and a line in `docs/REQUESTS.md` for anything that needs a change outside your files.
+3. `node build.mjs --check`, `node tests/powers.test.mjs`, `node tests/plugins.test.mjs`, `node tests/save.test.mjs`, your tests, `node tests/sprites.test.mjs` and the browser suites that your change can affect (`render.test.mjs`) green.

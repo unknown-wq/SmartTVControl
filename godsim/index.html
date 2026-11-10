@@ -1215,6 +1215,25 @@ const Fx = {
   clear() { this.list.length = 0; },
 };
 
+/* ---------- Plugin registries (new god powers, their graphics, UI badges) ----------
+ * Plugin files push into these at LOAD time (allowed: they only touch core globals). Consumers (Powers, Sprites, Render, UI) read them lazily.
+ *   PowerPlugins : sim side (src/15..19_power_*.js). {ids:[toolIds], apply(id,x,y,r,first,lx,ly,host) -> bool, step(tick), newWorld(), afterLoad()}
+ *   GfxPlugins   : client side (src/30..39_gfx_*.js). icons / fx / persistent effects / unit status tints
+ *   UIPlugins    : client UI hooks (unit status badges in the inspector)
+ * See docs/CONTRACT.md section 10. */
+const PowerPlugins = [];
+const GfxPlugins = {
+  icons: {},        // icon key -> (b, IP, H): draw a glyph (<= 14x14) with the Buf API into b using palette letters IP; the dark outline is added automatically
+  fx: {},           // Fx.add type -> (ctx, fx, px, py, scale, u, p, now, H): px,py = device-px centre, scale = device px per tile, u = scale/16, p = age/ttl 0..1
+  effects: [],      // persistent S.eff arrays: {key:'name', margin:tiles, draw(ctx, e, px, py, scale, now, H, alpha)}  (px,py = device px of e.x,e.y)
+  unitTints: [],    // [{field:'poison', color:'rgba(r,g,b,a)'}]: while u[field] > S.tick the unit sprite is tinted
+  addEffect(def) { this.effects.push(def); return def; },
+  addUnitTint(field, color) { this.unitTints.push({ field, color }); },
+};
+const UIPlugins = {
+  unitBadges: [],   // (u) -> {t:'Отравлен', cls:'bad'|'warn'|'good'|'gold'} | null   (chips in the unit card)
+};
+
 /* ---------- Global mutable game state ---------- */
 const S = {
   w: 0, h: 0, seed: 1, tick: 0,
@@ -1511,6 +1530,20 @@ const ToolDefs = [
 ];
 ToolDefs.byId = {};
 ToolDefs.forEach(t => { ToolDefs.byId[t.id] = t; });
+/** Plugin groups (id -> Russian label), e.g. ToolDefs.groupLabels.arsenal = 'Арсенал'. UI falls back to this. */
+ToolDefs.groupLabels = {};
+/** Register a tool from a plugin file (call at load time). The tool is inserted after the last tool of its group (def.group) on its tab,
+ *  or - for a NEW group - after the last tool of group def.afterGroup (default: the end of the tab). def.short = optional short button label. */
+ToolDefs.add = function (def) {
+  if (ToolDefs.byId[def.id]) return ToolDefs.byId[def.id];
+  let at = -1;
+  for (let i = 0; i < ToolDefs.length; i++) if (ToolDefs[i].tab === def.tab && ToolDefs[i].group === def.group) at = i;
+  if (at < 0 && def.afterGroup) for (let i = 0; i < ToolDefs.length; i++) if (ToolDefs[i].tab === def.tab && ToolDefs[i].group === def.afterGroup) at = i;
+  if (at < 0) for (let i = 0; i < ToolDefs.length; i++) if (ToolDefs[i].tab === def.tab) at = i;
+  if (at < 0) ToolDefs.push(def); else ToolDefs.splice(at + 1, 0, def);
+  ToolDefs.byId[def.id] = def;
+  return def;
+};
 
 
 /* ---- 03_names.js ---- */
@@ -10692,7 +10725,22 @@ const Powers = (() => {
       case 'command': return msg('', false);                 // command mode is handled by the UI (no god power behind it)
       case 'inspect': { const p = pick(x, y); return msg(p ? 'Осмотр' : 'Вне карты', !!p); }
     }
+    const pl = pluginFor(id);                               // new powers live in plugin files (src/15..19_power_*.js, CONTRACT section 10)
+    if (pl) return !!pl.apply(id, x, y, r, first, lx, ly, host);
     return msg('Неизвестный инструмент', false);
+  }
+  function pluginFor(id) {
+    for (let i = 0; i < PowerPlugins.length; i++) { const p = PowerPlugins[i]; if (p && p.ids && p.ids.indexOf(id) >= 0 && typeof p.apply === 'function') return p; }
+    return null;
+  }
+  /** helpers handed to plugin.apply (and available as Powers.host) */
+  const host = { msg, fx, num, rInt, inMap, report, kingdomAt: (x, y) => kingdomAt(x, y), nearestCity, eff };
+  function eachPlugin(fn, name, tick) {
+    for (let i = 0; i < PowerPlugins.length; i++) {
+      const p = PowerPlugins[i];
+      if (!p || typeof p[fn] !== 'function') continue;
+      try { p[fn](tick, host); } catch (err) { report(err, (p.name || (p.ids && p.ids[0]) || 'plugin') + ' ' + name); }
+    }
   }
   function rainTool(x, y, r, first, lx, ly) {
     if (first) return rain(x, y, Math.max(2, r));
@@ -10711,6 +10759,7 @@ const Powers = (() => {
     stepList(e.quakes, stepQuake, tick, 'quake');
     stepList(e.tornados, stepTornado, tick, 'tornado');
     stepList(e.rains, stepRain, tick, 'rain');
+    if (PowerPlugins.length) eachPlugin('step', 'step', tick);
   }
   /** runs fn over every effect, drops finished (fn returned false) or broken ones (exceptions are logged once) */
   function stepList(L, fn, tick, name) {
@@ -10747,14 +10796,14 @@ const Powers = (() => {
     lastMessage = '';
     buf.length = 0;
   }
-  function newWorld() { reset(); eff(); }
-  function afterLoad() { reset(); clean(); }
+  function newWorld() { reset(); eff(); eachPlugin('newWorld', 'newWorld', S.tick); }
+  function afterLoad() { reset(); clean(); eachPlugin('afterLoad', 'afterLoad', S.tick); }
 
   return {
     apply, pick, step, newWorld, afterLoad,
     lightning, meteor, earthquake, plague, tornado, rain, bless, fire, heal,
     // extras
-    kingdomAt,
+    kingdomAt, host,
     /** number of active persistent effects, for UI / tests */
     active() { const e = eff(); return { meteors: e.meteors.length, tornados: e.tornados.length, rains: e.rains.length, quakes: e.quakes.length }; },
     get lastMessage() { return lastMessage; },
@@ -11806,6 +11855,7 @@ const Save = (() => {
       meteors: Array.isArray(eff.meteors) ? eff.meteors : [], tornados: Array.isArray(eff.tornados) ? eff.tornados : [],
       rains: Array.isArray(eff.rains) ? eff.rains : [], quakes: Array.isArray(eff.quakes) ? eff.quakes : [],
     };
+    for (const k of Object.keys(eff)) if (out.eff[k] === undefined && Array.isArray(eff[k])) out.eff[k] = eff[k].filter(e => e && typeof e === 'object');   // plugin powers keep their persistent effects in S.eff.<name> (CONTRACT section 10)
     out.mod = data.mod && typeof data.mod === 'object' && !Array.isArray(data.mod) ? data.mod : {};
     const st = data.stats && typeof data.stats === 'object' ? data.stats : {};
     out.stats = Object.assign({ year: Const.START_YEAR, pop: [0, 0, 0], popTotal: 0, kingdoms: 0, cities: 0, wars: 0, buildings: 0 }, st);
@@ -14761,6 +14811,7 @@ const Sprites = (() => {
     }
   }
 
+  const ICON_HELP = { ring, thick, tri, shadeDisc };
   const ICONS = {
     // ---- terrain tools ----
     bell: ['.....yy.....', '....yyyy....', '...yywyyY...', '...ywyyyY...', '..yywyyyyY..', '..ywyyyyyY..', '..ywyyyyyY..', '.yywyyyyyyY.', '.ywyyyyyyyY.', 'yyyyyyyyyyYY', 'YYYYYYYYYYYY', '....oooo....', '.....oo.....'],
@@ -15156,6 +15207,12 @@ const Sprites = (() => {
     const b = new Buf(TS, TS);
     if (IFN[key]) {                            // code-drawn glyph: centre its bounding box inside the 14x14 inner area
       const g = new Buf(TS, TS); IFN[key](g);
+      const bb = g.bbox();
+      if (bb) { b.over(g, bb.w <= 14 ? 1 + ((14 - bb.w) >> 1) - bb.x0 : 0, bb.h <= 14 ? 1 + ((14 - bb.h) >> 1) - bb.y0 : 0); }
+      b.outline(ICON_OUT);
+    }
+    else if (GfxPlugins.icons[key]) {            // plugin icon (src/3x_gfx_*.js): same centring + outline as code-drawn glyphs
+      const g = new Buf(TS, TS); GfxPlugins.icons[key](g, IP, ICON_HELP);
       const bb = g.bbox();
       if (bb) { b.over(g, bb.w <= 14 ? 1 + ((14 - bb.w) >> 1) - bb.x0 : 0, bb.h <= 14 ? 1 + ((14 - bb.h) >> 1) - bb.y0 : 0); }
       b.outline(ICON_OUT);
@@ -15635,14 +15692,17 @@ const Sprites = (() => {
     ctx.drawImage(cv, Math.round(px - d.ax * scale / 16), Math.round(py - d.ay * scale / 16), dw, dh);
     return true;
   }
+  /** helpers handed to plugin fx / persistent-effect draw functions (src/3x_gfx_*.js): R4 = pixel rect on the virtual 16-px-per-tile grid (X,Y,u,gx,gy,w,h), hf = hash noise 0..1, fxSeed(fx) = stable per-fx integer,
+   *  snapU, discRows / ringRows = pixel discs and rings, TAU, FR(ctx,x,y,w,h) = fillRect, screen(ctx) -> {w,h} device px of the canvas */
+  const FX_HELP = { R4, hf, TAU, fxSeed, snapU, discRows, ringRows, FR, screen(ctx) { return { w: ctx.canvas.width, h: ctx.canvas.height }; } };
   function drawFx(ctx, fx, px, py, scale, now) {
-    const f = FXD[fx.type];
+    const f = FXD[fx.type] || GfxPlugins.fx[fx.type];      // plugin fx (src/3x_gfx_*.js) are drawn directly (no baked frames): keep them cheap
     if (f === undefined) return;
     const ttl = fx.ttl > 0 ? fx.ttl : 0.8;
     let p = fx.age / ttl; p = p < 0 ? 0 : p > 1 ? 1 : p;
     const d = FXC[fx.type];
     if (d !== undefined && scale > 0 && drawFxCached(ctx, d, fx, px, py, scale, p, now || 0)) return;
-    f(ctx, fx, px, py, scale, scale / 16, p, now || 0);
+    f(ctx, fx, px, py, scale, scale / 16, p, now || 0, FX_HELP);
   }
 
   /* ---------------- helpers drawn by Render (not Fx entries): arrows, smoke columns, birds, jumping fish ---------------- */
@@ -15868,9 +15928,9 @@ const Sprites = (() => {
     init, drawTile, tileAtlas, feature, decal, unit, building, landmark, flag, icon, drawFx, drawEffect, drawArrow, drawSmoke, drawBird, drawFishJump, chimney, stats,
     /** test hooks: FX cache descriptors and a bake of one cached frame (used by tests/sprites_sheet bounds check) */
     fxCache: { desc: FXC, bake(type, fi, vi, color) { return bakeFx(FXC[type], { color, n: undefined }, fi, vi); }, smoke(kind, vi, fi) { return bakeSmoke(kind, vi, fi); }, SMK: { n: SMK_N, w: SMK_W, h: SMK_H } },
-    LOOKS, TILE_PX: TS,
+    LOOKS, TILE_PX: TS, fxHelpers: FX_HELP,
     /** all icon keys known to the sprite sheet */
-    iconKeys() { return Object.keys(IFN).concat(Object.keys(ICONS).filter(k => ICONS[k] && ICONS[k].length && !IFN[k])); },
+    iconKeys() { return Object.keys(IFN).concat(Object.keys(ICONS).filter(k => ICONS[k] && ICONS[k].length && !IFN[k]), Object.keys(GfxPlugins.icons).filter(k => !IFN[k] && !ICONS[k])); },
   };
 })();
 
@@ -15931,6 +15991,7 @@ const Render = (() => {
   // view (recomputed every frame)
   let Z = 16, ox = 0, oy = 0, vx0 = 0, vy0 = 0, vx1 = 0, vy1 = 0, zoomCss = 8, texel = 1;
   let curAlpha = 1, curNow = 0;
+  let shakeX = 0, shakeY = 0;                    // camera shake (device px), see shakeOffset()
 
   function mk(w, h) { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; }
   function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
@@ -16307,7 +16368,24 @@ const Render = (() => {
     }
     map.set(cv, v);
     return v;
+  }  const unitTints = GfxPlugins.unitTints, plugMaps = [];
+  /** unit sprite tinted with GfxPlugins.unitTints[t].color (cached per source sprite) */
+  function variantPlugin(cv, t) {
+    let map = plugMaps[t];
+    if (!map) map = plugMaps[t] = new Map();
+    let v = map.get(cv);
+    if (v) return v;
+    v = mk(cv.width, cv.height);
+    const g = v.getContext('2d');
+    g.imageSmoothingEnabled = false;
+    g.drawImage(cv, 0, 0);
+    g.globalCompositeOperation = 'source-atop';
+    g.fillStyle = unitTints[t].color;
+    g.fillRect(0, 0, cv.width, cv.height);
+    map.set(cv, v);
+    return v;
   }
+
 
   // flame frames (16x16 pixel art, 4 frames)
   let flames = null;
@@ -16725,6 +16803,7 @@ const Render = (() => {
     let spr = Sprites.unit(u.race, stage, frame, kd ? kd.color : null, u.weapon, u.armor, (u.id & 3) | (zoomCss >= 8 && u.sex === 1 ? 4 : 0), pose, carry);
     if (u.face < 0) spr = variantOf(spr, 0);
     if (u.sick > S.tick) spr = variantOf(spr, 2);
+    for (let t = 0; t < unitTints.length; t++) { if (u[unitTints[t].field] > S.tick) { spr = variantPlugin(spr, t); break; } }      // plugin status tints (GfxPlugins.unitTints)
     if (hitUntil[li] > curNow) spr = variantOf(spr, 3);                // hit flash
     const sz = 16 * texel;
     const sx = Math.round(ox + ix * Z), sy = Math.round(oy + (iy + 0.55) * Z);
@@ -16989,7 +17068,47 @@ const Render = (() => {
     for (let i = 0; i < a.length; i++) { const e = a[i]; if (e.x < vx0 - 6 || e.x > vx1 + 6 || e.y < vy0 - 6 || e.y > vy1 + 6) continue; Sprites.drawEffect(ctx, 'tornado', e, ox + e.x * Z, oy + e.y * Z, Z, now); }
     a = eff.meteors || NONE;
     for (let i = 0; i < a.length; i++) { const e = a[i], m = (e.r || 2) + 16; if (e.x < vx0 - m || e.x > vx1 + m || e.y < vy0 - m || e.y > vy1 + m) continue; Sprites.drawEffect(ctx, 'meteor', e, ox + e.x * Z, oy + e.y * Z, Z, now); }
+    // plugin powers (CONTRACT section 10): GfxPlugins.effects = [{key, margin, draw(ctx, e, px, py, scale, now, H, alpha)}] over S.eff[key]
+    const pe = GfxPlugins.effects;
+    for (let k = 0; k < pe.length; k++) {
+      const d = pe[k], arr = eff[d.key];
+      if (!arr || !arr.length) continue;
+      const m = d.margin || 4;
+      for (let i = 0; i < arr.length; i++) {
+        const e = arr[i];
+        if (!e || e.x < vx0 - m || e.x > vx1 + m || e.y < vy0 - m - 2 || e.y > vy1 + m) continue;
+        try { ctx.globalAlpha = 1; d.draw(ctx, e, ox + e.x * Z, oy + e.y * Z, Z, now, Sprites.fxHelpers, curAlpha); } catch (err) { report('effect ' + d.key, err); }
+      }
+    }
     ctx.globalAlpha = 1;
+  }
+  /** built-in generic Fx for every power: Fx.add('flash', x, y, {ttl, color, a}) = full-screen flash; 'shake' is handled in draw() (camera shake) */
+  function drawFlashes() {
+    const fl = Fx.list;
+    for (let i = 0; i < fl.length; i++) {
+      const f = fl[i];
+      if (f.type !== 'flash') continue;
+      const p = f.age / (f.ttl > 0 ? f.ttl : 0.5), k = 1 - (p < 0 ? 0 : p > 1 ? 1 : p);
+      ctx.globalAlpha = Math.min(1, (f.a > 0 ? f.a : 0.8) * k * k);
+      ctx.fillStyle = f.color || '#ffffff';
+      ctx.fillRect(0, 0, cw, ch);
+    }
+    ctx.globalAlpha = 1;
+  }
+  /** camera shake offset in device px from live Fx.add('shake', x, y, {amp (css px), ttl}) entries */
+  function shakeOffset(now) {
+    const fl = Fx.list;
+    let amp = 0;
+    for (let i = 0; i < fl.length; i++) {
+      const f = fl[i];
+      if (f.type !== 'shake') continue;
+      const p = f.age / (f.ttl > 0 ? f.ttl : 0.5), a = (f.amp > 0 ? f.amp : 5) * (1 - (p < 0 ? 0 : p > 1 ? 1 : p));
+      if (a > amp) amp = a;
+    }
+    if (amp <= 0.2) { shakeX = shakeY = 0; return; }
+    amp *= dpr;
+    shakeX = Math.round(Math.sin(now * 0.071) * amp + Math.sin(now * 0.173 + 1.7) * amp * 0.5);
+    shakeY = Math.round(Math.cos(now * 0.083) * amp + Math.cos(now * 0.151 + 0.4) * amp * 0.5);
   }
 
   // ------------------------------------------------------------------ city labels
@@ -18056,7 +18175,8 @@ const Render = (() => {
     Z = cam.zoom * dpr;
     const tz = Z * 0.85 / 16;                     // units are drawn at ~85% of a tile; whole texels when big
     texel = tz >= 4 ? Math.round(tz) : tz;
-    ox = Math.round(cw / 2 - cam.x * Z); oy = Math.round(ch / 2 - cam.y * Z);
+    shakeOffset(curNow);
+    ox = Math.round(cw / 2 - cam.x * Z) + shakeX; oy = Math.round(ch / 2 - cam.y * Z) + shakeY;
     vx0 = Math.max(0, Math.floor(-ox / Z)); vy0 = Math.max(0, Math.floor(-oy / Z));
     vx1 = Math.min(W, Math.ceil((cw - ox) / Z)); vy1 = Math.min(H, Math.ceil((ch - oy) / Z));
     ctx.fillStyle = BG; ctx.fillRect(0, 0, cw, ch);
@@ -18083,6 +18203,7 @@ const Render = (() => {
       } catch (e) { report('war', e); }
       try { drawHighlight(curNow); drawBrush(curNow); } catch (e) { report('overlays', e); }
     }
+    try { drawFlashes(); } catch (e) { report('flash', e); }
     ctx.globalAlpha = 1;
     updateStats(t0);
   }
@@ -18696,7 +18817,7 @@ const UI = (() => {
     const b = btn('tool', def.name, null);
     b.dataset.tool = def.id;
     b.appendChild(ico(def.icon, 32));
-    b.appendChild(el('span', '', label || SHORT[def.id] || def.name));
+    b.appendChild(el('span', '', label || SHORT[def.id] || def.short || def.name));
     return b;
   }
   function renderTools() {
@@ -18713,7 +18834,7 @@ const UI = (() => {
     });
     groups.forEach((g) => {
       const gb = el('div', 'grp');
-      if (groups.length > 1) { const gl = el('div', 'grp-lbl'); gl.appendChild(el('span', '', GROUP_LABEL[g.id] || g.id)); gb.appendChild(gl); }
+      if (groups.length > 1) { const gl = el('div', 'grp-lbl'); gl.appendChild(el('span', '', GROUP_LABEL[g.id] || (ToolDefs.groupLabels && ToolDefs.groupLabels[g.id]) || g.id)); gb.appendChild(gl); }
       g.defs.forEach((d) => {
         const b = toolBtn(d);
         b.addEventListener('click', () => selectTool(d.id));
@@ -19579,6 +19700,7 @@ const UI = (() => {
       if (u.sick > S.tick) a.push({ t: 'Болеет', cls: 'bad' });
       if (u.burning > S.tick) a.push({ t: 'Горит', cls: 'warn' });
       if (u.buffUntil > S.tick) a.push({ t: 'Благословлён', cls: 'good' });
+      for (let i = 0; i < UIPlugins.unitBadges.length; i++) { const bd = UIPlugins.unitBadges[i](u); if (bd) a.push(bd); }      // plugin powers (e.g. poison)
       if (u.hunger > 85) a.push({ t: 'Голодает', cls: 'bad' });
       if (u.armyId) a.push({ t: 'В армии', cls: 'warn' });
       return a;
