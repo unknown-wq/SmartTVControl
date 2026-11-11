@@ -102,7 +102,7 @@ async function open(w, h, extra = {}) {
 
   section('tabs and tools');
   const tabs = ['land', 'life', 'powers', 'kingdoms', 'info'];
-  const expectCount = { land: 9, life: 4, powers: 9, kingdoms: 4, info: 4 };   // built-in tools; kingdoms: command + 3 diplomacy tools (stage 2). Plugin powers (CONTRACT section 10) add buttons to the powers tab: there the count must equal ToolDefs and be >= 9
+  const expectCount = { land: 9, life: 4, powers: 9, kingdoms: 5, info: 4 };   // built-in tools; kingdoms: command + diplomacy (player diplomacy) + 3 god diplomacy tools. Plugin powers (CONTRACT section 10) add buttons to the powers tab: there the count must equal ToolDefs and be >= 9
   for (const t of tabs) {
     await H.tapSel(`.tab[data-tab="${t}"]`);
     await b.wait(120);

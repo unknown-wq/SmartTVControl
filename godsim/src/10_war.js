@@ -1438,6 +1438,26 @@ const War = (() => {
     for (const al of sideArr(w, side)) if (al !== kid) aiKingdom(w, al, S.tick, false);
     return true;
   }
+  /** a kingdom joins a RUNNING war on the side of `onKid` (Diplomacy: an ally called to arms, a guarantor keeping its word). Bus 'warJoined'(war, kid, onKid). */
+  function joinWar(warId, kid, onKid) {
+    const w = S.wars.get(warId);
+    if (!w || w.ended || !kget(kid) || kid === onKid) return false;
+    const side = sideOf(w, onKid);
+    if (!side || sideOf(w, kid)) return false;
+    addMemberToWar(w, side, kid);
+    rebuildPairs();
+    Log.add('Королевство ' + kname(kid) + ' вступило в войну на стороне ' + kname(onKid), LOG.WAR, -1, -1, kid);
+    Hist.add(kget(kid), 'Вступило в войну на стороне ' + kname(onKid));
+    S.touchRegions();
+    Bus.emit('warJoined', w, kid, onKid);
+    if (armiesOfWar(w).length) {                                          // a war that is already fought: muster now (declare() raises everybody's armies itself)
+      raiseFor(w, kid);
+      presenceMap();
+      feasLeft = 4;
+      aiKingdom(w, kid, S.tick, true);
+    }
+    return true;
+  }
 
   // ================================================================== PLAYER COMMANDS
   function armiesForOrder(kid, ids) {
@@ -2341,6 +2361,7 @@ const War = (() => {
     start(attackerKid, defenderKid, casus) { return declare(attackerKid, defenderKid, null, casus); },
     addGoal, order, armiesOf, potentialGoals, feasibleGoals, peaceCost, peaceOffer, forcePeace, godPeace, end, respondOffer,
     score(warId, kid) { const w = S.wars.get(warId); return w ? Math.round((w.score[kid] || 0) * 10) / 10 : 0; },
+    join: joinWar,
     supply(armyId) { const a = S.armies.get(armyId); return a ? Math.round(a.supply) : 100; },
     setAutoPeace(on) { autoPref = !!on; mod().autoPeace = autoPref; },
     get(id) { return S.wars.get(id) || null; },

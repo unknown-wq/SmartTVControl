@@ -833,8 +833,10 @@ section('relations: symmetric, causes [{t,v,why}] in Russian, bounded opinion, d
   Diplomacy.addOpinion(ko.id, kh.id, -10, 'Оскорбление посла'); assert.equal(rel.causes.find(c => c.why === 'Оскорбление посла').v, -60, 'same reason accumulates');
   Diplomacy.addOpinion(kh.id, ko.id, -500, 'x'); assert.equal(rel.opinion, -100); Diplomacy.addOpinion(kh.id, ko.id, 900, 'y'); assert.equal(rel.opinion, 100);
   assert.equal(Diplomacy.addOpinion(kh.id, ko.id, NaN, 'z'), false);
-  // drift + decay: events fade, opinion returns toward the structural level
+  // drift + decay: events fade, opinion returns toward the structural level (both kingdoms "commanded": the diplomatic AI would answer the +100 above with treaties)
+  kh.cmd = ko.cmd = true;
   for (let i = 0; i < 120; i++) tickPol(ctx, 100);
+  kh.cmd = ko.cmd = false;
   const left = (rel.causes.find(c => c.why === 'Оскорбление посла') || { v: 0 }).v;
   assert.ok(Math.abs(left) < 2, 'event faded: ' + left);
   assert.ok(Math.abs(rel.opinion - o0) < 20, `opinion back near ${o0}: ${rel.opinion}`);
@@ -1112,7 +1114,7 @@ section('AI wars in full worlds: lively but not constant (1 war per ~3-8 game mi
       assert.ok(d.contact > 0, `seed ${r.seed}: war ${d.a}->${d.b} between non-neighbours (contact ${d.contact})`);
       assert.ok(d.powerA >= 0.85 * d.powerB - 1e-6, `seed ${r.seed}: attacked a much stronger neighbour ${d.powerA} vs ${d.powerB}`);
       assert.ok(!d.truce && !d.allied && !d.cmdA, 'respects truces / alliances');
-      assert.ok(['claim', 'border', 'conquest'].includes(d.casus), 'AI casus ' + d.casus);
+      assert.ok(['claim', 'border', 'conquest', 'ultimatum'].includes(d.casus), 'AI casus ' + d.casus);          // (ultimatum: a refused demand of the AI, see tests/diplomacy.test.mjs)
       assert.ok(d.goals.length >= 1 && d.goals.length <= 2, 'one or two goals: ' + JSON.stringify(d.goals));
       assert.ok(d.tick >= 4200, 'not before the world settled');
     }

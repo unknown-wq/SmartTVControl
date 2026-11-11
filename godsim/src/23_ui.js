@@ -39,12 +39,12 @@ const UI = (() => {
     disaster: '#ff9a3a', city: '#ffd24a', kingdom: '#c78bff', rebel: '#ff4fa3', god: '#58c7ff',
   };
   const SHORT = { earthquake: 'Землетр.', bless: 'Благосл.', war_whisper: 'Шёпот', lightning: 'Молния', split: 'Раскол', command: 'Война' };
-  const GROUP_LABEL = { terrain: 'Рельеф', creatures: 'Существа', destroy: 'Разрушение', bless: 'Благословение', diplomacy: 'Дипломатия', info: 'Осмотр', command: 'Война' };
+  const GROUP_LABEL = { terrain: 'Рельеф', creatures: 'Существа', destroy: 'Разрушение', bless: 'Благословение', diplomacy: 'Воля бога', info: 'Осмотр', command: 'Правление' };
   const DEFAULT_HINT = {
     land: 'Выберите кисть, затем тапните по карте. Режим кисти — рисовать пальцем.',
     life: 'Выберите существо и тапните по карте, чтобы создать его.',
     powers: 'Выберите силу и тапните по карте. Без силы тап — осмотр.',
-    kingdoms: '«Война»: выберите страну, затем регион, куда она нападёт. Или инструмент дипломатии.',
+    kingdoms: '«Война» — страна и регион, куда она нападёт. «Дипломатия» — договоры, подарки, требования. Остальное — воля бога.',
     info: 'Тап по существу, зданию, городу или земле — карточка.',
   };
   const MAP_MODES = [
@@ -370,7 +370,9 @@ const UI = (() => {
     tabTool[def.tab] = id;
     syncToolSel();
     Render.brush = null;
+    if (id !== 'diplomacy' && DiploUI.active()) DiploUI.release(true);
     if (id === 'command') { if (state.mode === 'paint') setMode('pan'); hintOnce('warflow', 'Выберите страну, затем регион, куда она нападёт'); }
+    if (id === 'diplomacy') { if (state.mode === 'paint') setMode('pan'); hintOnce('dipflow0', 'Выберите свою страну, затем другую: договоры, подарки, требования'); }
     if (def.brush) flashBrush(true);
     if (def.drag && def.brush && state.mode === 'pan') {
       if (seenOnce('brushmode')) {
@@ -1002,7 +1004,7 @@ const UI = (() => {
         const b = btn('kchip', k.name, () => {
           const kk = S.kingdoms.get(k.id);
           if (!kk) return;
-          if (state.tool === 'command') commandKingdom(k.id, {}); else openInspector('kingdom', k.id, { focus: true });
+          if (state.tool === 'command') commandKingdom(k.id, {}); else if (state.tool === 'diplomacy') DiploUI.select(k.id); else openInspector('kingdom', k.id, { focus: true });
         });
         const fl = flagEl(k.flag, 24);
         const kn = el('span', 'kn'); const nm = el('b'); const sm = el('small');
@@ -1323,10 +1325,17 @@ const UI = (() => {
       setText(v.title, k.name);
       setText(v.sub, Names.title(k.race) + ' · ' + rname(k.race));
     });
-    const s0 = sec(v);
+    const s0 = sec(v); s0.classList.add('kbtns');
     const cmdBtn = actBtn('block primary', 'Выбрать для войны', 'war', () => commandKingdom(id, {}));
     cmdBtn.dataset.act = 'command'; s0.appendChild(cmdBtn);
     v.ups.push(() => { const k = get(); cmdBtn.classList.toggle('hide', !k || cm.kid === id); });
+    const dipBtn = actBtn('block', 'Дипломатия', 'handshake', () => { if (DiploUI.active() && DiploUI.kid !== id) { closeInspector(); DiploUI.openPair(id); } else DiploUI.select(id); });
+    dipBtn.dataset.act = 'diplomacy'; s0.appendChild(dipBtn);
+    v.ups.push(() => {
+      const k = get();
+      dipBtn.classList.toggle('hide', !k || DiploUI.kid === id);
+      const t = dipBtn.querySelector('span'); if (t) setText(t, DiploUI.active() && DiploUI.kid !== id ? 'Договоры' : 'Дипломатия');
+    });
     const s1 = sec(v);
     const rr = el('div', 'kv'); rr.appendChild(el('span', '', 'Правитель')); const rrv = el('span', 'v'); rr.appendChild(rrv); s1.appendChild(rr);
     slot(v, rrv, () => { const k = get(); const u = k && S.units.get(k.rulerId); return u ? u.id + u.name : '-'; }, (node) => {
@@ -1381,9 +1390,21 @@ const UI = (() => {
     const s3 = sec(v, 'Дипломатия');
     const rl = el('div'); s3.appendChild(rl);
     const relBars = [];
+    const treatyChips = (r) => {
+      const out = [];
+      if (r.state === Const.REL.WAR) out.push(['Война', 'bad']);
+      if (r.vassal === 'overlord') out.push(['Сюзерен', 'purple']); else if (r.vassal === 'vassal') out.push(['Вассал', 'purple']);
+      else if (r.state === Const.REL.ALLIANCE) out.push(['Союз', 'good']);
+      if (r.pact > 0) out.push(['Пакт', 'good']); else if (r.truce && r.state !== Const.REL.WAR) out.push(['Перемирие', 'warn']);
+      if (r.trade) out.push(['Торговля', 'gold']);
+      if (r.marriage) out.push(['Брак', 'gold']);
+      if (r.guarantee === 1) out.push(['Гарантирует ей', 'blue']); else if (r.guarantee === 2) out.push(['Под гарантией', 'blue']);
+      if (r.embargo > 0) out.push(['Эмбарго', 'bad']);
+      return out;
+    };
     slot(v, rl, () => {
       const k = get(); if (!k) return 'x';
-      return relationsOf(id).map((r) => r.other + ':' + r.state + (r.truce ? 't' : '')).join(',') + '|' + warsOf(id).map((w) => w.id).join(',');
+      return relationsOf(id).map((r) => r.other + ':' + r.state + (r.truce ? 't' : '') + (r.pact > 0 ? 'p' : '') + (r.trade ? 'r' : '') + (r.marriage ? 'm' : '') + (r.embargo > 0 ? 'e' : '') + (r.guarantee || '') + (r.vassal || '')).join(',') + '|' + warsOf(id).map((w) => w.id).join(',');
     }, (node) => {
       relBars.length = 0;
       const rels = relationsOf(id).filter((r) => S.kingdoms.has(r.other));
@@ -1403,6 +1424,8 @@ const UI = (() => {
         else if (r.truce) { st.appendChild(ico('peace', 16)); st.title = 'Перемирие'; }
         row.appendChild(st);
         wrap.appendChild(row);
+        const tch = treatyChips(r);
+        if (tch.length) { const tc = el('div', 'chips rel-chips'); tch.forEach((c) => tc.appendChild(el('span', 'chip ' + c[1], c[0]))); wrap.appendChild(tc); }
         const sub = el('div', 'relsub'); wrap.appendChild(sub);
         const cz = causesBox(); wrap.appendChild(cz.node);
         bar.addEventListener('click', () => { cz.toggle(); cz.set(id, r.other); });
@@ -1623,8 +1646,9 @@ const UI = (() => {
   }
   function renderSheet() {
     const sh = refs.sheet;
+    DiploUI.yieldSheet();
     clear(sh);
-    sh.classList.remove('cmd', 'gm', 'pm', 'am', 'hud', 'tc', 'dr', 'cs', 'tw');
+    sh.classList.remove('cmd', 'gm', 'pm', 'am', 'hud', 'tc', 'dr', 'cs', 'tw', 'dip', 'dh', 'dc', 'dsub');
     sh._mode = '';
     document.body.classList.remove('cmd-pick', 'cmd-drawer');
     sh.style.animation = 'none'; void sh.offsetWidth; sh.style.animation = '';
@@ -1676,8 +1700,9 @@ const UI = (() => {
     refs.sheetBody = null;
     setRegionHL(0, 0);
     if (cm.kid) { showCmdSheet(); return; }          // the command sheet underneath comes back
+    if (DiploUI.active() && DiploUI.resume()) return;   // ... and so does the diplomacy sheet
     refs.bottom.classList.remove('sheet-open');
-    refs.sheet.classList.remove('cmd', 'gm', 'pm', 'am', 'hud', 'tc', 'dr', 'cs', 'tw');
+    refs.sheet.classList.remove('cmd', 'gm', 'pm', 'am', 'hud', 'tc', 'dr', 'cs', 'tw', 'dip', 'dh', 'dc', 'dsub');
     refs.sheet._mode = '';
     clear(refs.sheet);
     sheetFresh = true;
@@ -1756,6 +1781,7 @@ const UI = (() => {
     if (!ready || modalOpen()) return;
     const tool = state.tool;
     if (cm.kid || tool === 'command') { cmdTap(tx, ty); return; }
+    if (DiploUI.active() || tool === 'diplomacy') { DiploUI.tap(tx, ty); return; }
     if (!tool || tool === 'inspect') { inspectAt(tx, ty, tool === 'inspect'); return; }
     if (insp) closeInspector();                        // the dock (with the active tool) comes back
     applyTool(tool, tx, ty, 'tap');
@@ -1764,6 +1790,7 @@ const UI = (() => {
     if (!ready || modalOpen()) return;
     const tool = state.tool;
     if (cm.kid || tool === 'command') { cmdPaint(tx, ty, phase); return; }
+    if (DiploUI.active() || tool === 'diplomacy') { DiploUI.paint(tx, ty, phase); return; }
     if (!tool || tool === 'inspect') { if (phase === 'start') inspectAt(tx, ty, tool === 'inspect'); return; }
     if (insp) closeInspector();
     applyTool(tool, tx, ty, phase);
@@ -2085,6 +2112,7 @@ const UI = (() => {
     const k = kget(kid);
     if (!k) { toast('Королевство недоступно', 'bad'); return false; }
     if (!regionsOn()) { toast('Для войны нужна карта регионов', 'bad'); return false; }
+    if (DiploUI.active()) DiploUI.release(true);
     if (cm.kid === kid) {
       if (opts.page) openDrawer(opts.page);
       else if (opts.focus !== false) focusAttacker(kid);
@@ -3623,6 +3651,7 @@ const UI = (() => {
         else if (insp) closeInspector();
         else if (cm.peace) closePeace();
         else if (cm.kid) stepBack();
+        else if (DiploUI.active()) DiploUI.back();
       }
       else if (ev.key === ' ') { ev.preventDefault(); Main.setSpeed(Main.getSpeed() === 0 ? 1 : 0); }
     });
@@ -3634,6 +3663,14 @@ const UI = (() => {
     window.addEventListener('orientationchange', () => { setTimeout(layoutSoon, 250); });
     feed.lastId = S.nextLogId - 1;
     initCommandHooks();
+    DiploUI.init({
+      el, btn, ico, flagEl, drawFlag, setText, setCls, setStyle, clear, toast, hintOnce, defer, openModal, modalOpen,
+      refs, state, kStats, ownRegionIds, fitRegions, focusVisible, layoutSoon, openInspector, closeInspector,
+      inspectorOpen: () => !!insp,
+      releaseWar: () => { if (cm.kid) releaseCommand(true); },
+      setMapMode: (m) => { state.mapMode = m; Render.setMode(MAP_MODES[m].mode); syncMapFab(); },
+      setPan: () => setMode('pan'),
+    });
     refs.tools.addEventListener('scroll', updateToolsHint, { passive: true });
     layout();
     updateTop();
@@ -3653,6 +3690,7 @@ const UI = (() => {
         updateTop();
         updateInspector();
         updateCmd();
+        DiploUI.update();
       } catch (e) { reportOnce('ui.fast', e); }
     }
     if (accSlow >= 1000) {
@@ -3670,6 +3708,7 @@ const UI = (() => {
     if (!ready) return;
     cm.tgt = null; cm.peace = null; cm.cap = null; cm.capHide = 0; dismissPop();
     releaseCommand(true);
+    DiploUI.reset();
     cm.kid = 0; cm.view = null; cm.rc = null; Render.cmd = null; tmpCmd = null; rhl.rid = 0;
     bnr.q.length = 0; bnr.seen.length = 0; hideBanner(true);
     safe(() => Kingdoms.setCommanded(0, false), 0);
@@ -3692,6 +3731,8 @@ const UI = (() => {
     pickTarget, confirmTarget, attackTarget, cancelTarget, openDrawer, closeDrawer,
     setTargetMode, pressTotal, confirmTotal, openCapitulation, closeCapitulation: closeCap, decideCapitulation: decideCap,
     get cmdKid() { return cm.kid; },
+    get DiploUI() { return DiploUI; },                 // player diplomacy (src/24_ui_diplomacy.js, defined after this module): select / openPair / back / release / openInbox / snapshot
+    get diplo() { return DiploUI.snapshot; },
     get cmd() {
       const t = cm.tgt;
       return {
