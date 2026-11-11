@@ -233,7 +233,7 @@ const GfxRocket = (() => {
     const R2 = Math.ceil(17 * k) + 1;
     for (let y = Math.floor(cy - R2); y <= Math.ceil(cy + R2); y++) {
       for (let x = Math.floor(cx - R2); x <= Math.ceil(cx + R2); x++) {
-        let hits = 0, kind = 0;
+        let hits = 0, qsum = 0;
         for (let sy = 0; sy < 2; sy++) for (let sx = 0; sx < 2; sx++) {
           const dx = x + (sx + 0.5) / 2 - cx, dy = y + (sy + 0.5) / 2 - cy;
           const a = dx * ca_ + dy * sa_, b = Math.abs(-dx * sa_ + dy * ca_);
@@ -241,12 +241,14 @@ const GfxRocket = (() => {
           if (t < -0.02 || t > 1) continue;
           const tt = Math.max(0, t), wob = 1 + 0.14 * Math.sin(tt * 9 + fi * 2.1);
           let q = 0;
-          if (b <= 0.8 * k * (1 - tt * 0.9) * wob) q = tt < 0.3 ? 5 : 4;
-          else if (b <= 1.45 * k * (1 - Math.pow(tt, 1.05)) * wob) q = 3;
-          else if (b <= 2.2 * k * (1 - Math.pow(tt, 1.25)) * wob) q = tt > 0.62 ? 1 : 2;
-          if (q > 0) { hits++; if (q > kind) kind = q; }
+          if (b <= 0.5 * k * (1 - tt) * wob && tt < 0.3) q = 5;
+          else if (b <= 0.85 * k * (1 - tt * 0.8) * wob) q = 4;
+          else if (b <= 1.6 * k * (1 - Math.pow(tt, 1.1)) * wob) q = 3;
+          else if (b <= 2.6 * k * (1 - Math.pow(tt, 1.15)) * wob) q = tt > 0.62 ? 1 : 2;
+          if (q > 0) { hits++; qsum += q; }
         }
         if (hits < 2) continue;
+        const kind = Math.round(qsum / hits);                                               // mean heat of the covered samples (not the max: the flame keeps its orange shell)
         const col = kind === 5 ? P.fWhite : kind === 4 ? P.fPale : kind === 3 ? P.fYel : kind === 2 ? P.fOra : P.fRed;
         const old = pb.get(x, y);
         pb.set(x, y, (old >>> 24) > 200 && ((old & 0x00ffffff) !== (OUT & 0x00ffffff)) ? old : col);
@@ -271,22 +273,42 @@ const GfxRocket = (() => {
     return pb;
   }
 
-  // ------------------------------------------------------------------ warning reticle: dashed blast ring (4 rotation phases) + lethal-core ring, and a crosshair
-  const RET_N = 4, RET_S = 68, RET_C = 34;
-  function bakeReticle(ph) {
-    const pb = new PB(RET_S, RET_S), R_ = 1.8 * 16, Rc = 0.75 * 16;
-    for (let y = 0; y < RET_S; y++) for (let x = 0; x < RET_S; x++) {
-      const dx = x + 0.5 - RET_C, dy = y + 0.5 - RET_C, d = Math.sqrt(dx * dx + dy * dy);
-      const ang = Math.atan2(dy, dx), seg = (((ang / TAU) * 16 + ph * 0.25) % 1 + 1) % 1;
-      if (Math.abs(d - R_) <= 1.0 && seg < 0.58) pb.set(x, y, P.ret);
-      else if (Math.abs(d - R_) <= 1.95 && Math.abs(d - R_) > 1.0 && seg < 0.66) pb.set(x, y, withA(P.retDark, 0.75));
-      else if (Math.abs(d - Rc) <= 0.6) pb.blend(x, y, withA(P.ret, 0.5));
+  // ------------------------------------------------------------------ smoke trail strips: the puffs of a trail pre-arranged along a line, 64 directions x 4 kinds
+  //   a trail is drawn as 2 strips (near: 0..2.2 tiles behind the rocket, far: 2.2..4.4) instead of ~11 single puffs (drawImage calls dominate the draw cost).
+  //   kind 0 / 1 = in flight (hot puffs next to the flame), kind 2 / 3 = lingering after the impact (cooler, one size bigger)
+  const STRIP_N = 64, STRIP_S = 96, STRIP_C = 48, D_MID = 2.2, TRAIL_PUFFS = 11, TRAIL_LEN = 4.4;
+  const puffPBs = new Map();
+  const lvlOf = (a) => (a > 0.8 ? 0 : a > 0.55 ? 1 : a > 0.36 ? 2 : 3);                 // alpha -> dither level of a baked puff
+  function puffPB(cls, tone, lvl) { const key = (cls * 3 + tone) * 4 + lvl; let q = puffPBs.get(key); if (q === undefined) { q = bakePuff(cls, tone, lvl); puffPBs.set(key, q); } return q; }
+  function stamp(dst, src, cx, cy) {
+    const ox = Math.round(cx - src.w / 2), oy = Math.round(cy - src.h / 2);
+    for (let y = 0; y < src.h; y++) for (let x = 0; x < src.w; x++) { const c = src.d[y * src.w + x]; if ((c >>> 24) > 0) dst.set(ox + x, oy + y, c); }
+  }
+  function bakeStrip(ai, kind) {
+    const pb = new PB(STRIP_S, STRIP_S), th = ai / STRIP_N * TAU, ux = Math.cos(th), uy = Math.sin(th), lingering = kind >= 2, far = (kind & 1) === 1;
+    for (let j = TRAIL_PUFFS - 1; j >= 0; j--) {                                           // far puffs first: the near ones lie on top
+      const tj = (j + 0.5) / TRAIL_PUFFS, d = TRAIL_LEN * Math.pow(tj, 1.35);
+      if (far ? d < D_MID : d >= D_MID) continue;
+      const a = Math.min(1, 1.45 - tj * 1.2);
+      if (a < 0.12) continue;
+      const dl = (far ? d - D_MID : d) * TILE, cls = j <= 1 && !lingering ? 0 : Math.min(4, 1 + ((tj * 4.2) | 0) + (lingering ? 1 : 0));
+      stamp(pb, puffPB(cls, !lingering && j <= 1 ? 1 : 0, lvlOf(a)), STRIP_C + ux * dl, STRIP_C + uy * dl - tj * 0.42 * TILE);
     }
     return pb;
   }
-  function bakeCross() {
-    const pb = new PB(RET_S, RET_S);
-    for (let i = 0; i < 4; i++) {                                           // ticks at N E S W pointing at the centre
+
+  // ------------------------------------------------------------------ warning reticle (4 rotation phases): dashed blast ring + lethal-core ring + crosshair in ONE sprite
+  const RET_N = 4, RET_S = 68, RET_C = 34;
+  function bakeReticle(ph) {
+    const pb = new PB(RET_S, RET_S), R_ = 1.8 * 16, Rc = 0.75 * 16;
+    for (let y = 0; y < RET_S; y++) for (let x = 0; x < RET_S; x++) {                  // the ring is a little see-through (alpha baked in), the crosshair is not
+      const dx = x + 0.5 - RET_C, dy = y + 0.5 - RET_C, d = Math.sqrt(dx * dx + dy * dy);
+      const ang = Math.atan2(dy, dx), seg = (((ang / TAU) * 16 + ph * 0.25) % 1 + 1) % 1;
+      if (Math.abs(d - R_) <= 1.0 && seg < 0.58) pb.set(x, y, withA(P.ret, 0.74));
+      else if (Math.abs(d - R_) <= 1.95 && Math.abs(d - R_) > 1.0 && seg < 0.66) pb.set(x, y, withA(P.retDark, 0.55));
+      else if (Math.abs(d - Rc) <= 0.6) pb.set(x, y, withA(P.ret, 0.4));
+    }
+    for (let i = 0; i < 4; i++) {                                                      // ticks at N E S W pointing at the centre
       const ux = i === 0 ? 1 : i === 2 ? -1 : 0, uy = i === 1 ? 1 : i === 3 ? -1 : 0;
       for (let t = 4; t <= 9; t++) { const x = Math.floor(RET_C + ux * t), y = Math.floor(RET_C + uy * t); pb.set(x, y, P.retCore); pb.set(x - (uy !== 0 ? 1 : 0), y - (ux !== 0 ? 1 : 0), withA(P.retDark, 0.9)); }
     }
@@ -464,25 +486,33 @@ const GfxRocket = (() => {
     for (const [x, y, c] of [[2, 11, IP.y], [3, 10, IP.y], [1, 12, IP.o], [2, 12, IP.o], [3, 11, IP.o], [1, 13, IP.r], [0, 13, IP.r], [2, 13, IP.r]]) b.set(x, y, c);
   }
 
-  // ------------------------------------------------------------------ lazy cache with a baking budget
+  // ------------------------------------------------------------------ lazy cache with a baking budget; every sprite is cropped to its content (less area to rasterise)
   const cache = new Map();
   let frameStart = 0, frameNow = -1;
   const BUDGET_MS = 2.6;
   function tick(now) { if (now !== frameNow) { frameNow = now; frameStart = performance.now(); } }
-  /** cached canvas for key; bakes it when missing unless this frame's budget is spent (force = bake anyway: tiny sprites) */
+  /** PB -> {cv, dx, dy, ow, oh}: canvas of the opaque bounding box, its offset inside the baked frame and the frame size (cv = null for an empty frame) */
+  function crop(pb) {
+    let x0 = pb.w, y0 = pb.h, x1 = -1, y1 = -1;
+    for (let y = 0; y < pb.h; y++) for (let x = 0; x < pb.w; x++) if ((pb.d[y * pb.w + x] >>> 24) > 0) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+    if (x1 < 0) return { cv: null, dx: 0, dy: 0, ow: pb.w, oh: pb.h };
+    const w = x1 - x0 + 1, h = y1 - y0 + 1, o = new PB(w, h);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) o.d[y * w + x] = pb.d[(y + y0) * pb.w + x + x0];
+    return { cv: o.toCanvas(), dx: x0, dy: y0, ow: pb.w, oh: pb.h };
+  }
+  /** cached sprite for key; bakes it when missing unless this frame's budget is spent (force = bake anyway: tiny sprites) */
   function get(key, fn, force) {
-    let cv = cache.get(key);
-    if (cv !== undefined) return cv;
+    let sp = cache.get(key);
+    if (sp !== undefined) return sp;
     if (!force && performance.now() - frameStart > BUDGET_MS) return null;
-    cv = fn().toCanvas();
-    cache.set(key, cv);
-    return cv;
+    sp = crop(fn());
+    cache.set(key, sp);
+    return sp;
   }
   const rocketCv = (ai, fi) => get(1000 + ai * FLAME_N + fi, () => bakeRocket(ai, fi), true);
   const puffCv = (cls, tone, lvl) => get(2000 + (cls * 3 + tone) * 4 + lvl, () => bakePuff(cls, tone, lvl), true);
-  const lvlOf = (a) => (a > 0.8 ? 0 : a > 0.55 ? 1 : a > 0.36 ? 2 : 3);                 // alpha -> dither level of a baked puff
   const retCv = (ph) => get(3000 + ph, () => bakeReticle(ph), true);
-  const crossCv = () => get(3010, bakeCross, true);
+  const stripCv = (ai, kind) => get(6000 + kind * STRIP_N + ai, () => bakeStrip(ai, kind), true);
   const boomCv = (kind, v, fi) => get(4000 + (kind * 2 + v) * BOOM_N + fi, () => bakeBoom(kind, v, fi), false);
   const smokeCv = (v, fi) => get(5000 + v * SMK_N + fi, () => bakeSmokeCol(v, fi), false);
   // warm-up queue: after the first salvo the burst / smoke frames are baked in the background, a few ms per frame
@@ -502,29 +532,33 @@ const GfxRocket = (() => {
 
   // ------------------------------------------------------------------ drawing helpers
   const A = { x: 0, y: 0, alt: 0, s: 0, u: 0 }, B = { x: 0, y: 0, alt: 0, s: 0, u: 0 };
-  function blit(ctx, cv, ax, ay, X, Y, k, alpha) {
+  /** draw sprite sp (anchor ax,ay in baked px of the uncropped frame) at device px X,Y, k = device px per baked px; alpha < 1 = translucent */
+  function blit(ctx, sp, ax, ay, X, Y, k, alpha) {
+    if (sp.cv === null) return;
     if (alpha < 1) ctx.globalAlpha = alpha;
-    ctx.drawImage(cv, Math.round(X - ax * k), Math.round(Y - ay * k), Math.round(cv.width * k), Math.round(cv.height * k));
+    ctx.drawImage(sp.cv, Math.round(X + (sp.dx - ax) * k), Math.round(Y + (sp.dy - ay) * k), Math.round(sp.cv.width * k), Math.round(sp.cv.height * k));
     if (alpha < 1) ctx.globalAlpha = 1;
   }
-  const TRAIL_K = 14, TRAIL_STEP = 0.3;                                                                   // puffs per trail, tiles between puffs
-  const PUFF_CLS = [0, 0, 1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 4];
-  /** the smoke trail: puffs along the flight curve behind distance fraction sHead (screen origin ox,oy; k = device px per baked px); age01 > 0 = lingering */
-  function drawTrail(ctx, e, sHead, ox, oy, sc, k, age01, fade, cw, ch) {
-    const L = Math.max(4, Math.hypot(e.x1 - e.x0, e.y1 - e.y0)), m = 3 * sc, e2 = TRAIL_STEP / L;
-    for (let j = TRAIL_K - 1; j >= 0; j--) {
-      const s = sHead - (j + 0.5) * e2;
-      if (s < 0) continue;
-      PowerRocket.pathS(e, s, B);
-      const X = ox + B.x * sc, Y = oy + (B.y - B.alt - (j * 0.03 + age01 * (0.5 + j * 0.12))) * sc;
-      if (X < -m || X > cw + m || Y < -m || Y > ch + m) continue;
-      const tj = j / TRAIL_K;
-      let cls = PUFF_CLS[j] + (age01 > 0 ? (age01 > 0.5 ? 2 : 1) : 0);
-      if (cls > 4) cls = 4;
-      const a = Math.min(1, 1.15 - tj * 1.2) * fade;
-      if (a < 0.12) continue;
-      const cv = puffCv(cls, j <= 1 && age01 < 0.18 ? 1 : 0, lvlOf(a));
-      if (cv) ctx.drawImage(cv, Math.round(X - cv.width * 0.5 * k), Math.round(Y - cv.height * 0.5 * k), Math.round(cv.width * k), Math.round(cv.height * k));
+  /** puff sprites are anchored at the middle of their frame */
+  function blitPuff(ctx, sp, X, Y, k) {
+    if (sp.cv === null) return;
+    ctx.drawImage(sp.cv, Math.round(X + (sp.dx - sp.ow * 0.5) * k), Math.round(Y + (sp.dy - sp.oh * 0.5) * k), Math.round(sp.cv.width * k), Math.round(sp.cv.height * k));
+  }
+  const P0 = { x: 0, y: 0, alt: 0, s: 0 }, P1 = { x: 0, y: 0, alt: 0, s: 0 }, P2 = { x: 0, y: 0, alt: 0, s: 0 };
+  /** the smoke trail of a rocket = 2 baked strips laid along its flight curve behind distance fraction sHead (screen origin ox,oy; k = device px per baked px).
+   *  lingering (age01 >= 0): after the impact: cooler puffs, rising + growing with the age, fading with alpha */
+  function drawStrips(ctx, e, sHead, ox, oy, sc, k, age01, alpha, cw, ch) {
+    const L = Math.max(4, Math.hypot(e.x1 - e.x0, e.y1 - e.y0)), ds = D_MID / L, m = 4 * sc, lin = age01 >= 0, kk = lin ? k * (1 + 0.7 * age01) : k, up = lin ? age01 * 0.9 * sc : 0;
+    PowerRocket.pathS(e, sHead, P0); PowerRocket.pathS(e, sHead - ds, P1); PowerRocket.pathS(e, sHead - 2 * ds, P2);
+    const x0 = ox + P0.x * sc, y0 = oy + (P0.y - P0.alt) * sc, x1 = ox + P1.x * sc, y1 = oy + (P1.y - P1.alt) * sc, x2 = ox + P2.x * sc, y2 = oy + (P2.y - P2.alt) * sc;
+    const kn = lin && age01 > 0.2 ? 2 : 0;
+    for (let q = 0; q < 2; q++) {                                                                  // q = 0 near strip, 1 far strip
+      const xa = q ? x1 : x0, ya = q ? y1 : y0, xb = q ? x2 : x1, yb = q ? y2 : y1, dx = xb - xa, dy = yb - ya;
+      if (dx * dx + dy * dy < 4) continue;
+      if ((xa < -m && xb < -m) || (xa > cw + m && xb > cw + m) || (ya < -m && yb < -m) || (ya > ch + m && yb > ch + m)) continue;
+      let ai = Math.round(Math.atan2(dy, dx) / TAU * STRIP_N) % STRIP_N; if (ai < 0) ai += STRIP_N;
+      const sp = stripCv(ai, kn + q);
+      if (sp) blit(ctx, sp, STRIP_C, STRIP_C, xa, ya - up, kk, alpha);
     }
   }
   let passNow = -1, passIdx = -1;
@@ -540,16 +574,14 @@ const GfxRocket = (() => {
   /** all warning reticles of the frame in one pass (called by the first rocket drawn): they lie under every rocket sprite. ref = the entry being drawn (screen origin) */
   function drawReticles(ctx, list, px, py, ref, sc, now, alpha, cw, ch) {
     const RT = PowerRocket.params.RETICLE_TICKS, k = sc / 16, ox = px - ref.x * sc, oy = py - ref.y * sc;
-    const Tn = S.tick + (alpha > 0 ? alpha : 0), ring = retCv(((now / 90) | 0) & 3), cross = crossCv();
-    if (!ring || !cross) return;
+    const Tn = S.tick + (alpha > 0 ? alpha : 0), sp = retCv(((now / 90) | 0) & 3);
     for (let i = 0; i < list.length; i++) {
       const e = list[i], left = e.eta - Tn;
       if (!(left <= RT) || left <= 0 || !(Tn >= e.t0)) continue;
       const rx = ox + e.x1 * sc, ry = oy + e.y1 * sc;
       if (rx < -3 * sc || rx > cw + 3 * sc || ry < -3 * sc || ry > ch + 3 * sc) continue;
-      const pulse = 0.85 + 0.15 * Math.sin(now / 75 + e.v), f = Math.min(1, (RT - left) / 2.2 + 0.15) * pulse, zi = 1 + 0.32 * (left / RT);
-      blit(ctx, ring, RET_C, RET_C, rx, ry, k * zi, f * 0.72);
-      blit(ctx, cross, RET_C, RET_C, rx, ry, k * (1 + 0.12 * (left / RT)), f);
+      const pulse = 0.85 + 0.15 * Math.sin(now / 75 + e.v), f = Math.min(1, (RT - left) / 2.2 + 0.15) * pulse;
+      blit(ctx, sp, RET_C, RET_C, rx, ry, k * (1 + 0.32 * (left / RT)), f);
     }
   }
   function drawRocket(ctx, e, px, py, sc, now, H, alpha) {
@@ -573,7 +605,7 @@ const GfxRocket = (() => {
     ctx.fillRect(Math.round(gx - sw / 2), Math.round(gy - sh / 2), sw, sh);
     ctx.globalAlpha = 1;
     // smoke trail
-    drawTrail(ctx, e, A.s, ox, oy, sc, k, 0, 1, cw, ch);
+    drawStrips(ctx, e, A.s, ox, oy, sc, k, -1, 1, cw, ch);
     // the rocket: nose follows the screen-space velocity
     const T1 = Math.max(e.t0, T - 0.3), T2 = Math.min(eta, T + 0.3);
     PowerRocket.path(e, T1 < T2 ? T1 : eta - 0.6, A);
@@ -581,8 +613,8 @@ const GfxRocket = (() => {
     const ang = Math.atan2((B.y - B.alt) - (A.y - A.alt), B.x - A.x);
     let ai = Math.round(ang / TAU * ANG_N) % ANG_N; if (ai < 0) ai += ANG_N;
     const fi = (((now / 55) | 0) + (e.v & 3)) % FLAME_N;
-    const cv = rocketCv(ai, fi);
-    if (cv) blit(ctx, cv, SPR_C, SPR_C, hx, hy, k, 1);
+    const sp = rocketCv(ai, fi);
+    if (sp) blit(ctx, sp, SPR_C, SPR_C, hx, hy, k, 1);
   }
 
   // ------------------------------------------------------------------ fx
@@ -597,22 +629,22 @@ const GfxRocket = (() => {
         const an = hf(seed + j * 3.1) * TAU, d = (0.5 + 0.8 * hf(seed + j * 7.7)) * sc;
         X += Math.cos(an) * d; Y += Math.sin(an) * d * 0.8; f2 = Math.max(0, fi - (j & 1) - 1);
       }
-      const cv = boomCv(kind, kind ? 0 : ((seed + j) & 1), f2);
-      if (cv) blit(ctx, cv, BOOM_AX, BOOM_AY, X, Y, k, 1);
+      const sp = boomCv(kind, kind ? 0 : ((seed + j) & 1), f2);
+      if (sp) blit(ctx, sp, BOOM_AX, BOOM_AY, X, Y, k, 1);
     }
   }
   function fxSmokeCol(ctx, fx, px, py, sc, u, p, now, H) {
     tick(now);
     let fi = (p * SMK_N) | 0; if (fi >= SMK_N) fi = SMK_N - 1;
-    const cv = smokeCv((fx._s | 0) & 1, fi);
-    if (cv) blit(ctx, cv, SMK_AX, SMK_AY, px, py, sc / 16, 1);
+    const sp = smokeCv((fx._s | 0) & 1, fi);
+    if (sp) blit(ctx, sp, SMK_AX, SMK_AY, px, py, sc / 16, 1);
   }
   const TR = { x0: 0, y0: 0, x1: 0, y1: 0, b: 0, h: 1.5 };
   function fxTrail(ctx, fx, px, py, sc, u, p, now, H) {
     if (typeof PowerRocket === 'undefined') return;
     tick(now);
     TR.x0 = fx.x0; TR.y0 = fx.y0; TR.x1 = fx.x1; TR.y1 = fx.y1; TR.b = fx.b; TR.h = fx.h;
-    drawTrail(ctx, TR, 1, px - fx.x1 * sc, py - fx.y1 * sc, sc, sc / 16, p, Math.pow(1 - p, 1.2), ctx.canvas.width, ctx.canvas.height);
+    drawStrips(ctx, TR, 1, px - fx.x1 * sc, py - fx.y1 * sc, sc, sc / 16, p, Math.pow(1 - p, 1.2), ctx.canvas.width, ctx.canvas.height);
   }
   const LAUNCH_ANG = [0.7, 1.9, 3.1, 4.4, 5.5, 2.6];
   function fxLaunch(ctx, fx, px, py, sc, u, p, now, H) {
@@ -628,8 +660,8 @@ const GfxRocket = (() => {
     for (let i = 0; i < 6; i++) {                                                                          // smoke blown back + sideways
       const t = Math.max(0, p * 1.25 - i * 0.04); if (t <= 0 || t >= 1) continue;
       const an = a0 + Math.PI + (LAUNCH_ANG[i] - 3.1) * 0.5, d = (0.4 + 2.4 * ease(t)) * sc * (0.7 + 0.12 * i);
-      const cv = puffCv(1 + (i & 1) + (t > 0.5 ? 1 : 0), 0, lvlOf((1 - t) * 0.95));
-      if (cv) { const kk = k * (0.8 + t); ctx.drawImage(cv, Math.round(px + Math.cos(an) * d - cv.width * 0.5 * kk), Math.round(py + Math.sin(an) * d - t * sc * 0.5 - cv.height * 0.5 * kk), Math.round(cv.width * kk), Math.round(cv.height * kk)); }
+      const sp = puffCv(1 + (i & 1) + (t > 0.5 ? 1 : 0), 0, lvlOf((1 - t) * 0.95));
+      if (sp) blitPuff(ctx, sp, px + Math.cos(an) * d, py + Math.sin(an) * d - t * sc * 0.5, k * (0.8 + t));
     }
   }
 
@@ -648,8 +680,8 @@ const GfxRocket = (() => {
   });
 
   return {
-    PB, bake: { rocket: bakeRocket, puff: bakePuff, reticle: bakeReticle, boom: bakeBoom, smoke: bakeSmokeCol, icon: drawIcon },
-    dims: { ANG_N, FLAME_N, SPR, SPR_C, BOOM_N, BOOM_W, BOOM_H, BOOM_AX, BOOM_AY, SMK_N, SMK_W, SMK_H, SMK_AX, SMK_AY, RET_S, RET_C, PUFF_R },
+    PB, bake: { rocket: bakeRocket, puff: bakePuff, strip: bakeStrip, reticle: bakeReticle, boom: bakeBoom, smoke: bakeSmokeCol, icon: drawIcon },
+    dims: { ANG_N, FLAME_N, SPR, SPR_C, STRIP_N, STRIP_S, STRIP_C, BOOM_N, BOOM_W, BOOM_H, BOOM_AX, BOOM_AY, SMK_N, SMK_W, SMK_H, SMK_AX, SMK_AY, RET_S, RET_C, PUFF_R },
     stats() { return { cached: cache.size, queued: queue.length }; },
     warm, queue,
   };
