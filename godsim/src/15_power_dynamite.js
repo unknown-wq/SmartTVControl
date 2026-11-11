@@ -31,7 +31,7 @@ const PowerDynamite = (() => {
   ToolDefs.groupLabels.arsenal = 'Арсенал';
   ToolDefs.add({
     id: 'dynamite', tab: 'powers', group: 'arsenal', afterGroup: 'destroy', name: 'Динамит', short: 'Динамит', icon: 'dynamite',
-    brush: true, drag: true, hint: 'Тап — заряд, проведите — цепь зарядов. Кисть = мощность',
+    brush: true, drag: true, hint: 'Динамит: заряд или цепь',
   });
 
   // ------------------------------------------------------------------ tunables
