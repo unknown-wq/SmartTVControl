@@ -187,6 +187,7 @@ ToolDefs.groupLabels = {};
  *  or - for a NEW group - after the last tool of group def.afterGroup (default: the end of the tab). def.short = optional short button label. */
 ToolDefs.add = function (def) {
   if (ToolDefs.byId[def.id]) return ToolDefs.byId[def.id];
+  def.plugin = true;                                   // UI shows the plugin's success message (host.msg(text, true)) as a toast on the first call of a gesture
   let at = -1;
   for (let i = 0; i < ToolDefs.length; i++) if (ToolDefs[i].tab === def.tab && ToolDefs[i].group === def.group) at = i;
   if (at < 0 && def.afterGroup) for (let i = 0; i < ToolDefs.length; i++) if (ToolDefs[i].tab === def.tab && ToolDefs[i].group === def.afterGroup) at = i;

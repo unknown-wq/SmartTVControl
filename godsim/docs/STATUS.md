@@ -1,7 +1,7 @@
-# GODSIM — status after the integration pass (stage 3)
+# GODSIM — status (stages 1-3 + plugins: five new god powers, total war, player diplomacy)
 
-One self-contained `index.html` (≈1.0 MB, vanilla JS + canvas 2D, zero external assets, procedural pixel art, Russian UI, iPhone Safari portrait first).
-Source: `src/NN_*.js` (20 files, one shared scope) + `style.css` + `template.html`; `node build.mjs --check` builds and syntax-checks `index.html`.
+One self-contained `index.html` (≈1.6 MB, vanilla JS + canvas 2D, zero external assets, procedural pixel art, Russian UI, iPhone Safari portrait first).
+Source: `src/NN_*.js` (33 files, one shared scope) + `style.css` + `template.html`; `node build.mjs --check` builds and syntax-checks `index.html`.
 
 ## What is implemented, per requirement
 
@@ -13,6 +13,9 @@ Source: `src/NN_*.js` (20 files, one shared scope) + `style.css` + `template.htm
 | **Diplomacy / wars / unification / rebellions** | done | Symmetric opinions with explained causes, alliances, truces, AI war declaration (neighbours, claims, ruler policy, relative power), allies / vassals join, rebel wars, god whisper / god peace / split. 3–13 wars per world per 50 game minutes, 2–11 rebellions, 0–3 merges. |
 | **HOI4 mechanics** | done | ~50 regions (states) with owner vs controller (occupation), claims and cores, fronts, supply (attrition below 30), war goals per region, armies with orders (attack / hold / defend / retreat), armies take the goal region and HOLD it — the war never ends because a goal was taken —, war score, war weariness, peace conference with region transfer (price per region, white peace, vassalisation, god force), auto-peace on stalemate (4800 ticks, menu toggle), truce after peace. |
 | **UI** | done | Dock with 5 tabs, brush slider, kingdom chips, event feed, inspectors, war tool «Война» (map first: tap a country = attacker with a slim HUD and its targets lit, tap a lit region = compact war card with odds / cost / casus / allies and one «Объявить войну» button; the same tap at war = attack card; a «ВОЙНА» banner for every declaration, AI wars too; pull-up drawer Войны / Армии / Регионы, army selection by banner or card, hold / defend popup, peace conference), political map (borders, occupation stripes, fronts, army banners, order arrows, goal stars), culture map, menu (4 save slots + autosave, new world, auto-peace toggle), toasts, safe-area layout, landscape support. |
+| **God powers (plugins)** | done | Five new powers in the «Силы» tab, each a plugin in its own files (CONTRACT §10: `PowerPlugins` / `GfxPlugins`, `ToolDefs.add`): **Динамит** (laid charges with fuse, wired chains along a drag, chain reactions, quarrying + ore to city stock), **Ракеты** (salvo from the map edge, arcs, reticles, merged bursts), **Яд** (drifting toxic clouds: poison status with DoT, civilians flee, forests / berries / farms wither, heal is the antidote), **Ядерная бомба** (alarm, falling bomb, expanding blast wave, mushroom cloud, fallout / radiation status, cooldown), **Вулкан** (cone rises, eruption with lava bombs and flows, extinct cone). Generic Fx `flash` / `shake`, unit status tints + badges, plugin success toasts. Details: `docs/feat_<name>.md`. |
+| **Total war** | done | War mode «Вся страна» next to the unchanged limited war: frontier chain of goals deep into the country, mobilisation caps, capitulation meter and timer, outcomes annex / vassal / regions (the commanded winner decides, AI after 1800 ticks), rare AI total wars; UI: card toggle, HUD progress, banner, capitulation sheet. `docs/feat_totalwar.md`. |
+| **Player diplomacy** | done | Tool «Дипломатия»: pick your country, tap another: pair card with opinion/causes/status chips and ~19 actions with forecast/cost/reason (alliance, pact, trade, gift, demand/ultimatum, vassal release/tribute/annex, call allies, marriage, guarantee, embargo), inbox with accept/decline; the AI uses the same machinery. `docs/feat_diplomacy.md`. |
 | **Save / load** | done | Versioned, RLE + LZ packed, typed layers + column tables, checksum, rollback; loads are bit-identical (also in the middle of a war). |
 
 ## Notification filter («Войны» / «Все»)
@@ -52,6 +55,9 @@ Units: 8 looks per race (bit 2 = female), faction colour on shields / pauldrons 
 * Wars that the player declares with a much weaker kingdom are lost (the UI shows the strength ratio, nothing prevents it).
 * Touch-only: no keyboard shortcuts; mouse support exists for desktop testing.
 
+* Plugins: `S.eff.clouds` (poison) is a generic key; the nuke brush preview shows the brush radius, not the blast radius R = 5 + brush; rocket reticles overlap in dense salvos; poison soldiers do not retreat; AI gifts are rare; the AI does not concentrate armies in a total war and a 20-region empire outlasts a 2:1 attacker; the dynamite / nuke blast at the largest size costs a bit more than the 0.5 ms draw goal at zoom 14 (software GL).
+* A save made while tiles are burning does not continue bit-identically on its own (World's fire list order): call `Sim.afterLoad()` first (the plugin tests do).
+
 ## How to run the tests (from `godsim/`)
 
 ```
@@ -59,11 +65,12 @@ node build.mjs --check                              # build index.html + syntax 
 # headless (each < 25 s, system 80 s):
 node tests/world.test.mjs ; node tests/cities.test.mjs ; node tests/units.test.mjs ; node tests/sim.test.mjs
 node tests/save.test.mjs  ; node tests/powers.test.mjs ; node tests/sprites.test.mjs
-node tests/regions.test.mjs ; node tests/politics.test.mjs [--war=real] ; node tests/war.test.mjs
+node tests/regions.test.mjs ; node tests/politics.test.mjs [--war=real] ; node tests/war.test.mjs ; node tests/totalwar.test.mjs ; node tests/diplomacy.test.mjs ; node tests/plugins.test.mjs
+node tests/power_dynamite.test.mjs ; node tests/power_rocket.test.mjs ; node tests/power_poison.test.mjs ; node tests/power_nuke.test.mjs ; node tests/power_volcano.test.mjs   # each includes a browser part (Chromium)
 node tests/system.test.mjs [--quick] [--verbose] [--seeds=1,2,3] [--chaos=1,2,3 --chaosTicks=20000]
 node tests/long.mjs --seeds=1,2,3,4,5 --ticks=30000 [--par=3] [--json=/tmp/long]     # per-3000-tick tables of every world
 # browser (Playwright + headless Chromium; run ONE at a time, they are CPU sensitive):
-node tests/render.test.mjs ; node tests/render2.test.mjs ; node tests/ui.test.mjs ; node tests/ui2.test.mjs ; node tests/ui3.test.mjs ; node tests/fxperf.mjs ; node tests/save.browser.mjs
+node tests/render.test.mjs ; node tests/render2.test.mjs ; node tests/ui.test.mjs ; node tests/ui2.test.mjs ; node tests/ui3.test.mjs ; node tests/ui_diplo.test.mjs ; node tests/fxperf.mjs ; node tests/save.browser.mjs
 node tests/playtest.mjs [--soak=90]                 # screenshots in /tmp/godsim-playtest
 node tests/perf.mjs [--seconds=12] [--throttle=4]   # frame cost split at 1500 units / 3 wars / x4
 ```

@@ -32,14 +32,31 @@ const note = s => console.log('       ' + s);
 
 const b = await launch({ file: 'index.html', width: W, height: H, verbose: true });
 const E = (fn, arg) => b.eval(fn, arg);
+b.page.on('framenavigated', f => { if (f === b.page.mainFrame()) console.log('       [page navigated: ' + f.url().slice(-40) + ']'); });
+b.page.on('crash', () => console.log('       [page CRASHED]'));
 const sleep = b.sleep;
 const frames = n => E(n => new Promise(r => { let k = 0; const f = () => { if (++k >= n) r(); else requestAnimationFrame(f); }; requestAnimationFrame(f); }), n);
 const shot = async name => { const f = path.join(SHOTS, name + '.png'); await b.shot(f); return f; };
 const center = sel => E(sel => { const e = document.querySelector(sel); if (!e) return null; const r = e.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2, r.width, r.height]; }, sel);
 async function tapSel(sel) {
   await E(sel => { const e = document.querySelector(sel); if (e && e.closest('.sh-body')) e.scrollIntoView({ block: 'nearest' }); }, sel);
-  const c = await center(sel); if (!c) throw new Error('no element ' + sel);
-  await b.tap(c[0], c[1]); await sleep(140); return c;
+  const c = await center(sel);
+  if (!c) {
+    const d = await E(() => { const g = window.__god, bt = document.getElementById('bottom'), tabs = [...document.querySelectorAll('.tab')];
+      return JSON.stringify({ tab: (document.querySelector('.tab.on') || {}).dataset && document.querySelector('.tab.on').dataset.tab, tools: [...document.querySelectorAll('#tools .tool')].map(e => e.dataset.tool).join(','), bottom: bt.className, sheetHidden: document.getElementById('sheet').hidden, tick: g.S.tick, cmdKid: g.UI.cmdKid, tabsShown: tabs.length, dockRect: (() => { const r = bt.getBoundingClientRect(); return [Math.round(r.top), Math.round(r.height)]; })() }); });
+    throw new Error('no element ' + sel + ' ' + d);
+  }
+  await b.tap(c[0], c[1]); await sleep(140);
+  const m = /^\.tab\[data-tab="(\w+)"\]$/.exec(sel);
+  if (m) {   // a tab tap must switch the tab: if it did not, record where the tap went (diagnostics) and tap once more
+    const on = () => E(() => { const e = document.querySelector('.tab.on'); return e ? e.dataset.tab : ''; });
+    if ((await on()) !== m[1]) {
+      const d = await E(([x, y, sel]) => { const t = document.elementFromPoint(x, y), r = document.querySelector(sel).getBoundingClientRect(), bt = document.getElementById('bottom'); return JSON.stringify({ hit: t ? (t.id ? '#' + t.id : '') + '.' + String(t.className).replace(/\s+/g, '.') + ' <' + t.tagName + '>' : null, tabRect: [Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height)], tapAt: [Math.round(x), Math.round(y)], bottom: bt.className, anim: document.getAnimations().length, modal: (document.getElementById('modals').innerText || '').replace(/\s+/g, ' ').slice(0, 160), modalOpen: window.__god.UI.modalOpen() }); }, [c[0], c[1], sel]);
+      note('tab tap ignored: ' + sel + ' ' + d);
+      const c2 = await center(sel); await b.tap(c2[0], c2[1]); await sleep(200);
+    }
+  }
+  return c;
 }
 async function tapText(scopeSel, re, nth = 0) {
   const p = await E(([scopeSel, re, nth]) => {
@@ -53,11 +70,22 @@ async function tapText(scopeSel, re, nth = 0) {
 const exists = sel => E(sel => !!document.querySelector(sel), sel);
 /** close an open inspector sheet like a user would (tap its close button); the dock is hidden while a sheet is open */
 async function closeSheet() {
+  await closeModals();
   for (let i = 0; i < 3; i++) {
     const open = await E(() => document.getElementById('bottom').classList.contains('sheet-open') && !window.__god.UI.cmdKid && !window.__god.UI.cmd.goal);
     if (!open) return;
     const p = await E(() => { const e = document.querySelector('#sheet [aria-label="Закрыть"], #sheet [title="Закрыть"]'); if (!e) return null; const r = e.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; });
     if (p) { await b.tap(p[0], p[1]); await sleep(250); } else { await E(() => window.__god.UI.closeInspector()); await sleep(200); }
+  }
+}
+/** a random soak tap can land on the event feed, which opens the full log (by design): close any modal like a user would, with its «Закрыть» button */
+let modalsClosed = 0;
+async function closeModals() {
+  for (let i = 0; i < 4; i++) {
+    if (!(await E(() => window.__god.UI.modalOpen()))) return;
+    const p = await E(() => { const e = document.querySelector('#modals .m-head [aria-label="Закрыть"]'); if (!e) return null; const r = e.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; });
+    if (p) { await b.tap(p[0], p[1]); await sleep(250); } else { await E(() => window.__god.UI.closeAllModals()); await sleep(150); }
+    modalsClosed++;
   }
 }
 const G = fn => E(fn); // convenience
@@ -133,6 +161,7 @@ const avgFps = fpsLog.length ? fpsLog.reduce((a, f) => a + f.fps, 0) / fpsLog.le
 const maxStep = Math.max(...profLog.map(p => p.prof.total || 0)), maxDraw = Math.max(...profLog.map(p => p.rs.drawMs || 0));
 note(`ticks ${tick0} -> ${soakEnd.tick} in ${secs.toFixed(0)} s = ${tickRate.toFixed(1)} ticks/s (ideal 40), units ${soakEnd.units}, kingdoms ${soakEnd.kingdoms}, wars ${soakEnd.wars}, armies ${soakEnd.armies}, perf ${JSON.stringify(soakEnd.perf)}`);
 note(`FPS samples (SwiftShader software GL, not an iPhone): avg ${avgFps.toFixed(1)} min ${minFps.toFixed(1)} | worst p95 frame ${Math.max(...fpsLog.map(f => f.p95)).toFixed(1)} ms | max sim EMA ${maxStep.toFixed(2)} ms/tick, max draw ${maxDraw.toFixed(2)} ms`);
+if (modalsClosed) note(`the log modal opened by a random tap on the event feed (by design) and was closed ${modalsClosed} time(s)`);
 note(`actions: ${actionLog.length} (${[...new Set(actionLog)].join(',')})`);
 check('no page errors / console errors during the soak', b.errors.length === 0, b.errors.slice(0, 2).join(' | '));
 check('no error overlay', !soakEnd.errbox);
@@ -149,7 +178,7 @@ section('command mode in a real world: declare a war with a goal, armies take it
 await E(() => { window.__god.setSpeed(0); });
 // find an attacker/target pair that the UI can start a war between (advance the world when there is none)
 let pair = null;
-for (let tries = 0; tries < 14 && !pair; tries++) {
+for (let tries = 0; tries < 26 && !pair; tries++) {
   pair = await E(() => {
     const g = window.__god;
     for (const k of g.S.kingdoms.values()) {
@@ -163,9 +192,22 @@ for (let tries = 0; tries < 14 && !pair; tries++) {
     }
     return null;
   });
+  if (!pair && (tries === 6 || tries === 14)) await E(() => { const g = window.__god; for (const k of [...g.S.kingdoms.values()]) g.War.godPeace(k.id); });   // the chaos phase can leave every kingdom at war: the god makes peace once, then we wait out the truce
   if (!pair) { await E(() => window.__god.step(600)); await frames(2); }
 }
-check('found two neighbouring kingdoms that can fight', !!pair, pair ? `${pair.an} -> ${pair.bn}, candidate goals ${pair.goals}` : 'none');
+let pairDiag = '';
+if (!pair) pairDiag = await E(() => {
+  const g = window.__god, why = {};
+  for (const k of g.S.kingdoms.values()) for (const n of g.Diplomacy.neighbors(k.id)) {
+    const t = g.S.kingdoms.get(n.kid); if (!t) continue;
+    let r;
+    if (g.War.warsOf(k.id).length || g.War.warsOf(t.id).length) r = 'at war';
+    else { const cd = g.Diplomacy.canDeclare(k.id, t.id); if (!cd.ok) r = cd.reason; else if (!g.War.potentialGoals(k.id, t.id).length) r = 'no goals'; else if (g.Kingdoms.strength(k.id) < 1.3 * g.Kingdoms.strength(t.id)) r = 'ratio < 1.3'; else r = 'ELIGIBLE'; }
+    why[r] = (why[r] || 0) + 1;
+  }
+  return 'tick ' + g.S.tick + ', kingdoms ' + g.S.kingdoms.size + ', pair blockers ' + JSON.stringify(why);
+});
+check('found two neighbouring kingdoms that can fight', !!pair, pair ? `${pair.an} -> ${pair.bn}, candidate goals ${pair.goals}` : 'none: ' + pairDiag);
 let warId = 0;
 if (pair) {
   await closeSheet();
@@ -226,8 +268,8 @@ if (pair) {
     await E(() => window.__god.setSpeed(0));
     check('armies take the goal region (controller changes, owner stays)', taken, taken ? `after ${tw} s real time` : 'not taken in 90 s');
     if (taken) {
-      const st = await E(([id, rid]) => { const g = window.__god; const r = g.S.regions.get(rid); const w = g.War.get(id); return { owner: r.ownerId, ctl: r.controllerId, armies: g.War.armiesOf(w.aggressor).map(a => ({ order: a.order.type, rg: a.order.regionId, n: a.size, mode: a.mode })), regionsHeld: [...g.S.regions.values()].filter(x => x.controllerId === w.aggressor && x.ownerId !== w.aggressor).map(x => x.id) }; }, [warId, rid]);
-      check('occupied: controller is the attacker, owner is still the defender', st.ctl === pair.a && st.owner === pair.b, JSON.stringify({ owner: st.owner, ctl: st.ctl }));
+      const st = await E(([id, rid]) => { const g = window.__god; const r = g.S.regions.get(rid); const w = g.War.get(id); return { att: w.attackers.slice(), def: w.defenders.slice(), owner: r.ownerId, ctl: r.controllerId, armies: g.War.armiesOf(w.aggressor).map(a => ({ order: a.order.type, rg: a.order.regionId, n: a.size, mode: a.mode })), regionsHeld: [...g.S.regions.values()].filter(x => x.controllerId === w.aggressor && x.ownerId !== w.aggressor).map(x => x.id) }; }, [warId, rid]);
+      check('occupied: the attacker side holds the region (an ally may be the controller), the owner is still on the defender side', st.att.includes(st.ctl) && st.def.includes(st.owner), JSON.stringify({ owner: st.owner, ctl: st.ctl, att: st.att, def: st.def }));
       await shot('cmd_06_taken');
       // keep running 20 s of real time at x4: nobody advances, the war stays
       const before = st.regionsHeld.slice().sort().join(',');

@@ -27,6 +27,7 @@
 
 const Cities = (() => {
   const T = Const.T, B = Const.B, RES = Const.RES, GOODS = Const.GOODS;
+  const ownable = (t) => t !== T.DEEP && t !== T.SHALLOW;      // territory ownership: lava counts as land (like Regions), so a volcano next to a city does not release / reclaim tiles
   const LEVEL_POP = [0, 8, 18, 35, 60];     // pop needed for level 1..5
   const MAX_CITIES = 40;                    // soft cap for AI expansion
   const MIN_LAND = 9;                       // a village needs a landmass of at least this size
@@ -259,10 +260,10 @@ const Cities = (() => {
             ro = lastOwn;
           }
         }
-        const inside = d2 <= rr && Tiles.isLand(tile[i]) && (ro < 0 || ro === kid);
+        const inside = d2 <= rr && ownable(tile[i]) && (ro < 0 || ro === kid);
         const o = owner[i];
         if (o === c.id) {
-          if (!inside && !(S.bld[i] !== 0 && Tiles.isLand(tile[i]))) { owner[i] = 0; changed = true; released = true; }
+          if (!inside && !(S.bld[i] !== 0 && ownable(tile[i]))) { owner[i] = 0; changed = true; released = true; }
         } else if (inside) {
           if (o === 0) { owner[i] = c.id; changed = true; continue; }
           const oc = S.cities.get(o);
@@ -1258,7 +1259,7 @@ const Cities = (() => {
     if (regionsOn()) { const ro = regionOwnerIdx(b.y * S.w + b.x); if (ro >= 0 && ro !== c.kingdomId) recomputeTerritory(c.id, true); }
   });
   Bus.on('tileChanged', (x, y, o, n) => {
-    if (!S.cities.size || Tiles.isLand(o) === Tiles.isLand(n)) return;
+    if (!S.cities.size || ownable(o) === ownable(n)) return;
     for (const c of S.cities.values()) {
       const r = c.radius + 1;
       if (Math.abs(x - c.x) <= r && Math.abs(y - c.y) <= r) dirtyTerr.add(c.id);

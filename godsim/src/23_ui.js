@@ -1773,6 +1773,9 @@ const UI = (() => {
     if (!ok && phase !== 'end') {
       const m = Powers.lastMessage;
       if (m) toast(m, 'bad');
+    } else if (ok && def.plugin && (phase === 'tap' || phase === 'start')) {          // new god powers (plugins) announce what they did: «Динамит заложен», «Залп: 5 ракет», «Тревога! ...»
+      const m = Powers.lastMessage;
+      if (m) toast(m);
     }
     if (def.brush && phase !== 'end') { Render.brush = { x: tx, y: ty, r }; clearTimeout(brushTimer); brushTimer = setTimeout(() => { if (!Input.painting) Render.brush = null; }, 650); }
     return ok;

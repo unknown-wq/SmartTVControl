@@ -109,7 +109,7 @@ section('arming: tap = alarm record, cooldown 120 ticks («Бомба ещё н�
   const ctx = mkCtx();
   const { Powers, S } = ctx;
   arena(ctx, 48, 48, 10);
-  assert.deepEqual(Object.keys(S.eff).slice(-3), ['nukes', 'mushrooms', 'fallout'], 'plugin arrays are created by newWorld, in a fixed order');
+  assert.deepEqual(Object.keys(S.eff).filter(k => ['nukes', 'mushrooms', 'fallout'].includes(k)), ['nukes', 'mushrooms', 'fallout'], 'plugin arrays are created by newWorld, in a fixed order (other plugins may add their own keys)');
   assert.equal(Powers.apply('nuke', CX, CY, 3, 'tap'), true);
   assert.ok(/Тревога/.test(Powers.lastMessage), Powers.lastMessage);
   assert.equal(S.eff.nukes.length, 1);
