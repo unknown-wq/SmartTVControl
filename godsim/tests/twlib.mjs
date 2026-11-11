@@ -125,6 +125,7 @@ export function tarena(ctx, o = {}) {
   const ka = Kingdoms.get(A), kb = Kingdoms.get(B);
   if (!ka || !kb || cityB[0].kingdomId !== B || cityA[0].kingdomId !== A) return null;
   kb.capitalId = cityB[0].id; ka.capitalId = cityA[0].id;
+  if (!o.keepClaims) for (const r of S.regions.values()) r.claims.length = 0;          // (splitting / handing over the cities gave A claims; the tests start from a clean slate)
   if (!o.keepAI) { Diplomacy.step = () => {}; }          // no AI wars / alliances unless the test asks for them
   feed(ctx);
   return { chain, A, B, cityA, cityB, rA: chain.slice(0, split), rB: chain.slice(split), split };

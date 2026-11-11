@@ -1905,6 +1905,7 @@ const War = (() => {
       else Log.add('Капитуляция: земли ' + nD + ' отошли королевству ' + nA + ' — страна присоединена целиком', LOG.PEACE, cx, cy, A);
     } else if (how === 'vassal') {
       finishWar(w, 'capitulation', { winner: A, regions: [], vassal: true, quiet: true, why: 'vassal' });
+      if (kget(D) && kd.overlordId === A) kd.stability = Math.max(kd.stability, 45);      // (a war-torn vassal at stability < 25 would break free again within a few hundred ticks)
       Log.add('Капитуляция: ' + nD + ' признаёт власть королевства ' + nA + ' и остаётся его вассалом', LOG.PEACE, cx, cy, A);
     } else {
       const rids = op.regions.rids.slice();
@@ -2000,7 +2001,7 @@ const War = (() => {
       capital: st.hc ? 'held' : (capitalCity(st.D) ? 'free' : 'none'), capCity: st.hc ? st.hc.id : 0, capRegion: capitalRegionOf(st.D),
       sold: st.sold, soldAtt: st.soldAtt, peak: Math.max(t.peak, st.sold), stab: Math.round(st.stab), wear: Math.round(st.wear * 10) / 10,
       pending: !!t.pend, left: t.pend ? Math.max(0, CAP_ASK - (S.tick - t.pend.t)) : 0, out: t.out, need: Math.ceil(st.own * CAP_SHARE - 1e-9),
-      hold: t.sure, holdLeft: Math.max(0, CAP_HOLD - t.sure), holdTotal: CAP_HOLD, holding: st.sure, rate: st.rate || 0,
+      hold: t.sure, holdLeft: Math.max(0, CAP_HOLD - t.sure), holdTotal: CAP_HOLD, holding: st.sure, rate: st.rate || 0, pressure: Math.round(st.target * 10) / 10,
     };
   }
   /** the pending decision of a commanded winner: {warId, kid (the capitulated country), to, left, suggest, options:{merge,vassal,regions:{ok,reason,...}}} | null */
