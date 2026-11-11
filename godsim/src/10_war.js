@@ -59,7 +59,7 @@ const War = (() => {
   const TW_REST = 120;                  // ticks an army consolidates in a captured region (+ 3 x the region's cost) before the AI sends it to the next goal
   const CAP_ASK = 1800;                 // ticks a commanded winner may think before the AI decides for him
   const TW_INFAMY = 25, TW_INFAMY_CLAIM = 8;
-  const TW_AI_MIN_TICK = 9000, TW_AI_COOLDOWN = 6000, TW_AI_GLOBAL = 5000, TW_AI_RATIO = 2.5, TW_AI_AGGR = 0.3, TW_AI_CHANCE = 0.2;
+  const TW_AI_MIN_TICK = 9000, TW_AI_COOLDOWN = 6000, TW_AI_GLOBAL = 5000, TW_AI_RATIO = 2.5, TW_AI_AGGR = 0.3, TW_AI_CHANCE = 0.2, TW_AI_PEACE = 1500;
 
   // ------------------------------------------------------------------ transient state
   let pairs = new Map(), pairsFor = null, pairsSize = -1;
@@ -1073,6 +1073,7 @@ const War = (() => {
     if (!w || w.ended) return false;
     cfg = cfg || {};
     w.ended = true; w.endedAt = S.tick; w.how = how;
+    if (w.tw && typeof w.tw === 'object') w.tw.pend = null;
     rebuildPairs();
     const regs = cfg.regions || [];
     const winner = cfg.winner | 0;
@@ -2024,39 +2025,62 @@ const War = (() => {
 
   // ---- the AI declares a total war now and then: much stronger, aggressive ruler, a land neighbour, at peace, long cooldowns
   function racePopOk(race) { const st = S.stats, p = st && st.pop; if (!p || p[race] === undefined || !(st.popTotal >= 100)) return true; return p[race] >= 120; }
-  /** evaluate one kingdom; `force` skips the dice (tests). Returns the new War or null. */
-  function aiConsiderTotal(kid, force) {
+  /**
+   * Pure check (no dice, no mutation): may this AI kingdom start a total war now? -> {why, best, ratio, p}
+   *   why = '' when every condition holds (only the dice remain), else the FIRST failing condition (short, English; used by tests / diagnostics)
+   */
+  function aiTotalCheck(kid) {
+    const out = { why: '', best: null, ratio: 0, p: 0, aggr: 0 };
     const k = kget(kid);
     const m = mod();
     const tick = S.tick;
-    if (!k || !rgOn() || k.cmd === true || k.overlordId) return null;
-    if (tick < TW_AI_MIN_TICK || tick - k.born < 3000) return null;
-    if ((m.tcd[kid] || 0) > tick || (m.tlast && tick - m.tlast < TW_AI_GLOBAL)) return null;       // cooldowns: per kingdom and for the whole world
-    if (warCount(kid) > 0 || tick - (k.peaceAt || 0) < 1500) return null;                          // no other war, and some peace first
-    if (k.stability < 55 || Kingdoms.pop(kid) < 60 || !S.units.has(k.rulerId)) return null;
+    if (!k || !rgOn()) { out.why = 'no kingdom'; return out; }
+    if (k.cmd === true) { out.why = 'commanded'; return out; }
+    if (k.overlordId) { out.why = 'vassal'; return out; }
+    if (tick < TW_AI_MIN_TICK) { out.why = 'too early'; return out; }
+    if (tick - k.born < 3000) { out.why = 'young'; return out; }
+    if ((m.tcd[kid] || 0) > tick) { out.why = 'cooldown'; return out; }                          // cooldowns: per kingdom ...
+    if (m.tlast && tick - m.tlast < TW_AI_GLOBAL) { out.why = 'world cooldown'; return out; }     // ... and for the whole world
+    if (warCount(kid) > 0) { out.why = 'at war'; return out; }                                   // no other war
+    if (tick - (k.peaceAt || 0) < TW_AI_PEACE) { out.why = 'recent war'; return out; }           // and some peace first
+    if (k.stability < 55 || !S.units.has(k.rulerId)) { out.why = 'unstable'; return out; }
+    if (Kingdoms.pop(kid) < 60) { out.why = 'small'; return out; }
     const pol = Kingdoms.policy(kid);
-    if (pol.war - pol.peace * 0.7 < TW_AI_AGGR) return null;                                     // an aggressive ruler
+    const aggr = pol.war - pol.peace * 0.7;
+    out.aggr = aggr;
+    if (aggr < TW_AI_AGGR) { out.why = 'peaceful ruler'; return out; }                           // an aggressive ruler
     const myCap = capitalCity(kid);
-    let best = null, br = 0;
-    const seen = [];
-    if (dipOn()) { const nb = Diplomacy.neighbors(kid); for (let i = 0; i < nb.length; i++) seen.push(nb[i].kid); }
-    for (let i = 0; i < seen.length; i++) {
-      const d = kget(seen[i]);
-      if (!d || d.id === kid || totalProblem(kid, d.id)) continue;
-      if (Kingdoms.pop(d.id) < 24 || !racePopOk(d.race)) continue;
-      const dc = capitalCity(d.id);
-      if (myCap && dc && !World.sameLand(myCap.x, myCap.y, dc.x, dc.y)) continue;                    // a land neighbour on the same landmass
-      const pw = peacePowers(kid, d.id), ratio = ratioOf(pw.my, pw.their);
-      if (ratio < TW_AI_RATIO) continue;
-      if (ratio > br) { br = ratio; best = d; }
+    let best = null, br = 0, nbn = 0, why2 = 'no neighbour', mr = 0;
+    if (dipOn()) {
+      const nb = Diplomacy.neighbors(kid);
+      for (let i = 0; i < nb.length; i++) {
+        const d = kget(nb[i].kid);
+        nbn++;
+        if (!d || d.id === kid) continue;
+        if (totalProblem(kid, d.id)) { if (why2 === 'no neighbour') why2 = 'neighbour not allowed'; continue; }
+        if (Kingdoms.pop(d.id) < 24 || !racePopOk(d.race)) { if (why2 === 'no neighbour' || why2 === 'neighbour not allowed') why2 = 'victim too small'; continue; }
+        const dc = capitalCity(d.id);
+        if (myCap && dc && !World.sameLand(myCap.x, myCap.y, dc.x, dc.y)) { if (why2 === 'no neighbour' || why2 === 'neighbour not allowed') why2 = 'other landmass'; continue; }     // a land neighbour on the same landmass
+        const pw = peacePowers(kid, d.id), ratio = ratioOf(pw.my, pw.their);
+        if (ratio > mr) mr = ratio;
+        if (ratio < TW_AI_RATIO) { why2 = 'not strong enough'; continue; }
+        if (ratio > br) { br = ratio; best = d; }
+      }
     }
-    if (!best) return null;
-    if (!force) {
-      const p = TW_AI_CHANCE * clamp((pol.war - pol.peace * 0.7 - TW_AI_AGGR) / 0.4 + 0.5, 0.3, 1.5) * clamp(br / 4, 0.6, 1.4);
-      if (!R.chance(p)) { m.tcd[kid] = tick + 800; return null; }                                  // (it thought about it and let it be)
-    }
-    if (!feasibleGoals(kid, best.id).length) { m.tcd[kid] = tick + 1500; return null; }
-    const w = declare(kid, best.id, null, null, { total: true });
+    out.ratio = mr;
+    if (!best) { out.why = nbn ? why2 : 'no neighbour'; return out; }
+    out.best = best; out.ratio = br;
+    out.p = TW_AI_CHANCE * clamp((aggr - TW_AI_AGGR) / 0.4 + 0.5, 0.3, 1.5) * clamp(br / 4, 0.6, 1.4);
+    return out;
+  }
+  /** evaluate one kingdom; `force` skips the dice (tests). Returns the new War or null. */
+  function aiConsiderTotal(kid, force) {
+    const c = aiTotalCheck(kid);
+    if (c.why || !c.best) return null;
+    const m = mod(), tick = S.tick;
+    if (!force && !R.chance(c.p)) { m.tcd[kid] = tick + 800; return null; }                        // (it thought about it and let it be)
+    if (!feasibleGoals(kid, c.best.id).length) { m.tcd[kid] = tick + 1500; return null; }
+    const w = declare(kid, c.best.id, null, null, { total: true });
     if (w) { m.tcd[kid] = tick + TW_AI_COOLDOWN; m.tlast = tick; } else m.tcd[kid] = tick + 1500;
     return w;
   }
@@ -2297,7 +2321,7 @@ const War = (() => {
   }
 
   return {
-    atWar, declare, canDeclare, declareTotal, canDeclareTotal, aiConsiderTotal,
+    atWar, declare, canDeclare, declareTotal, canDeclareTotal, aiConsiderTotal, aiTotalWhy(kid) { return aiTotalCheck(kid).why; }, aiTotalInfo(kid) { const c = aiTotalCheck(kid); return { why: c.why, best: c.best ? c.best.id : 0, ratio: c.ratio, p: c.p, aggr: c.aggr }; },
     start(attackerKid, defenderKid, casus) { return declare(attackerKid, defenderKid, null, casus); },
     addGoal, order, armiesOf, potentialGoals, feasibleGoals, peaceCost, peaceOffer, forcePeace, godPeace, end, respondOffer,
     score(warId, kid) { const w = S.wars.get(warId); return w ? Math.round((w.score[kid] || 0) * 10) / 10 : 0; },

@@ -1148,6 +1148,83 @@ section('UI targets: targetsFor / targetInfo = the legal set (potentialGoals), r
   note(`targets of A: ${t.length} (${okB.length} ok vs B), far: «${far.reason}», route ${info.route} unsupplied tiles, war odds ${wi2.odds.toFixed(2)}`);
 });
 
+// ================================================================== TOTAL WAR («Вся страна») next to the unchanged limited war
+// (the real total-war suite is tests/totalwar.test.mjs; here: a limited war does not notice the feature, and the new API is safe on junk input)
+section('limited war is untouched by the total-war feature: w.total === false, no w.tw, caps 6 / 60 / 350, one goal that never grows, no capitulation; old saved wars load as limited', () => {
+  const { ctx, a } = mkArena({ popA: 90, popB: 80 });
+  const { S, War } = ctx;
+  const { A, B, chain } = a;
+  War.setAutoPeace(false);
+  assert.deepEqual([War.LIMITS.MAX_ARMIES_K, War.LIMITS.MAX_ARMY, War.LIMITS.MAX_SOLDIERS], [6, 60, 350], 'the limited caps are unchanged');
+  assert.ok(War.TOTAL.MAX_ARMIES_K > War.LIMITS.MAX_ARMIES_K && War.TOTAL.MAX_ARMY > War.LIMITS.MAX_ARMY && War.TOTAL.MAX_SOLDIERS > War.LIMITS.MAX_SOLDIERS, 'the total-war caps are the bigger ones');
+  const w = War.declare(A, B, [chain[1]], 'conquest');
+  assert.ok(w, War.lastError);
+  assert.strictEqual(w.total, false, 'a limited war: total === false');
+  assert.ok(!('tw' in w), 'no total-war state on a limited war');
+  assert.equal(War.isTotal(w.id), false); assert.equal(War.totalInfo(w.id), null); assert.equal(War.capitulation(w.id), null);
+  assert.equal(War.resolveCapitulation(w.id, 'merge'), false, 'nothing to decide in a limited war');
+  assert.equal(w.goals.length, 1, 'exactly the one goal that was asked for');
+  const g0 = War.targetsFor(A).find(e => e.regionId === chain[1]);          // the war card: the entry of a limited war says total:false
+  assert.ok(g0 && g0.atWar && g0.warId === w.id && g0.total === false, 'war target carries total:false ' + JSON.stringify(g0));
+  let maxSold = 0, maxK = 0, maxArmy = 0, looks = 0;
+  run(ctx, 900, () => {
+    const per = new Map(); let sold = 0;
+    for (const x of S.armies.values()) { sold += x.members.length; maxArmy = Math.max(maxArmy, x.members.length); per.set(x.kingdomId, (per.get(x.kingdomId) || 0) + 1); }
+    maxSold = Math.max(maxSold, sold); for (const v of per.values()) maxK = Math.max(maxK, v);
+    assert.equal(w.goals.length, 1, 'the goal list of a limited war never grows by itself');
+    assert.strictEqual(w.total, false); assert.ok(!('tw' in w), 'still no total-war state');
+    looks++;
+  }, 25);
+  note(`limited war: ${looks} looks, soldiers max ${maxSold}, armies per kingdom max ${maxK}, biggest army ${maxArmy}`);
+  assert.ok(maxSold >= 2, 'armies were raised'); assert.ok(maxSold <= 350 && maxK <= 6 && maxArmy <= 60, 'the old caps hold');
+  invariants(ctx, 'limited'); noErrors(ctx, 'limited');
+  assert.ok(War.targetsFor(A).filter(e => e.atWar).every(e => e.total === false), 'every war target still says total:false');
+  // saved wars of the old format (no `total`, no `tw`) load as limited wars; a total war that lost its state gets a fresh one
+  S.wars.set(70, { id: 70, attackers: [A], defenders: [B], aggressor: A, defender: B, started: 0, casus: 'x', ended: true, kills: {}, hist: [] });
+  S.wars.set(71, { id: 71, attackers: [A], defenders: [B], aggressor: A, defender: B, started: 0, casus: 'x', ended: true, total: true, kills: {}, hist: [] });
+  War.afterLoad();
+  assert.strictEqual(S.wars.get(70).total, false); assert.ok(!('tw' in S.wars.get(70)), 'old war: limited');
+  const t71 = S.wars.get(71).tw;
+  assert.ok(t71 && typeof t71 === 'object' && t71.pend === null && t71.cap === 0 && t71.out === '', 'a total war without its state gets a fresh one');
+  JSON.parse(JSON.stringify([...S.wars.values()]));
+});
+
+section('total-war API is safe on junk: dead / missing / identical ids, wrong types, no mutation, no RNG roll, lastError set', () => {
+  const { ctx, a } = mkArena({ popA: 70, popB: 60 });
+  const { S, War, R } = ctx;
+  const { A, B } = a;
+  const snap = () => JSON.stringify({ r: R.getState(), w: [...S.wars.values()], k: [...S.kingdoms.values()].map(k => [k.id, k.infamy, k.stability]), rg: [...S.regions.values()].map(r => [r.id, r.ownerId, r.controllerId]) });
+  const s0 = snap();
+  for (const [x, y] of [[99999, B], [A, 99999], [A, A], [0, 0], [undefined, B], [A, undefined], [NaN, NaN], ['a', 'b'], [null, null], [-5, B]]) {
+    const c = War.canDeclareTotal(x, y);
+    assert.equal(c.ok, false, `canDeclareTotal(${x}, ${y}) is no`); assert.equal(typeof c.reason, 'string'); assert.ok(c.reason.length > 0, 'a reason is given');
+    assert.equal(War.declareTotal(x, y), null, `declareTotal(${x}, ${y}) -> null`);
+    assert.ok(War.lastError && typeof War.lastError === 'string', 'lastError explains');
+  }
+  assert.equal(War.aiConsiderTotal(99999), null); assert.equal(War.aiConsiderTotal(0, true), null); assert.equal(War.aiConsiderTotal(undefined), null);
+  assert.equal(War.aiTotalWhy(99999), 'no kingdom');
+  for (const id of [0, -1, 99999, NaN, undefined, null, 'x']) {
+    assert.equal(War.isTotal(id), false); assert.equal(War.totalInfo(id), null); assert.equal(War.capitulation(id), null); assert.equal(War.resolveCapitulation(id, 'merge'), false);
+  }
+  assert.equal(War.resolveCapitulation(99999, 'nonsense'), false);
+  assert.equal(snap(), s0, 'junk calls neither change the world nor roll the RNG');
+  // a legal question is read-only too and describes what a total war would cost
+  const ok = War.canDeclareTotal(A, B);
+  assert.equal(snap(), s0, 'canDeclareTotal is read-only');
+  assert.ok(ok.info && ok.info.defKid === B && ok.info.regions >= 2 && ok.info.infamy === (ok.info.claim ? War.TOTAL.INFAMY_CLAIM : War.TOTAL.INFAMY) && Array.isArray(ok.info.band) && Array.isArray(ok.info.deep), 'preview ' + JSON.stringify(ok.info));
+  assert.ok(ok.info.armies === War.TOTAL.MAX_ARMIES_K && ok.info.soldiers === War.TOTAL.MAX_SOLDIERS, 'the preview names the caps');
+  // the war ends nicely and the total-war calls keep answering "no" for the dead war
+  const w = War.declareTotal(A, B);
+  assert.ok(w && w.total === true && w.tw && w.goals.length >= 1 && w.tw.base.length >= 2, 'a total war: ' + (w ? w.goals.length + ' goals, country ' + w.tw.base.length : War.lastError));
+  assert.equal(War.canDeclareTotal(A, B).ok, false, 'already at war');
+  assert.ok(/война уже идёт/.test(War.canDeclareTotal(A, B).reason));
+  assert.ok(War.targetsFor(A).filter(e => e.atWar).every(e => e.total === true), 'war targets of a total war carry total:true');
+  assert.ok(War.end(w.id, 'test'));
+  assert.equal(War.isTotal(w.id), true, 'the ended war is still a total war in the log'); assert.equal(War.capitulation(w.id), null); assert.equal(War.resolveCapitulation(w.id, 'merge'), false, 'nothing left to decide');
+  assert.equal(S.wars.get(w.id).tw.pend, null);
+  noErrors(ctx, 'api');
+});
+
 // ==== SECTIONS-END ====
 const failed = results.filter(r => !r.ok);
 console.log(`\n${results.length - failed.length}/${results.length} sections passed`);
