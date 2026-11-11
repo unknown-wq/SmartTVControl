@@ -576,7 +576,7 @@ const Powers = (() => {
       const list = inRad(px, py, r + 0.5);
       for (let i = 0; i < list.length; i++) {
         const u = list[i];
-        const needs = u.hp < u.maxHp || u.sick > S.tick || u.burning > S.tick;
+        const needs = u.hp < u.maxHp || u.sick > S.tick || u.burning > S.tick || u.poison > S.tick; if (u.poison) u.poison = 0;   // plugin «Яд» (17_power_poison.js): healing is the antidote
         if (u.sick > S.tick) { u.sick = 0; u.immune = Math.max(u.immune | 0, S.tick + 400); }
         Units.heal(u, u.maxHp);
         u.hp = u.maxHp;
