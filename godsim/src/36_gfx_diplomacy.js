@@ -108,16 +108,19 @@ const GfxDiplomacy = (() => {
     b.art(['.rr.rr.', 'rmrrrrr', 'rrrrrrr', '.rrrrr.', '..rrr..', '...r...'], IP, 4, 0);
   };
 
-  // ---- call to arms: a golden war horn, mouthpiece low-left, bell up-right, three blasts of sound
+  // ---- call to arms: a curved golden war horn (mouthpiece low-left, flared bell up-right, red band), sound lines
   I.call = (b, IP) => {
-    for (let i = 0; i <= 9; i++) {
-      const x = 1.5 + i * 0.85, y = 12 - i * 0.95, r = 0.9 + i * 0.2;
-      b.disc(x, y, r, IP.Y); b.disc(x - 0.4, y - 0.5, Math.max(0.4, r - 0.8), IP.H);
+    for (let i = 0; i <= 18; i++) {
+      const t = i / 18, u = 1 - t;
+      const x = u * u * 1.5 + 2 * u * t * 1.2 + t * t * 8.6, y = u * u * 12.6 + 2 * u * t * 5.2 + t * t * 5.4, r = 0.8 + t * 1.9;
+      b.disc(x, y, r, IP.Y);
+      b.disc(x - 0.35, y - 0.55, Math.max(0.5, r - 0.75), IP.H);
     }
-    b.disc(9.2, 4.2, 3.1, IP.Y); b.disc(9.4, 4.0, 2.4, IP.N); b.disc(9.1, 3.6, 1.6, IP.d);
-    b.line(5, 7, 7, 9, IP.R); b.line(4, 8, 6, 10, IP.r);
-    b.set(11, 1, IP.w); b.set(12, 2, IP.w); b.set(13, 4, IP.w); b.set(12, 6, IP.w);
-    b.set(10, 0, IP.W); b.set(13, 0, IP.w);
+    b.disc(10.2, 4.6, 3.5, IP.Y); b.disc(9.9, 4.2, 2.9, IP.H);
+    b.disc(10.6, 4.4, 2.3, IP.N); b.disc(10.9, 4.2, 1.6, IP.d);
+    for (let i = 7; i <= 8; i++) { const t = i / 18 + 0.28, u = 1 - t; b.disc(u * u * 1.5 + 2 * u * t * 1.2 + t * t * 8.6, u * u * 12.6 + 2 * u * t * 5.2 + t * t * 5.4, 1.5, IP.r); }
+    b.disc(1.6, 12.4, 0.9, IP.N);
+    b.line(12, 0, 13, 1, IP.w); b.line(13, 3, 13, 4, IP.w); b.line(11, 0, 11, 0, IP.W);
   };
 
   // ---- embargo: a crate under a red prohibition sign
