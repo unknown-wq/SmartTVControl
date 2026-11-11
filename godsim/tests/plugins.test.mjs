@@ -18,7 +18,7 @@ console.log('# headless: registration, dispatch, step, lifecycle, save');
   const { S, Powers, ToolDefs, Fx } = ctx;
   const ids = ToolDefs.filter(t => t.tab === 'powers').map(t => t.id);
   const iDemo = ids.indexOf('demo_blast'), iLastDestroy = Math.max(...ids.map((id, i) => ToolDefs.byId[id].group === 'destroy' ? i : -1)), iBless = ids.findIndex(id => ToolDefs.byId[id].group === 'bless');
-  check('ToolDefs.add puts a new group after its afterGroup and before the next group', iDemo === iLastDestroy + 1 && iDemo < iBless, ids.join(','));
+  check('ToolDefs.add puts a new group after its afterGroup and before the next group', iDemo > iLastDestroy && iDemo < iBless && ids.slice(iLastDestroy + 1, iBless).every(id => ToolDefs.byId[id].group === 'arsenal'), ids.join(','));   // other arsenal plugins (rocket, ...) may sit in the same group
   check('group label registered for the plugin group', ToolDefs.groupLabels.arsenal === 'Арсенал');
   check('re-adding an existing tool id is a no-op', ToolDefs.add({ id: 'demo_blast', tab: 'powers', group: 'x' }) === ToolDefs.byId.demo_blast && ToolDefs.filter(t => t.id === 'demo_blast').length === 1);
   let target = null; for (const u of S.units.values()) { target = u; break; }

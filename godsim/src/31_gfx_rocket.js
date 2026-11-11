@@ -317,7 +317,7 @@ const GfxRocket = (() => {
   }
 
   // ------------------------------------------------------------------ impact burst
-  const BOOM_N = 14, BOOM_W = 88, BOOM_H = 108, BOOM_AX = 44, BOOM_AY = 72, TILE = 16;
+  const BOOM_N = 14, BOOM_W = 120, BOOM_H = 128, BOOM_AX = 60, BOOM_AY = 72, TILE = 16;
   const DEBRIS_COLS = [[P.dirt1, P.dirt2], [P.dirt2, P.dirt3], [P.rock1, P.rock2], [P.dirt1, P.dirt2], [P.leaf1, P.leaf2], [P.dirt2, P.dirt3], [P.rock1, P.rock2], [P.leaf1, P.leaf2]];
   function chunk(pb, x, y, sz, c1, c2, a) {
     x = Math.round(x); y = Math.round(y);
