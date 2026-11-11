@@ -1798,6 +1798,17 @@ const Render = (() => {
   }
 
   // ------------------------------------------------------------------ command overlay: highlights + goal stars
+  /** the region of a kingdom's capital (a TOTAL war marks only that goal with a star: every region of the country is a goal, stars everywhere would be noise) */
+  function isCapitalRegion(rid) {
+    const r = S.regions ? S.regions.get(rid) : null;
+    if (!r || !r.cityIds) return false;
+    for (let i = 0; i < r.cityIds.length; i++) {
+      const c = S.cities.get(r.cityIds[i]);
+      const k = c ? S.kingdoms.get(c.kingdomId) : null;
+      if (k && k.capitalId === c.id) return true;
+    }
+    return false;
+  }
   function drawGoalMarker(rid, color, done, now, pending) {
     const c = regionCenter(rid); if (!c) return;
     if (c.x < vx0 - 3 || c.x > vx1 + 3 || c.y < vy0 - 3 || c.y > vy1 + 3) return;
@@ -1827,6 +1838,7 @@ const Render = (() => {
           const gl = w.goals[i];
           if (!gl || !gl.regionId) continue;
           if (!api.showAllOrders && gl.kid !== cid) continue;
+          if (w.total === true && !isCapitalRegion(gl.regionId)) continue;
           drawGoalMarker(gl.regionId, colorOf(gl.kid), !!gl.done, now, false);
         }
       }
@@ -1866,6 +1878,16 @@ const Render = (() => {
         if (g.x1 < vx0 - 1 || g.x0 > vx1 + 1 || g.y1 < vy0 - 1 || g.y0 > vy1 + 1) continue;
         fillRegion(g, 'rgba(5,8,18,0.42)');
         strokeRegion(g, 'rgba(170,180,200,0.55)', 1.2 * dpr, null, [3 * dpr, 4 * dpr]);
+      }
+    }
+    // «Вся страна»: the rest of the victim's land (beyond the border band) — fainter than the candidates: a pale red wash + a thin dashed rim, no crosshair
+    const deeps = cmd.deep;
+    if (deeps && deeps.length) {
+      for (let i = 0; i < deeps.length; i++) {
+        const g = geomOf(deeps[i]); if (!g) continue;
+        if (g.x1 < vx0 - 1 || g.x0 > vx1 + 1 || g.y1 < vy0 - 1 || g.y0 > vy1 + 1) continue;
+        fillRegion(g, 'rgba(255,72,48,' + (0.045 + 0.035 * pulse).toFixed(3) + ')');
+        strokeRegion(g, 'rgba(255,120,96,0.7)', 1.5 * dpr, 'rgba(30,4,4,0.55)', [5 * dpr, 4 * dpr]);
       }
     }
     const cands = cmd.candidates;

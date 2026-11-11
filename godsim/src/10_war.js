@@ -47,6 +47,20 @@ const War = (() => {
   const PATH_NODES = 4000;
   const PARTIAL = { partial: true };
 
+  // ---- TOTAL WAR («Вся страна»): the same machinery with bigger caps, a frontier chain of goals and a capitulation end-game
+  const TW_MAX_ARMIES_K = 10, TW_MAX_ARMIES_WAR = 8, TW_MAX_ARMY = 80, TW_MAX_SOLDIERS = 600;
+  const TW_FRAC_MIN = 0.35, TW_FRAC_MAX = 0.50, TW_FRAC_HARD = 0.60;       // share of a city's adults that may be conscripted
+  const TW_WEAR = 1.5;                  // war weariness grows 1.5x faster
+  const TW_CHAIN = 20;                  // ticks between two frontier-chain passes
+  const TW_PAUSE = 800;                 // offensive pause after a bloodbath (limited wars: OFFENSIVE_PAUSE)
+  const TW_STALEMATE = 6000;            // ticks without a controller change before autoPeace ends a total war
+  const CAP_SHARE = 0.6;                // capital held + this share of the lead defender's regions occupied = capitulation
+  const CAP_HOLD = 8000;                // THE DURATION KNOB. The government's 'will to resist': while the capitulation condition holds the timer fills by 0.8x (60 % of the country occupied) .. 2x (all of it) per tick, a lapse eats it twice as fast (2:1 attacker vs a 6-region country: ~4700-8500 ticks)
+  const TW_REST = 120;                  // ticks an army consolidates in a captured region (+ 3 x the region's cost) before the AI sends it to the next goal
+  const CAP_ASK = 1800;                 // ticks a commanded winner may think before the AI decides for him
+  const TW_INFAMY = 25, TW_INFAMY_CLAIM = 8;
+  const TW_AI_MIN_TICK = 9000, TW_AI_COOLDOWN = 6000, TW_AI_GLOBAL = 5000, TW_AI_RATIO = 2.5, TW_AI_AGGR = 0.1, TW_AI_CHANCE = 0.3, TW_AI_PEACE = 1500;
+
   // ------------------------------------------------------------------ transient state
   let pairs = new Map(), pairsFor = null, pairsSize = -1;
   let pathBudget = 0;
@@ -74,6 +88,8 @@ const War = (() => {
     if (!m.offers || typeof m.offers !== 'object') m.offers = {};
     if (!m.form || typeof m.form !== 'object') m.form = {};
     if (!m.wiped || typeof m.wiped !== 'object') m.wiped = {};
+    if (!m.tcd || typeof m.tcd !== 'object') m.tcd = {};
+    if (typeof m.tlast !== 'number') m.tlast = 0;
     return m;
   }
   function regionAtPos(x, y) {
@@ -136,6 +152,13 @@ const War = (() => {
   }
   function armyCountK(kid) { let n = 0; for (const a of S.armies.values()) if (a.kingdomId === kid) n++; return n; }
   function soldierCount() { let n = 0; for (const a of S.armies.values()) n += a.members.length; return n; }
+  // total war: the participants may raise more and bigger armies (limited wars keep the old caps exactly)
+  function isTotal(w) { return !!w && w.total === true; }
+  function inTotalWar(kid) { for (const w of S.wars.values()) if (!w.ended && w.total === true && (!kid || sideOf(w, kid))) return true; return false; }
+  function capArmiesK(kid) { return inTotalWar(kid) ? TW_MAX_ARMIES_K : MAX_ARMIES_K; }
+  function capArmiesWar(w) { return isTotal(w) ? TW_MAX_ARMIES_WAR : MAX_ARMIES_WAR; }
+  function capArmy(w) { return isTotal(w) ? TW_MAX_ARMY : MAX_ARMY; }
+  function capSoldiers() { return inTotalWar(0) ? TW_MAX_SOLDIERS : MAX_SOLDIERS; }
 
   // ------------------------------------------------------------------ diplomacy glue (guarded: the module may be a stub)
   function dipOn() { return typeof Diplomacy !== 'undefined' && Diplomacy && !Diplomacy.__stub; }
@@ -172,11 +195,11 @@ const War = (() => {
 
   // ================================================================== ARMIES: formation
   function stageAdult(u) { return Units.stage(u) === 'adult'; }
-  function conscriptFrac(k, defending) {
+  function conscriptFrac(k, defending, total) {
     const r = S.units.get(k.rulerId);
-    let f = 0.27 + (defending ? 0.04 : 0);
+    let f = total ? 0.40 + (defending ? 0.05 : 0) : 0.27 + (defending ? 0.04 : 0);
     if (r) f += Traits.sum(r, 'war') * 0.15 - Traits.sum(r, 'peace') * 0.08;
-    return clamp(f, FRAC_MIN, FRAC_MAX);
+    return total ? clamp(f, TW_FRAC_MIN, TW_FRAC_MAX) : clamp(f, FRAC_MIN, FRAC_MAX);
   }
   /** fighting value of one soldier; archers get a bonus for their range (they shoot while the enemy walks up) */
   function unitPow(u) { return Units.atkOf(u) * (u.hp + 4 * Units.defOf(u)) * (Units.rangeOf(u) > 2 ? 1.5 : 1); }
@@ -197,10 +220,10 @@ const War = (() => {
     out.sort(byRate);
     return out;
   }
-  function wantFromCity(c, frac, recs) {
+  function wantFromCity(c, frac, recs, w) {
     let n = Math.round(recAdults * frac) - recInArmy;
     if (n < MIN_ARMY && recAdults >= 7) n = MIN_ARMY - recInArmy;      // tiny villages can still raise a small band
-    n = Math.min(n, Math.floor(recAdults * FRAC_HARD) - recInArmy, recs.length, MAX_ARMY);
+    n = Math.min(n, Math.floor(recAdults * (isTotal(w) ? TW_FRAC_HARD : FRAC_HARD)) - recInArmy, recs.length, capArmy(w));
     return n > 0 ? n : 0;
   }
   function electLeader(a) {
@@ -241,11 +264,11 @@ const War = (() => {
     if (!k) return 0;
     const side = sideOf(w, kid);
     const have = armiesOfWar(w, kid);
-    let slots = Math.min(MAX_ARMIES_WAR - have.length, MAX_ARMIES_K - armyCountK(kid));
+    let slots = Math.min(capArmiesWar(w) - have.length, capArmiesK(kid) - armyCountK(kid));
     if (maxNew !== undefined) slots = Math.min(slots, maxNew);
-    let budget = MAX_SOLDIERS - soldierCount();
+    let budget = capSoldiers() - soldierCount();
     if (slots <= 0 || budget < MIN_ARMY) return 0;
-    const frac = conscriptFrac(k, side === 2);
+    const frac = conscriptFrac(k, side === 2, isTotal(w));
     const cand = [];
     for (let i = 0; i < k.cities.length; i++) {
       const c = S.cities.get(k.cities[i]);
@@ -254,7 +277,7 @@ const War = (() => {
       for (let j = 0; j < have.length; j++) if (have[j].cityId === c.id) { dup = true; break; }
       if (dup) continue;
       const recs = recruitsOf(c, recBuf);
-      const n = wantFromCity(c, frac, recs);
+      const n = wantFromCity(c, frac, recs, w);
       if (n >= MIN_ARMY) cand.push({ c, n });
     }
     // staging: with a goal pending, muster in the cities that are closest to it BY ROUTE (a bay in between can make the nearest city by air the farthest by land)
@@ -288,13 +311,14 @@ const War = (() => {
     // reinforcements only walk to a front that is not absurdly far away
     if (Util.dist(a.rally.x, a.rally.y, c.x, c.y) > 70) return 0;
     const recs = recruitsOf(c, recBuf);
-    const desired = Math.round(recAdults * conscriptFrac(k, sideOf(w, a.kingdomId) === 2));
-    const target = Math.min(MAX_ARMY, Math.max(a.strength0, desired));
+    const tot = isTotal(w);
+    const desired = Math.round(recAdults * conscriptFrac(k, sideOf(w, a.kingdomId) === 2, tot));
+    const target = Math.min(capArmy(w), Math.max(a.strength0, desired));
     const need = target - a.members.length;
     if (need < 2) return 0;
-    const budget = MAX_SOLDIERS - soldierCount();
+    const budget = capSoldiers() - soldierCount();
     if (budget <= 0) return 0;
-    const n = Math.min(need, 6, budget, Math.floor(recAdults * FRAC_HARD) - recInArmy, recs.length);
+    const n = Math.min(need, tot ? 8 : 6, budget, Math.floor(recAdults * (tot ? TW_FRAC_HARD : FRAC_HARD)) - recInArmy, recs.length);
     let got = 0;
     for (let i = 0; i < n; i++) if (Units.conscript(recs[i], a.id)) got++;
     return got;
@@ -523,7 +547,7 @@ const War = (() => {
     if (o.type === ORD.ATTACK) {
       const cs = sideOf(w, rg.controllerId);
       if (cs === side) {                                       // region taken: HOLD it (never advance on its own)
-        a.order = { type: ORD.HOLD, regionId: rg.id }; o = a.order; a.lock = Math.max(a.lock, tick + 60);
+        a.order = { type: ORD.HOLD, regionId: rg.id }; o = a.order; a.lock = Math.max(a.lock, tick + (isTotal(w) ? TW_REST + 3 * regionCost(rg) : 60));
       } else if (cs !== 3 - side && sideOf(w, rg.ownerId) !== 3 - side) {   // no longer an enemy region (peace deal, collapse): hold here
         a.order = { type: ORD.HOLD, regionId: regionAtPos(rx, ry) }; a.path = null; a.target = null;
         setMode(a, 'hold', tick);
@@ -644,6 +668,14 @@ const War = (() => {
       if (isCapitalRegion(r)) prio += 3;
       out.push({ rid: r.id, prio, lost, pres: pr, kid: r.ownerId });
     }
+    if (isTotal(w)) {          // total war: the land we hold is defended against partisans / raiders too (a captured capital that falls again resets the capitulation timer)
+      for (const r of S.regions.values()) {
+        if (sideOf(w, r.controllerId) !== side || sideOf(w, r.ownerId) !== enemy) continue;
+        const pr = enemy === 1 ? pres1[r.id] : pres2[r.id];
+        if (!pr) continue;
+        out.push({ rid: r.id, prio: 2 + (isCapitalRegion(r) ? 3 : 0) + cityCountOf(r) * 1.5, lost: false, pres: pr, kid: r.controllerId });
+      }
+    }
     out.sort((x, y) => y.prio - x.prio || x.rid - y.rid);
   }
   function enemyPowerIn(w, side, rid) { return powerIn(w, 3 - side, rid); }
@@ -693,6 +725,8 @@ const War = (() => {
     const cmd = k.cmd === true;
     const mine = armiesOfWar(w, kid);
     if (!mine.length) return;
+    const tot = isTotal(w);
+    if (tot && w.tw && w.tw.pend) { surrenderOrders(w, side, mine, tick); return; }       // the lead defender capitulated: nobody attacks, its armies go home
     mine.sort((x, y) => y.pow - x.pow || x.id - y.id);
     const goalRid = pendingGoal(w, kid, side);
     computeThreats(w, side, thr);
@@ -721,6 +755,8 @@ const War = (() => {
           continue;
         }
       }
+      // 1c. total war: the strongest army in the captured capital stays there while the government's will to resist is being broken
+      if (tot && hr && o.type !== ORD.ATTACK && garrisonDuty(w, a, hr.id)) continue;
       // 2. defend / retake threatened own regions
       let did = false;
       for (let t = 0; t < thr.length && t < 6 && !did; t++) {
@@ -744,24 +780,25 @@ const War = (() => {
         did = true;
       }
       if (did) continue;
-      // 3. the war goal (one at a time)
-      if (goalRid && (!cmd || force) && !(!cmd && !force && tick < ((w.pz && w.pz[kid]) || 0))) {
-        const gr = reg(goalRid);
-        if (gr && a.supply >= SUPPLY_LOW && reachable(a, goalRid) && !(a.badRid === goalRid && tick < a.badT) && a.coh > 0.4 &&
+      // 3. the war goal (one at a time; a TOTAL war spreads the armies over the frontier chain, and a commanded kingdom's automatic armies keep advancing too)
+      const gRid = tot && (!cmd || a.auto) ? totalGoalFor(w, a, side, tick) : goalRid;
+      if (gRid && (!cmd || force || tot) && !(!cmd && !force && tick < ((w.pz && w.pz[kid]) || 0))) {
+        const gr = reg(gRid);
+        if (gr && a.supply >= SUPPLY_LOW && reachable(a, gRid) && !(a.badRid === gRid && tick < a.badT) && a.coh > 0.4 &&
             (sideOf(w, gr.controllerId) !== side) && (!cmd || idle)) {
-          if (o.type === ORD.ATTACK && o.regionId === goalRid) continue;
+          if (o.type === ORD.ATTACK && o.regionId === gRid) continue;
           if (o.type === ORD.ATTACK && !idle) continue;
-          if (!cmd) {
+          if (!cmd || (tot && !force)) {
             // never feed an army piecemeal into a stronger defence: wait until the whole side can match it
-            const dp = defencePower(w, side, goalRid);
+            const dp = defencePower(w, side, gRid);
             if (dp > 0 && strikePower(w, side) < dp * ASSAULT_RATIO) { a.lock = tick + 100; continue; }
             // never march into a supply desert: the route must stay (mostly) inside land we feed
             if (feasLeft <= 0) continue;
             feasLeft--;
-            const T = pickTarget(a, w, { type: ORD.ATTACK, regionId: goalRid }, gr, side);
-            if (routeUnsupplied(a.rally.x, a.rally.y, T.x, T.y, a.race, w, side) > MAX_UNSUP) { a.badRid = goalRid; a.badT = tick + 900; continue; }
+            const T = pickTarget(a, w, { type: ORD.ATTACK, regionId: gRid }, gr, side);
+            if (routeUnsupplied(a.rally.x, a.rally.y, T.x, T.y, a.race, w, side) > MAX_UNSUP) { a.badRid = gRid; a.badT = tick + 900; continue; }
           }
-          if (issue(a, ORD.ATTACK, goalRid, true, tick)) { a.lock = tick + 60; if (a.mode === 'hold') a.mode = 'march'; }
+          if (issue(a, ORD.ATTACK, gRid, true, tick)) { a.lock = tick + 60; if (a.mode === 'hold') a.mode = 'march'; }
           continue;
         }
       }
@@ -781,11 +818,12 @@ const War = (() => {
     if (!w.lm || !w.lt || !w.pz) { w.lm = w.lm || {}; w.lt = w.lt || {}; w.pz = w.pz || {}; }
     if (w.lt[kid] !== w.lastChange) { w.lt[kid] = w.lastChange; w.lm[kid] = cur; return; }       // progress: the loss budget starts anew
     if (cur - (w.lm[kid] || 0) < LOSS_LIMIT + 0.7 * soldiersOf(w, kid) || tick < (w.pz[kid] || 0)) return;       // (bigger armies can afford bigger losses)
-    w.pz[kid] = tick + OFFENSIVE_PAUSE; w.lm[kid] = cur;
+    const pause = isTotal(w) ? TW_PAUSE : OFFENSIVE_PAUSE;
+    w.pz[kid] = tick + pause; w.lm[kid] = cur;
     for (const a of S.armies.values()) {
       if (a.warId !== w.id || a.kingdomId !== kid || a.dis || a.order.type !== ORD.ATTACK || !isGoal(w, sideOf(w, kid), a.order.regionId)) continue;
       const home = homeOf(a);
-      if (home && issue(a, ORD.HOLD, home.regionId | 0, true, tick)) a.lock = tick + OFFENSIVE_PAUSE;
+      if (home && issue(a, ORD.HOLD, home.regionId | 0, true, tick)) a.lock = tick + pause;
     }
   }
   function aiWar(w, tick) {
@@ -940,7 +978,7 @@ const War = (() => {
         w.score[kid] = Math.round(cur * 100) / 100;
         w.ev[kid] = Math.round((w.ev[kid] || 0) * 0.997 * 100) / 100;
         // weariness: slow with time, faster with lost land (casualties add instantly in onUnitDied)
-        const wv = (w.wear[kid] || 0) + 0.09 + lostOwn * 0.05;
+        const wv = (w.wear[kid] || 0) + (0.09 + lostOwn * 0.05) * (w.total === true ? TW_WEAR : 1);
         w.wear[kid] = Math.round(Math.min(100, wv) * 100) / 100;
       }
     }
@@ -954,17 +992,20 @@ const War = (() => {
   }
   function exhaustCheck(w, tick) {
     if (!mod().autoPeace) return;
-    if (tick - w.started >= STALEMATE && tick - w.lastChange >= STALEMATE) { exhaust(w, 'stalemate', 0); return; }
+    if (w.tw && w.tw.pend) return;                                  // a capitulation is being settled
+    const stale = isTotal(w) ? TW_STALEMATE : STALEMATE;
+    const breaking = isTotal(w) && w.tw && w.tw.sure > 0;           // the government's will is being broken (the whole country is held, nothing changes hands any more): no stalemate, the timer ends it
+    if (!breaking && tick - w.started >= stale && tick - w.lastChange >= stale) { exhaust(w, 'stalemate', 0); return; }
     for (let s = 1; s <= 2; s++) {
       const p = leadOf(w, s), k = kget(p);
       if (!k) continue;
       if (typeof k.stability === 'number' && k.stability < 20) {
         if (!w.low[p]) w.low[p] = tick;
-        else if (tick - w.low[p] >= 120) { exhaust(w, 'stability', s); return; }
+        else if (tick - w.low[p] >= 120) { if (isTotal(w) && s === 2) { /* (the capitulation meter counts the collapse of the state itself) */ } else { exhaust(w, 'stability', s); return; } }
       } else if (w.low[p]) delete w.low[p];
       if (tick - w.started > 600 && soldiersOf(w, p) === 0 && recruitable(p) < MIN_ARMY) {
         if (!w.mp[p]) w.mp[p] = tick;
-        else if (tick - w.mp[p] >= 600) { exhaust(w, 'manpower', s); return; }
+        else if (tick - w.mp[p] >= 600) { if (isTotal(w) && s === 2) capitulate(w, tick, 'manpower'); else exhaust(w, 'manpower', s); return; }
       } else if (w.mp[p]) delete w.mp[p];
     }
     const a = leadOf(w, 1), d = leadOf(w, 2);
@@ -1033,6 +1074,7 @@ const War = (() => {
     if (!w || w.ended) return false;
     cfg = cfg || {};
     w.ended = true; w.endedAt = S.tick; w.how = how;
+    if (w.tw && typeof w.tw === 'object') w.tw.pend = null;
     rebuildPairs();
     const regs = cfg.regions || [];
     const winner = cfg.winner | 0;
@@ -1102,6 +1144,7 @@ const War = (() => {
     if (!w || w.ended) { res.reason = 'война окончена'; return res; }
     const X = sideOf(w, fromKid);
     if (!X) { res.reason = 'это королевство не участвует в войне'; return res; }
+    if (w.tw && w.tw.pend) { res.reason = 'противник уже капитулировал: решите судьбу страны'; return res; }
     const Y = 3 - X;
     const wanted = normRegions(terms.regions);
     const rids = [];
@@ -1283,12 +1326,15 @@ const War = (() => {
     const pa = milPower(aggKid), pb = Math.max(1, milPower(defKid));
     return Math.round(clamp(22 + 30 * Math.pow(pa / pb, 0.7), 20, 95));
   }
-  function mkWar(aggKid, defKid, casus) {
-    return {
+  function mkWar(aggKid, defKid, casus, total) {
+    const w = {
       id: S.id(), attackers: [aggKid], defenders: [defKid], aggressor: aggKid, defender: defKid, started: S.tick, casus, ended: false,
       goals: [], score: {}, kills: {}, lastChange: S.tick, hist: [],
       losses: {}, wear: {}, ev: {}, occ: {}, low: {}, mp: {}, lm: {}, lt: {}, pz: {}, endedAt: 0, how: '',
+      total: !!total,
     };
+    if (total) { w.tw = mkTw(); w.tw.base = []; for (const r of S.regions.values()) if (r.ownerId === defKid) w.tw.base.push(r.id); }
+    return w;
   }
   function addMemberToWar(w, side, kid) {
     const arr = sideArr(w, side);
@@ -1299,16 +1345,24 @@ const War = (() => {
     if (w.wear[kid] === undefined) w.wear[kid] = 0;
     if (w.ev[kid] === undefined) w.ev[kid] = 0;
   }
-  function declare(aggKid, defKid, goalRegionIds, casus) {
+  /** opts: {total: true} = a TOTAL war against the whole country (frontier chain of goals, capitulation end-game; see the TOTAL WAR block) */
+  function declare(aggKid, defKid, goalRegionIds, casus, opts) {
     lastError = '';
+    const total = !!(opts && opts.total === true);
     const chk = canDeclare(aggKid, defKid, casus);
     if (!chk.ok) return fail(chk.reason);
-    // goals: enemy-owned regions next to our land
+    if (total && casus !== 'god' && casus !== 'rebel') { const tp = totalProblem(aggKid, defKid); if (tp) return fail(tp); }
+    // goals: enemy-owned regions next to our land (a total war: every one of them, the capital's region first)
     const allowed = Regions.attackable(aggKid, defKid);
     const goals = [];
     const want = normRegions(goalRegionIds);
     for (let i = 0; i < want.length; i++) if (allowed.indexOf(want[i]) >= 0 && reg(want[i]).ownerId === defKid && goals.indexOf(want[i]) < 0) goals.push(want[i]);
-    if (want.length && !goals.length) return fail('цель недоступна: нужен регион противника рядом с вашими землями');
+    if (total) {
+      const rk = goalRank(aggKid, defKid);
+      for (let i = 0; i < rk.length; i++) if (goals.indexOf(rk[i].rid) < 0) goals.push(rk[i].rid);
+      const cr = capitalRegionOf(defKid), ci = goals.indexOf(cr);
+      if (ci > 0) { goals.splice(ci, 1); goals.unshift(cr); }
+    } else if (want.length && !goals.length) return fail('цель недоступна: нужен регион противника рядом с вашими землями');
     if (!goals.length) {
       let ranked = feasibleGoals(aggKid, defKid);
       if (!ranked.length) ranked = potentialGoals(aggKid, defKid);
@@ -1318,20 +1372,20 @@ const War = (() => {
       }
     }
     if (!goals.length) return fail('нет достижимых целей: нужен регион противника рядом с вашими землями');
-    if (!casus) casus = Regions.hasClaim(goals[0], aggKid) ? 'claim' : 'conquest';
-    const w = mkWar(aggKid, defKid, casus);
+    if (!casus) casus = total ? totalCasus(aggKid, defKid) : (Regions.hasClaim(goals[0], aggKid) ? 'claim' : 'conquest');
+    const w = mkWar(aggKid, defKid, casus, total);
     addMemberToWar(w, 1, aggKid); addMemberToWar(w, 2, defKid);
-    // allies / vassals: the defender's side first, then the attacker's
+    // allies / vassals: the defender's side first, then the attacker's (a total war draws them in more readily)
     const dAllies = alliesOf(defKid), aAllies = alliesOf(aggKid);
     for (let i = 0; i < dAllies.length; i++) {
       const al = dAllies[i];
       if (al === aggKid || w.attackers.indexOf(al) >= 0 || !kget(al)) continue;
-      if (willJoin(al, defKid, aggKid, true)) addMemberToWar(w, 2, al);
+      if (willJoin(al, defKid, aggKid, true) || (total && !alliedTo(al, aggKid) && warCount(al) < 3 && R.chance(0.6))) addMemberToWar(w, 2, al);
     }
     for (let i = 0; i < aAllies.length; i++) {
       const al = aAllies[i];
       if (al === defKid || w.defenders.indexOf(al) >= 0 || !kget(al)) continue;
-      if (willJoin(al, aggKid, defKid, false)) addMemberToWar(w, 1, al);
+      if (willJoin(al, aggKid, defKid, false) || (total && !alliedTo(al, defKid) && warCount(al) < 3 && R.chance(0.4))) addMemberToWar(w, 1, al);
     }
     for (let i = 0; i < goals.length; i++) w.goals.push({ kid: aggKid, regionId: goals[i], done: false });
     S.wars.set(w.id, w);
@@ -1341,12 +1395,15 @@ const War = (() => {
     const ka = S.kingdoms.get(aggKid), kd = S.kingdoms.get(defKid);
     const gn = goals.map(rname).join(', ');
     const g0 = reg(goals[0]);
-    Log.add('Королевство «' + ka.name + '» объявило войну королевству «' + kd.name + '»: ' + (goals.length > 1 ? 'цели — регионы ' : 'цель — регион ') + gn +
+    if (total) updateGoals(w);
+    Log.add('Королевство «' + ka.name + '» объявило ' + (total ? 'тотальную ' : '') + 'войну королевству «' + kd.name + '»: ' +
+      (total ? 'цель — вся страна (' + Regions.ofKingdom(defKid).length + ' ' + Util.plural(Regions.ofKingdom(defKid).length, 'регион', 'региона', 'регионов') + ')' : (goals.length > 1 ? 'цели — регионы ' : 'цель — регион ') + gn) +
       (w.attackers.length + w.defenders.length > 2 ? ' (с союзниками)' : ''), LOG.WAR, g0.cx, g0.cy, aggKid);
-    Hist.add(ka, 'Начало войны с «' + kd.name + '»'); Hist.add(kd, 'Нападение «' + ka.name + '»');
+    Hist.add(ka, 'Начало ' + (total ? 'тотальной ' : '') + 'войны с «' + kd.name + '»'); Hist.add(kd, 'Нападение «' + ka.name + '»' + (total ? ': тотальная война' : ''));
     for (let i = 1; i < w.attackers.length; i++) Log.add('Королевство ' + kname(w.attackers[i]) + ' вступило в войну на стороне ' + kname(aggKid), LOG.WAR, -1, -1, w.attackers[i]);
     for (let i = 1; i < w.defenders.length; i++) Log.add('Королевство ' + kname(w.defenders[i]) + ' вступило в войну на стороне ' + kname(defKid), LOG.WAR, -1, -1, w.defenders[i]);
     Bus.emit('warDeclared', w);
+    if (total) totalDeclared(w);
     // armies: every belligerent musters; orders follow the goals
     const all = w.attackers.concat(w.defenders);
     for (let i = 0; i < all.length; i++) raiseFor(w, all[i]);
@@ -1441,7 +1498,7 @@ const War = (() => {
     if (!w || w.ended) return 0;
     n = n | 0;
     if (n < MIN_ARMY || a.members.length - n < MIN_ARMY) return 0;
-    if (armyCountK(a.kingdomId) >= MAX_ARMIES_K) return 0;
+    if (armyCountK(a.kingdomId) >= capArmiesK(a.kingdomId)) return 0;
     const home = S.cities.get(a.cityId);
     if (!home) return 0;
     const b = mkArmy(a.kingdomId, home, w);
@@ -1461,7 +1518,7 @@ const War = (() => {
   function merge(aId, bId) {
     const a = S.armies.get(aId), b = S.armies.get(bId);
     if (!a || !b || a === b || a.kingdomId !== b.kingdomId || a.warId !== b.warId) return false;
-    if (a.members.length + b.members.length > MAX_ARMY) return false;
+    if (a.members.length + b.members.length > capArmy(S.wars.get(a.warId))) return false;
     for (const id of b.members.slice()) { const u = S.units.get(id); if (u) Units.conscript(u, a.id); }
     a.strength0 = Math.max(a.strength0, a.members.length);
     S.armies.delete(b.id);
@@ -1479,7 +1536,7 @@ const War = (() => {
         if (!S.armies.has(b.id) || b.dis || b.kingdomId !== a.kingdomId || b.mode === 'gather') continue;
         if (a.order.type !== b.order.type || a.order.regionId !== b.order.regionId) continue;
         if (Util.dist(a.rally.x, a.rally.y, b.rally.x, b.rally.y) > 6) continue;
-        if (a.members.length + b.members.length > MAX_ARMY) continue;
+        if (a.members.length + b.members.length > capArmy(w)) continue;
         if (a.members.length >= b.members.length) merge(a.id, b.id); else merge(b.id, a.id);
       }
     }
@@ -1493,10 +1550,12 @@ const War = (() => {
     if (killer && killer.kingdomId && killer.kingdomId !== vk) w = warBetween(killer.kingdomId, vk);
     if (!w && u.armyId) { const a = S.armies.get(u.armyId); if (a) w = S.wars.get(a.warId) || null; }
     if (!w || w.ended || !w.losses || !w.wear || !w.ev || !w.kills) return;
+    // a total war lasts for generations: soldiers who die of old age / plague (or are erased by a god) are not war losses - counting them would wear both sides out for nothing
+    if (w.total === true && !(killer && killer.kingdomId) && (cause === 'age' || cause === 'disease' || cause === 'erase' || cause === 'lost')) return;
     const soldier = u.armyId > 0;
     if (w.losses[vk] === undefined) return;
     w.losses[vk] += 1;
-    w.wear[vk] = Math.min(100, (w.wear[vk] || 0) + (soldier ? 0.12 : 0.04));
+    w.wear[vk] = Math.min(100, (w.wear[vk] || 0) + (soldier ? 0.12 : 0.04) * (w.total === true ? TW_WEAR : 1));
     w.ev[vk] = clamp((w.ev[vk] || 0) - (soldier ? 0.4 : 0.15), -30, 40);
     if (killer && killer.kingdomId && killer.kingdomId !== vk && w.kills[killer.kingdomId] !== undefined) {
       w.kills[killer.kingdomId] += 1;
@@ -1528,6 +1587,7 @@ const War = (() => {
   const stepList = [];
   function step(tick) {
     if (tick === undefined) tick = S.tick;
+    if (tick % 50 === 11) aiTotalPass(tick);                     // (rare: the AI may start a total war; runs in peace time too)
     if (S.wars.size === 0 && S.armies.size === 0) return;
     if (pairsFor !== S.wars || pairsSize !== S.wars.size) rebuildPairs();
     pathBudget = 3; feasLeft = 2;
@@ -1551,9 +1611,9 @@ const War = (() => {
       if (!w.ev || !w.wear || !w.occ) normalizeWar(w);
       const ph = tick + w.id;
       if (ph % OCC_PERIOD === 0) processOccupation(w, tick);
-      if (ph % AI_PERIOD === 3) aiWar(w, tick);
-      if (ph % SCORE_PERIOD === 7) scoreWar(w, tick);
-      if (ph % WAR_PERIOD === 11) { exhaustCheck(w, tick); if (!w.ended) mergePass(w); }
+      if (ph % AI_PERIOD === 3) { if (w.total === true && ph % TW_CHAIN === 3) totalChain(w); aiWar(w, tick); }
+      if (ph % SCORE_PERIOD === 7) { scoreWar(w, tick); if (w.total === true && !w.ended) totalProgress(w, tick); }
+      if (ph % WAR_PERIOD === 11 && !w.ended) { if (w.total === true) totalPend(w, tick); if (!w.ended) exhaustCheck(w, tick); if (!w.ended) mergePass(w); }
       if (ph % REFILL_PERIOD === 17 && !w.ended) refillWar(w, tick);
     }
     if (tick % 120 === 5) housekeeping(tick);
@@ -1567,6 +1627,7 @@ const War = (() => {
       if (th.kid !== kid) continue;
       if (!covered(w, side, th.rid, null) && (th.lost || th.pres)) return true;
     }
+    if (isTotal(w)) return !(w.tw && w.tw.pend);        // total war = full mobilisation: every city that can spare soldiers gets an army (raiseFor honours the caps)
     // (a commanded kingdom whose armies were all destroyed in battle recruits one new army while a goal waits, otherwise the player is stuck in his war;
     //  an army the player sent home himself is never re-raised)
     if (cmd) return mine.length === 0 && S.tick - (mod().wiped[kid] || -99999) < 1500 && pendingGoal(w, kid, side) > 0;
@@ -1598,8 +1659,8 @@ const War = (() => {
         const mine = armiesOfWar(w, kid);
         for (let j = 0; j < mine.length; j++) refillArmy(mine[j], w);
         const key = w.id + ':' + kid;
-        if (mine.length < MAX_ARMIES_WAR && tick >= (m.form[key] || 0) && needArmy(w, kid, mine, k.cmd === true)) {
-          m.form[key] = tick + 300;
+        if (mine.length < capArmiesWar(w) && tick >= (m.form[key] || 0) && needArmy(w, kid, mine, k.cmd === true)) {
+          m.form[key] = tick + (isTotal(w) ? 120 : 300);
           if (raiseFor(w, kid, 1) > 0) aiKingdom(w, kid, tick, k.cmd === true);
         }
       }
@@ -1627,10 +1688,433 @@ const War = (() => {
     }
   }
 
+  // ================================================================== TOTAL WAR («Вся страна»)
+  //   w.total === true  and  w.tw = {cap, own, occ, fell, fellLog, peak, sure, pend, out, base, why, dn, an}  (JSON-safe, saved with the war)
+  //     cap   capitulation progress of the lead defender 0..100 (smoothed)      own / occ  its regions: owned / occupied by our side
+  //     fell  id of the capital city our side holds (0 = none; sticky while the government has fled and the old capital is still held)
+  //     peak  most soldiers the defender side ever had   sure  consecutive score passes the capitulation condition held
+  //     pend  null | {t, kid, to}: the lead defender capitulated and the COMMANDED winner decides (merge / vassal / regions; the AI decides after CAP_ASK)
+  //     out   how it ended: '' | 'merge' | 'vassal' | 'regions'
+  //   Differences from a limited war: bigger caps (<= 10 armies per kingdom, <= 80 men per army, <= 600 soldiers, 35-50 % of the adults), weariness x1.5,
+  //   a FRONTIER CHAIN of goals (every enemy region next to land our side controls / our armies stand in, capital first) so armies keep advancing, and the
+  //   END-GAME: capital held + 60 % of the regions (or progress 100) => the lead defender capitulates, the war ends for BOTH sides (the defender's allies get a
+  //   white peace + truce) and the winner takes the whole country (merge), makes it a vassal or takes the occupied regions.
+  const TW_DEFAULTS = { cap: 0, own: 0, occ: 0, fell: 0, fellLog: 0, peak: 0, sure: 0, pend: null, out: '', base: null, why: '', dn: '', an: '' };
+  function mkTw() { return { cap: 0, own: 0, occ: 0, fell: 0, fellLog: 0, peak: 0, sure: 0, pend: null, out: '', base: null, why: '', dn: '', an: '' }; }
+  function twOf(w) {
+    if (!w.tw || typeof w.tw !== 'object' || Array.isArray(w.tw)) w.tw = mkTw();
+    const t = w.tw;
+    for (const k in TW_DEFAULTS) {
+      if (k === 'pend' || k === 'base') { if (t[k] === undefined) t[k] = null; }
+      else if (typeof t[k] !== typeof TW_DEFAULTS[k]) t[k] = TW_DEFAULTS[k];
+    }
+    return t;
+  }
+  function capitalCity(kid) { const k = S.kingdoms.get(kid); return k ? (S.cities.get(k.capitalId) || null) : null; }
+  function capitalRegionOf(kid) { const c = capitalCity(kid); return c ? c.regionId | 0 : 0; }
+  /** the city that makes "the capital is held" true: the capital itself, or (the government fled) the old capital while our side still holds it */
+  function heldCapital(w, D, t) {
+    const cc = capitalCity(D);
+    if (cc && cc.occupierId && sideOf(w, cc.occupierId) === 1) return cc;
+    if (t.fell) { const fc = S.cities.get(t.fell); if (fc && fc.kingdomId === D && fc.occupierId && sideOf(w, fc.occupierId) === 1) return fc; }
+    if (!cc) {                  // the government has no seat at all (its capital died out / was destroyed during the occupation) and every city that is left is ours: the biggest one stands in for the capital
+      const kd = kget(D);
+      let best = null;
+      if (kd && kd.cities.length) {
+        for (let i = 0; i < kd.cities.length; i++) {
+          const c = S.cities.get(kd.cities[i]);
+          if (!c) continue;
+          if (!c.occupierId || sideOf(w, c.occupierId) !== 1) return null;
+          if (!best || c.pop > best.pop) best = c;
+        }
+      }
+      return best;
+    }
+    return null;
+  }
+  function sideSoldiers(w, s) { let n = 0; for (const a of S.armies.values()) if (a.warId === w.id && !a.dis && sideOf(w, a.kingdomId) === s) n += a.members.length; return n; }
+  /** read-only snapshot of the end-game state of a total war (no mutation) */
+  function totalStats(w) {
+    const t = twOf(w), D = leadOf(w, 2), A = leadOf(w, 1);
+    const st = { D, A, own: 0, occ: 0, hc: null, sold: sideSoldiers(w, 2), soldAtt: sideSoldiers(w, 1), stab: 100, wear: 0, target: 0, sure: false };
+    if (!D) return st;
+    // "the country" = the regions it owned when it was attacked (land it settles later during the war does not move the 60 % goal)
+    if (!Array.isArray(t.base)) { t.base = []; for (const r of S.regions.values()) if (r.ownerId === D) t.base.push(r.id); }
+    for (let i = 0; i < t.base.length; i++) {
+      const r = S.regions.get(t.base[i]);
+      if (!r || r.ownerId !== D) continue;
+      st.own++;
+      if (sideOf(w, r.controllerId) === 1) st.occ++;
+    }
+    st.hc = heldCapital(w, D, t);
+    const kd = S.kingdoms.get(D);
+    st.stab = kd && typeof kd.stability === 'number' ? kd.stability : 100;
+    st.wear = w.wear[D] || 0;
+    const share = st.own ? st.occ / st.own : 0;
+    let target = (st.hc ? 40 : 0) + Math.min(1, share / CAP_SHARE) * 60;
+    const peak = Math.max(t.peak, st.sold);
+    if (peak >= 6 && S.tick - w.started > 400) target += (1 - Math.min(1, st.sold / peak)) * 10;       // the field armies are gone
+    target += clamp((50 - st.stab) / 30, 0, 1) * 5 + clamp((st.wear - 40) / 60, 0, 1) * 5;           // the state falls apart
+    st.target = Math.min(100, target);
+    st.sure = !!(st.hc && st.own > 0 && st.occ >= Math.ceil(st.own * CAP_SHARE - 1e-9)) || st.target >= 99.99;
+    st.rate = st.sure ? 0.8 + 1.2 * clamp((share - CAP_SHARE) / (1 - CAP_SHARE), 0, 1) : 0;        // the more of the country is held, the faster the will to resist breaks
+    return st;
+  }
+  /** (every score pass) progress + the capitulation trigger */
+  function totalProgress(w, tick) {
+    if (w.ended) return;
+    const t = twOf(w);
+    if (t.pend) return;
+    const st = totalStats(w);
+    if (!st.D || !st.A) return;
+    t.own = st.own; t.occ = st.occ;
+    t.peak = Math.max(t.peak, st.sold);
+    const hc = st.hc;
+    t.fell = hc ? hc.id : 0;
+    if (hc && t.fellLog !== hc.id) {
+      t.fellLog = hc.id;
+      Log.add('Столица ' + kname(st.D) + ' — город «' + hc.name + '» — пала: страна на грани капитуляции', LOG.WAR, hc.x, hc.y, st.A);
+    } else if (!hc && t.fellLog) t.fellLog = 0;
+    t.sure = st.sure ? Math.min(CAP_HOLD, t.sure + SCORE_PERIOD * st.rate) : Math.max(0, t.sure - 2 * SCORE_PERIOD);
+    t.sure = Math.round(t.sure * 10) / 10;
+    // the meter: occupation pressure fills the first half (capital + the regions), the government's will to resist the second
+    let cur = t.cap;
+    const goal = 0.5 * st.target + 50 * (t.sure / CAP_HOLD);
+    cur += (goal - cur) * 0.3;
+    if (Math.abs(goal - cur) < 0.4) cur = goal;
+    t.cap = Math.round(clamp(cur, 0, 100) * 10) / 10;
+    if (t.sure >= CAP_HOLD) capitulate(w, tick, 'conquest');
+  }
+  /** the frontier chain: every region of the lead defender next to land our side controls (or where our armies stand) becomes a goal; the capital goes first */
+  function totalChain(w) {
+    if (!rgOn() || w.ended) return;
+    const t = twOf(w);
+    if (t.pend) return;
+    const D = leadOf(w, 2);
+    if (!D) return;
+    const owner = kget(w.aggressor) ? w.aggressor : leadOf(w, 1);
+    for (let i = 0; i < w.attackers.length; i++) {
+      if (!kget(w.attackers[i])) continue;
+      const list = Regions.attackable(w.attackers[i], D);
+      for (let j = 0; j < list.length; j++) {
+        const rid = list[j], r = reg(rid);
+        if (!r || r.ownerId !== D || isGoal(w, 1, rid)) continue;
+        w.goals.push({ kid: owner, regionId: rid, done: sideOf(w, r.controllerId) === 1 });
+      }
+    }
+    const cr = capitalRegionOf(D);
+    if (cr) for (let i = 1; i < w.goals.length; i++) if (w.goals[i].regionId === cr && sideOf(w, w.goals[i].kid) === 1) { w.goals.unshift(w.goals.splice(i, 1)[0]); break; }
+    updateGoals(w);
+  }
+  /**
+   * The goal an idle army of a TOTAL war takes: the capital if it is reachable, else the pending goal nearest to the army. Armies that stand together
+   * therefore pick the same region (a doom stack marches on region by region), armies that start in different cities pick their own nearest goal.
+   */
+  function totalGoalFor(w, a, side, tick) {
+    let best = 0, bs = 1e12;
+    for (let i = 0; i < w.goals.length; i++) {
+      const g = w.goals[i];
+      if (g.done || sideOf(w, g.kid) !== side) continue;
+      const gr = reg(g.regionId);
+      if (!gr || sideOf(w, gr.controllerId) === side) continue;
+      if (gr.controllerId && gr.controllerId !== gr.ownerId && !sideOf(w, gr.controllerId)) continue;       // a third kingdom holds it (another war)
+      if ((a.badRid === g.regionId && tick < a.badT) || !reachable(a, g.regionId)) continue;
+      const sc = Util.dist(a.rally.x, a.rally.y, gr.cx, gr.cy) + (isCapitalRegion(gr) ? -1000 : 0);
+      if (sc < bs) { bs = sc; best = g.regionId; }
+    }
+    return best;
+  }
+  /** is `a` the strongest army of its side in the captured capital region while the capitulation timer runs? (then it stays) */
+  function garrisonDuty(w, a, rid) {
+    const t = w.tw;
+    if (!t || !(t.sure > 0) || !t.fell) return false;
+    const hc = S.cities.get(t.fell);
+    if (!hc || (hc.regionId | 0) !== rid) return false;
+    const side = sideOf(w, a.kingdomId);
+    for (const e of S.armies.values()) {
+      if (e === a || e.warId !== w.id || e.dis || e.members.length === 0 || sideOf(w, e.kingdomId) !== side || e.mode === 'retreat') continue;
+      if (regionAtPos(e.rally.x, e.rally.y) !== rid) continue;
+      if (e.pow > a.pow || (e.pow === a.pow && e.id < a.id)) return false;      // a stronger one is there: it stays, this one may go
+    }
+    return true;
+  }
+  /** the lead defender capitulated and the winner decides (or the war is being wound up): the loser's armies go home, the winner's hold their ground */
+  function surrenderOrders(w, side, mine, tick) {
+    for (let i = 0; i < mine.length; i++) {
+      const a = mine[i];
+      if (a.dis) continue;
+      if (side === 2) { if (a.order.type !== ORD.RETREAT || a.order.regionId) { issue(a, ORD.RETREAT, 0, true, tick); a.mode = 'retreat'; a.since = tick; } }
+      else if (a.order.type === ORD.ATTACK) issue(a, ORD.HOLD, regionAtPos(a.rally.x, a.rally.y), true, tick);
+    }
+  }
+
+  // ---- the end-game: capitulation and its outcomes
+  function outcomeOptions(w, D, A) {
+    const kd = kget(D), ka = kget(A);
+    const held = [];
+    const hr = heldRegions(w, 1);
+    for (let i = 0; i < hr.length; i++) { const r = reg(hr[i]); if (r && r.ownerId === D) held.push(hr[i]); }
+    const dead = { ok: false, reason: 'королевство не существует' };
+    const m = kd && ka ? Kingdoms.canAnnex(D, A, 'merge') : dead;
+    let v = kd && ka ? Kingdoms.canAnnex(D, A, 'vassal') : dead;
+    if (v.ok && kd.overlordId) v = { ok: false, reason: 'уже чей-то вассал' };
+    if (v.ok && ka.overlordId) v = { ok: false, reason: 'вы сами вассал' };
+    return { merge: m, vassal: v, regions: { ok: true, reason: '', rids: held } };
+  }
+  /** the AI winner's choice: the same people are folded into the realm, a much weaker foreign state becomes a vassal, otherwise the occupied land is taken */
+  function chooseOutcome(w, D, A) {
+    const kd = kget(D), ka = kget(A);
+    if (!kd || !ka) return 'regions';
+    const op = outcomeOptions(w, D, A);
+    const pD = Math.max(1, Kingdoms.pop(D)), pA = Math.max(1, Kingdoms.pop(A));
+    const same = kd.culture === ka.culture || (kd.race === ka.race && opinionOf(A, D) >= -40);
+    const cities = ka.cities.length + kd.cities.length;
+    let pol = { war: 0, greed: 0 };
+    try { pol = Kingdoms.policy(A) || pol; } catch (e) { /* ignore */ }
+    const greedy = (pol.greed || 0) + (pol.war || 0) * 0.5 > 0.25;
+    if (op.merge.ok && same && cities <= 8 && pD <= pA * 1.1) return 'merge';
+    if (op.vassal.ok && pA >= pD * 1.6 && (!same || cities > 8)) return 'vassal';
+    if (op.merge.ok && greedy && cities <= 6 && pD <= pA * 0.5) return 'merge';
+    if (op.vassal.ok && pA >= pD * 1.3 && !greedy) return 'vassal';
+    return 'regions';
+  }
+  /** the lead defender gives up: the winner decides at once (AI) or is asked (commanded) */
+  function capitulate(w, tick, why) {
+    if (!w || w.ended) return false;
+    const t = twOf(w);
+    if (t.pend) return false;
+    const D = leadOf(w, 2), A = leadOf(w, 1);
+    if (!D || !A) return false;
+    t.cap = 100; t.sure = 0; t.why = why || '';
+    t.dn = S.kingdoms.get(D) ? S.kingdoms.get(D).name : ''; t.an = S.kingdoms.get(A) ? S.kingdoms.get(A).name : '';          // (the names survive a merge: the UI and the log read them)
+    const cc = capitalCity(D);
+    const ka = kget(A), kd = S.kingdoms.get(D);
+    Log.add('Королевство ' + kname(D) + ' капитулировало перед королевством ' + kname(A), LOG.WAR, cc ? cc.x : -1, cc ? cc.y : -1, A);
+    Hist.add(kd, 'Капитуляция перед «' + (ka ? ka.name : '?') + '»');
+    if (ka) Hist.add(ka, 'Капитуляция «' + (kd ? kd.name : '?') + '»');
+    if (ka && ka.cmd === true) {
+      t.pend = { t: tick, kid: D, to: A };
+      for (let s = 1; s <= 2; s++) { const arr = sideArr(w, s); for (let i = 0; i < arr.length; i++) surrenderOrders(w, s, armiesOfWar(w, arr[i]), tick); }
+      Bus.emit('capitulation', w, D, A);
+      return true;
+    }
+    return resolveCap(w, chooseOutcome(w, D, A), why);
+  }
+  /** apply the winner's decision: 'merge' (annex), 'vassal' or 'regions' (the occupied regions change hands); the war ends for BOTH sides either way */
+  function resolveCap(w, how, why) {
+    if (!w || w.ended) return false;
+    const t = twOf(w);
+    const D = t.pend ? t.pend.kid : leadOf(w, 2), A = t.pend ? t.pend.to : leadOf(w, 1);
+    t.pend = null;
+    const kd = kget(D), ka = kget(A);
+    if (!kd || !ka) return finishWar(w, 'collapse', { winner: 0, regions: [], quiet: false, note: 'противник пал' });
+    const op = outcomeOptions(w, D, A);
+    if (how === 'merge' && !op.merge.ok) how = op.vassal.ok ? 'vassal' : 'regions';
+    else if (how === 'vassal' && !op.vassal.ok) how = op.merge.ok ? 'merge' : 'regions';
+    else if (how !== 'merge' && how !== 'vassal') how = 'regions';
+    const nD = kname(D), nA = kname(A), cc = capitalCity(D);
+    const cx = cc ? cc.x : -1, cy = cc ? cc.y : -1;
+    t.out = how;
+    if (how === 'merge') {
+      if (kd.cmd === true) kd.cmd = false;                  // (Kingdoms.annex would hand the player's command to the conqueror: the commanded realm simply falls)
+      finishWar(w, 'capitulation', { winner: A, regions: [], quiet: true, why: 'merge' });
+      const ok = Kingdoms.annex(D, A, 'merge');
+      if (!ok) Log.add('Королевство ' + nD + ' капитулировало: мир с ' + nA, LOG.PEACE, cx, cy, A);
+      else Log.add('Капитуляция: земли ' + nD + ' отошли королевству ' + nA + ' — страна присоединена целиком', LOG.PEACE, cx, cy, A);
+    } else if (how === 'vassal') {
+      finishWar(w, 'capitulation', { winner: A, regions: [], vassal: true, quiet: true, why: 'vassal' });
+      if (kget(D) && kd.overlordId === A) kd.stability = Math.max(kd.stability, 45);      // (a war-torn vassal at stability < 25 would break free again within a few hundred ticks)
+      Log.add('Капитуляция: ' + nD + ' признаёт власть королевства ' + nA + ' и остаётся его вассалом', LOG.PEACE, cx, cy, A);
+    } else {
+      const rids = op.regions.rids.slice();
+      finishWar(w, 'capitulation', { winner: A, regions: rids, quiet: true, why: 'regions' });
+      const nm = rids.map(rname);
+      Log.add('Капитуляция: ' + nD + ' уступает ' + (nm.length ? (nm.length > 1 ? 'регионы ' : 'регион ') + nm.slice(0, 4).join(', ') + (nm.length > 4 ? ' и ещё ' + (nm.length - 4) : '') : 'ничего (белый мир)') + ' — мир с ' + nA, LOG.PEACE, cx, cy, A);
+    }
+    void why;
+    return true;
+  }
+  /** (war pass) a pending decision of a commanded winner: the AI decides when the player let go of the realm or the time is up */
+  function totalPend(w, tick) {
+    const t = twOf(w);
+    if (!t.pend) return;
+    const ka = kget(t.pend.to);
+    if (!ka || ka.cmd !== true || tick - t.pend.t >= CAP_ASK) resolveCap(w, ka ? chooseOutcome(w, t.pend.kid, t.pend.to) : 'regions', 'auto');
+  }
+
+  // ---- declaration of a total war
+  function totalCasus(a, d) {
+    if (!rgOn()) return 'conquest';
+    let claimed = 0, own = 0;
+    const cr = capitalRegionOf(d);
+    for (const r of S.regions.values()) if (r.ownerId === d) { own++; if (r.claims.indexOf(a) >= 0) claimed++; }
+    return own && (claimed >= Math.max(1, Math.ceil(own / 3)) || (cr && Regions.hasClaim(cr, a))) ? 'claim' : 'conquest';
+  }
+  /** what a total war would cost the aggressor (for the UI card and the AI) */
+  function totalPreview(a, d) {
+    const kd = kget(d);
+    const o = { defKid: d, regions: 0, cities: 0, pop: 0, capitalRegion: 0, capital: '', band: [], deep: [], myPow: 0, theirPow: 0, ratio: 1, odds: 0.5, allies: [], friends: [],
+      claim: false, casus: 'conquest', infamy: TW_INFAMY, opinion: -55, wear: TW_WEAR, armies: TW_MAX_ARMIES_K, soldiers: TW_MAX_SOLDIERS, share: [Math.round(TW_FRAC_MIN * 100), Math.round(TW_FRAC_MAX * 100)] };
+    if (!kd || !rgOn()) return o;
+    const band = Regions.attackable(a, d);
+    for (const r of S.regions.values()) {
+      if (r.ownerId !== d) continue;
+      o.regions++;
+      if (band.indexOf(r.id) >= 0) o.band.push(r.id); else o.deep.push(r.id);
+    }
+    o.cities = kd.cities.length; o.pop = Kingdoms.pop(d);
+    const cc = capitalCity(d);
+    if (cc) { o.capitalRegion = cc.regionId | 0; o.capital = cc.name; }
+    const pw = peacePowers(a, d);
+    o.myPow = pw.my; o.theirPow = pw.their; o.ratio = ratioOf(pw.my, pw.their); o.odds = oddsOf(pw.my, pw.their);
+    o.allies = pw.j.def; o.friends = pw.j.att;
+    o.casus = totalCasus(a, d); o.claim = o.casus === 'claim';
+    o.infamy = o.claim ? TW_INFAMY_CLAIM : TW_INFAMY;
+    o.opinion = o.claim ? -32 : -55;
+    return o;
+  }
+  /** kingdom-level reason why a TOTAL war a -> d is impossible ('' = allowed) */
+  function totalProblem(a, d) {
+    const p = declareProblem(a, d);
+    if (p) return p;
+    if (inTotalWar(a)) return 'вы уже ведёте тотальную войну';
+    if (warCount(a) >= 2) return 'слишком много войн для тотальной';
+    if (!rgOn() || !Regions.attackable(a, d).length) return 'нет границы по суше: «вся страна» недоступна';
+    return '';
+  }
+  function canDeclareTotal(a, d) {
+    const out = { ok: false, reason: '', info: null };
+    const ka = kget(a), kd = kget(d);
+    if (!ka || !kd || a === d) { out.reason = 'королевство не существует'; return out; }
+    if (!rgOn()) { out.reason = 'нет карты регионов'; return out; }
+    if (atWar(a, d)) { out.reason = 'война уже идёт'; return out; }
+    out.info = totalPreview(a, d);
+    out.reason = totalProblem(a, d);
+    out.ok = !out.reason;
+    return out;
+  }
+  function declareTotal(aggKid, defKid, casus) { return declare(aggKid, defKid, null, casus || null, { total: true }); }
+  /** the extra consequences of a total war (on top of Diplomacy's «Нападение»): infamy 25 (8 with a claim), opinion «Тотальная война» with the victim and the world */
+  function totalDeclared(w) {
+    const A = w.aggressor, D = w.defender, ka = S.kingdoms.get(A);
+    if (!ka) return;
+    const claim = w.casus === 'claim', free = w.casus === 'rebel' || w.casus === 'ally' || w.casus === 'god';
+    const justified = claim || free;
+    const target = justified ? (claim ? TW_INFAMY_CLAIM : 0) : TW_INFAMY;
+    const base = dipOn() ? (justified ? (claim ? 3 : 0) : 10) : 0;                    // what Diplomacy's war declaration has added already
+    ka.infamy = clamp((ka.infamy || 0) + (target - base), 0, 100);
+    if (!dipOn()) return;
+    try {
+      Diplomacy.addOpinion(A, D, justified ? -10 : -20, 'Тотальная война');
+      for (const o of S.kingdoms.values()) if (o.id !== A && o.id !== D) Diplomacy.addOpinion(A, o.id, justified ? -2 : -6, 'Тотальная война');
+    } catch (e) { /* ignore */ }
+  }
+
+  // ---- read-only views for the UI
+  function totalInfoOf(w) {
+    if (!isTotal(w)) return null;
+    const t = twOf(w), st = totalStats(w);
+    return {
+      warId: w.id, att: st.A, def: st.D, progress: Math.round(t.cap * 10) / 10, own: st.own, occ: st.occ,
+      capital: st.hc ? 'held' : (capitalCity(st.D) ? 'free' : 'none'), capCity: st.hc ? st.hc.id : 0, capRegion: capitalRegionOf(st.D),
+      sold: st.sold, soldAtt: st.soldAtt, peak: Math.max(t.peak, st.sold), stab: Math.round(st.stab), wear: Math.round(st.wear * 10) / 10,
+      pending: !!t.pend, left: t.pend ? Math.max(0, CAP_ASK - (S.tick - t.pend.t)) : 0, out: t.out, need: Math.ceil(st.own * CAP_SHARE - 1e-9),
+      hold: t.sure, holdLeft: Math.max(0, CAP_HOLD - t.sure), holdTotal: CAP_HOLD, holding: st.sure, rate: st.rate || 0, pressure: Math.round(st.target * 10) / 10,
+    };
+  }
+  /** the pending decision of a commanded winner: {warId, kid (the capitulated country), to, left, suggest, options:{merge,vassal,regions:{ok,reason,...}}} | null */
+  function capitulationOf(w) {
+    if (!w || w.ended || !isTotal(w) || !w.tw || !w.tw.pend) return null;
+    const p = w.tw.pend, op = outcomeOptions(w, p.kid, p.to);
+    const kd = kget(p.kid);
+    return {
+      warId: w.id, kid: p.kid, to: p.to, left: Math.max(0, CAP_ASK - (S.tick - p.t)), total: CAP_ASK, suggest: chooseOutcome(w, p.kid, p.to),
+      options: { merge: op.merge, vassal: op.vassal, regions: { ok: true, reason: '', rids: op.regions.rids.slice() } },
+      country: kd ? { regions: Regions.ofKingdom(p.kid).length, cities: kd.cities.length, pop: Kingdoms.pop(p.kid) } : { regions: 0, cities: 0, pop: 0 },
+    };
+  }
+  function resolveCapitulation(warId, how) {
+    const w = S.wars.get(warId);
+    if (!w || w.ended || !w.tw || !w.tw.pend) { lastError = 'нечего решать'; return false; }
+    return resolveCap(w, how === 'merge' || how === 'vassal' ? how : 'regions', 'player');
+  }
+
+  // ---- the AI declares a total war now and then: much stronger, aggressive ruler, a land neighbour, at peace, long cooldowns
+  function racePopOk(race) { const st = S.stats, p = st && st.pop; if (!p || p[race] === undefined || !(st.popTotal >= 100)) return true; return p[race] >= 120; }
+  /**
+   * Pure check (no dice, no mutation): may this AI kingdom start a total war now? -> {why, best, ratio, p}
+   *   why = '' when every condition holds (only the dice remain), else the FIRST failing condition (short, English; used by tests / diagnostics)
+   */
+  function aiTotalCheck(kid) {
+    const out = { why: '', best: null, ratio: 0, p: 0, aggr: 0 };
+    const k = kget(kid);
+    const m = mod();
+    const tick = S.tick;
+    if (!k || !rgOn()) { out.why = 'no kingdom'; return out; }
+    if (k.cmd === true) { out.why = 'commanded'; return out; }
+    if (k.overlordId) { out.why = 'vassal'; return out; }
+    if (tick < TW_AI_MIN_TICK) { out.why = 'too early'; return out; }
+    if (tick - k.born < 3000) { out.why = 'young'; return out; }
+    if ((m.tcd[kid] || 0) > tick) { out.why = 'cooldown'; return out; }                          // cooldowns: per kingdom ...
+    if (m.tlast && tick - m.tlast < TW_AI_GLOBAL) { out.why = 'world cooldown'; return out; }     // ... and for the whole world
+    if (warCount(kid) > 0) { out.why = 'at war'; return out; }                                   // no other war
+    if (tick - (k.peaceAt || 0) < TW_AI_PEACE) { out.why = 'recent war'; return out; }           // and some peace first
+    if (k.stability < 55 || !S.units.has(k.rulerId)) { out.why = 'unstable'; return out; }
+    if (Kingdoms.pop(kid) < 60) { out.why = 'small'; return out; }
+    const pol = Kingdoms.policy(kid);
+    const aggr = pol.war - pol.peace * 0.7;
+    out.aggr = aggr;
+    if (aggr < TW_AI_AGGR) { out.why = 'peaceful ruler'; return out; }                           // an aggressive ruler
+    const myCap = capitalCity(kid);
+    let best = null, br = 0, nbn = 0, why2 = 'no neighbour', mr = 0;
+    if (dipOn()) {
+      const nb = Diplomacy.neighbors(kid);
+      for (let i = 0; i < nb.length; i++) {
+        const d = kget(nb[i].kid);
+        nbn++;
+        if (!d || d.id === kid) continue;
+        if (totalProblem(kid, d.id)) { if (why2 === 'no neighbour') why2 = 'neighbour not allowed'; continue; }
+        if (Kingdoms.pop(d.id) < 24 || !racePopOk(d.race)) { if (why2 === 'no neighbour' || why2 === 'neighbour not allowed') why2 = 'victim too small'; continue; }
+        const dc = capitalCity(d.id);
+        if (myCap && dc && !World.sameLand(myCap.x, myCap.y, dc.x, dc.y)) { if (why2 === 'no neighbour' || why2 === 'neighbour not allowed') why2 = 'other landmass'; continue; }     // a land neighbour on the same landmass
+        const pw = peacePowers(kid, d.id), ratio = ratioOf(pw.my, pw.their);
+        if (ratio > mr) mr = ratio;
+        if (ratio < TW_AI_RATIO) { why2 = 'not strong enough'; continue; }
+        if (ratio > br) { br = ratio; best = d; }
+      }
+    }
+    out.ratio = mr;
+    if (!best) { out.why = nbn ? why2 : 'no neighbour'; return out; }
+    out.best = best; out.ratio = br;
+    out.p = TW_AI_CHANCE * clamp(0.6 + (aggr - TW_AI_AGGR) / 0.5, 0.6, 1.4) * clamp(br / 3.5, 0.7, 1.4);        // 0.13 (a barely warlike ruler, 2.5x) .. 0.59 (a fierce one, 5x); looked at every 400 ticks
+    return out;
+  }
+  /** evaluate one kingdom; `force` skips the dice (tests). Returns the new War or null. */
+  function aiConsiderTotal(kid, force) {
+    const c = aiTotalCheck(kid);
+    if (c.why || !c.best) return null;
+    const m = mod(), tick = S.tick;
+    if (!force && !R.chance(c.p)) { m.tcd[kid] = tick + 400; return null; }                        // (it thought about it and let it be: looks again in 400 ticks)
+    if (!feasibleGoals(kid, c.best.id).length) { m.tcd[kid] = tick + 1500; return null; }
+    const w = declare(kid, c.best.id, null, null, { total: true });
+    if (w) { m.tcd[kid] = tick + TW_AI_COOLDOWN; m.tlast = tick; } else m.tcd[kid] = tick + 1500;
+    return w;
+  }
+  function aiTotalPass(tick) {
+    if (tick < TW_AI_MIN_TICK || S.kingdoms.size < 2) return;
+    const m = mod();
+    if (m.tlast && tick - m.tlast < TW_AI_GLOBAL) return;
+    const slot = (tick / 50) | 0;
+    for (const k of Array.from(S.kingdoms.values())) {
+      if ((slot + k.id) % 8 !== 0) continue;                                                        // every kingdom looks around every 400 ticks
+      if (aiConsiderTotal(k.id, false)) return;
+    }
+  }
+
   // ================================================================== LIFECYCLE
   function newWorld() {
     pairs = new Map(); pairsFor = null; pairsSize = -1;
-    S.mod.war = { autoPeace: autoPref, truce: {}, offers: {}, form: {}, wiped: {} };
+    S.mod.war = { autoPeace: autoPref, truce: {}, offers: {}, form: {}, wiped: {}, tcd: {}, tlast: 0 };
   }
   /** wars built by hand (tests, old saves) get every field the module relies on */
   function normalizeWar(w) {
@@ -1642,6 +2126,7 @@ const War = (() => {
     if (typeof w.lastChange !== 'number') w.lastChange = w.started || 0;
     if (typeof w.endedAt !== 'number') w.endedAt = 0;
     if (typeof w.how !== 'string') w.how = '';
+    if (w.total === true) twOf(w); else if (w.total === undefined) w.total = false;
     for (const kid of w.attackers.concat(w.defenders)) {
       if (w.score[kid] === undefined) w.score[kid] = 0;
       if (w.kills[kid] === undefined) w.kills[kid] = 0;
@@ -1739,7 +2224,7 @@ const War = (() => {
     const foe = sideOf(w, r.controllerId) === 3 - s ? r.controllerId : r.ownerId;
     const their = defencePower(w, s, r.id);
     return { regionId: r.id, defenderKid: kget(foe) ? foe : leadOf(w, 3 - s), ok: !reason, reason, atWar: true, warId: w.id, adjacent: true, claim: !!Regions.hasClaim(r.id, kid),
-      cost: regionCost(r), odds: oddsOf(strike, their), ratio: ratioOf(strike, their), goal: isGoal(w, s, r.id) };
+      cost: regionCost(r), odds: oddsOf(strike, their), ratio: ratioOf(strike, their), goal: isGoal(w, s, r.id), total: isTotal(w) };
   }
   function targetsFor(kid) {
     const out = [];
@@ -1852,7 +2337,7 @@ const War = (() => {
   }
 
   return {
-    atWar, declare, canDeclare,
+    atWar, declare, canDeclare, declareTotal, canDeclareTotal, aiConsiderTotal, aiTotalWhy(kid) { return aiTotalCheck(kid).why; }, aiTotalInfo(kid) { const c = aiTotalCheck(kid); return { why: c.why, best: c.best ? c.best.id : 0, ratio: c.ratio, p: c.p, aggr: c.aggr }; },
     start(attackerKid, defenderKid, casus) { return declare(attackerKid, defenderKid, null, casus); },
     addGoal, order, armiesOf, potentialGoals, feasibleGoals, peaceCost, peaceOffer, forcePeace, godPeace, end, respondOffer,
     score(warId, kid) { const w = S.wars.get(warId); return w ? Math.round((w.score[kid] || 0) * 10) / 10 : 0; },
@@ -1871,7 +2356,13 @@ const War = (() => {
     regionCost(rid) { const r = reg(rid); return r ? regionCost(r) : 0; },
     pendingOffer(warId) { const o = mod().offers[warId]; return o ? { from: o.from, to: o.to, regions: o.regions.slice(), vassal: !!o.vassal } : null; },
     goalsOf(warId) { const w = S.wars.get(warId); return w ? w.goals.map(g => ({ kid: g.kid, regionId: g.regionId, done: g.done })) : []; },
+    isTotal(warId) { const w = S.wars.get(warId); return isTotal(w); },
+    totalInfo(warId) { const w = S.wars.get(warId); return totalInfoOf(w); },
+    capitulation(warId) { return capitulationOf(S.wars.get(warId)); },
+    resolveCapitulation,
     get lastError() { return lastError; },
     LIMITS: { MAX_ARMIES_K, MAX_ARMIES_WAR, MAX_ARMY, MAX_SOLDIERS, TRUCE, STALEMATE },
+    TOTAL: { MAX_ARMIES_K: TW_MAX_ARMIES_K, MAX_ARMIES_WAR: TW_MAX_ARMIES_WAR, MAX_ARMY: TW_MAX_ARMY, MAX_SOLDIERS: TW_MAX_SOLDIERS, FRAC: [TW_FRAC_MIN, TW_FRAC_MAX], WEAR: TW_WEAR,
+      INFAMY: TW_INFAMY, INFAMY_CLAIM: TW_INFAMY_CLAIM, CAP_SHARE, CAP_ASK, CAP_HOLD, REST: TW_REST, AI_MIN_TICK: TW_AI_MIN_TICK, AI_COOLDOWN: TW_AI_COOLDOWN, AI_RATIO: TW_AI_RATIO },
   };
 })();

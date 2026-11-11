@@ -115,8 +115,8 @@ await section('wars: armies take the goals and HOLD them (no advance beyond the 
   }
   assert.ok(extra <= Math.max(2, occ * 0.1), `armies advanced beyond their goals ${extra}x (${occ} occupations)`);
   assert.ok(long <= Math.max(1, n * 0.1), `${long} wars lasted longer than 12000 ticks`);
-  // a war ends only through peace / exhaustion / collapse, never by itself on goal completion
-  for (const r of reps) for (const w of r.wars) assert.ok(['exhaustion', 'peace', 'force', 'god', 'collapse', 'destroyed', 'vassal'].includes(w.how), 'end reason ' + w.how);
+  // a war ends only through peace / exhaustion / collapse (or the capitulation of a TOTAL war), never by itself on goal completion
+  for (const r of reps) for (const w of r.wars) assert.ok(['exhaustion', 'peace', 'force', 'god', 'collapse', 'destroyed', 'vassal', 'capitulation'].includes(w.how), 'end reason ' + w.how);
 });
 
 await section('kingdoms are not wiped out too fast; the event feed stays readable', () => {

@@ -677,12 +677,301 @@ async function states(w, h, name) {
   check(`${name}: no page errors`, b.errors.length === 0, b.errors.slice(0, 3).join(' || '));
   await b.close();
 }
+// ===========================================================================================================================
+// 3. TOTAL WAR («Вся страна»): the toggle on the war card, lit + deep regions, the second-tap confirm, banner, HUD progress, drawer block,
+//    the capitulation sheet (each outcome), AI-declared total war, the player as the defender, nothing left behind
+// ===========================================================================================================================
+async function totalSetup(H, o) {
+  const { b, E } = H;
+  const arena = await buildArena(H, { chain: 7, popA: 110, ...(o || {}) });
+  if (!arena) return null;
+  await E(A => window.__god.UI.commandKingdom(A, {}), arena.A); await b.wait(1100);
+  return arena;
+}
+/** the whole country occupied + the government's will to resist almost spent -> the capitulation arrives within a few passes */
+const forceCapitulation = (H, A, B) => H.E(([A, B]) => {
+  const g = window.__god, w = g.War.active().find(x => x.total);
+  for (const r of g.S.regions.values()) if (r.ownerId === B) g.Regions.setController(r.id, A, 'test');
+  g.step(75);
+  w.tw.sure = g.War.TOTAL.CAP_HOLD - 40;
+  for (let i = 0; i < 12 && !(w.ended || w.tw.pend); i++) g.step(30);
+  return { id: w.id, ended: w.ended, pend: !!w.tw.pend };
+}, [A, B]);
+if (!only || only.includes('total')) {
+  const H = await open(390, 844);
+  const { b, E } = H;
+  await b.wait(1600);
+  const arena = await totalSetup(H);
+  check('total war arena: A | five empty regions of B | B\'s capital region', !!arena, arena ? JSON.stringify(arena) : 'none');
+  if (!arena) { console.log('cannot continue'); process.exit(1); }
+  const { A, B, rMid, rCap } = arena;
+  const nameA = await E(A => window.__god.S.kingdoms.get(A).name, A), nameB = await E(B => window.__god.S.kingdoms.get(B).name, B);
+
+  section('3.1 the card has a segmented toggle [Регион | Вся страна]; «Регион» is the default and works as before');
+  await H.focusRegion(rMid, 8);
+  await H.tapRegion(rMid);
+  const c0 = await E(() => { const g = window.__god, sh = document.getElementById('sheet'); const c = g.UI.cmd; return { mode: c.mode, tm: c.target && c.target.mode, seg: [...sh.querySelectorAll('.tc-seg button')].map(x => ({ t: x.textContent.trim(), on: x.classList.contains('on'), h: Math.round(x.getBoundingClientRect().height), w: Math.round(x.getBoundingClientRect().width) })),
+    go: !!sh.querySelector('[data-act="tgt-go"]:not(.hide)'), goT: !!sh.querySelector('[data-act="tgt-total"]:not(.hide)'), cost: !!sh.querySelector('.tc-cost:not(.hide)'), deep: g.Render.cmd.deep.length, goals: g.Render.cmd.goals.length, h: sh.getBoundingClientRect().height }; });
+  check('the toggle: two buttons «Регион» / «Вся страна», «Регион» on, both >= 44 px high', c0.mode === 'tc' && c0.seg.length === 2 && c0.seg[0].t === 'Регион' && c0.seg[1].t === 'Вся страна' && c0.seg[0].on && !c0.seg[1].on && c0.seg.every(s => s.h >= 44), JSON.stringify(c0.seg));
+  check('default mode region: «Объявить войну», the cost bar, the goal star, no deep regions', c0.tm === 'region' && c0.go && !c0.goT && c0.cost && c0.deep === 0 && c0.goals === 1, JSON.stringify(c0));
+  await H.shot('t01_card_region_mode');
+
+  section('3.2 «Вся страна»: the whole country glows (the border band bright, the deep regions dimmer), the card tells the honest costs');
+  await H.tapSel('[data-act="tgt-mode-total"]'); await b.wait(500);
+  const c1 = await E(([A, B]) => {
+    const g = window.__god, sh = document.getElementById('sheet'); const c = g.UI.cmd; const rc = g.Render.cmd; const pre = g.War.canDeclareTotal(A, B).info;
+    return { tm: c.target.mode, seg: [...sh.querySelectorAll('.tc-seg button')].map(x => x.classList.contains('on')), sub: sh.querySelector('.tc-sub').textContent, chips: [...sh.querySelectorAll('.tc-goals .chip')].map(x => x.textContent.trim()),
+      odds: sh.querySelector('.tc-odds b').textContent, lines: [...sh.querySelectorAll('.tc-line')].map(x => x.textContent), go: !!sh.querySelector('[data-act="tgt-go"]:not(.hide)'), goT: sh.querySelector('[data-act="tgt-total"]:not(.hide)') && sh.querySelector('[data-act="tgt-total"]').textContent.trim(),
+      costHidden: sh.querySelector('.tc-cost').classList.contains('hide'), rc: { cand: rc.candidates.slice(), deep: rc.deep.slice(), goals: rc.goals.length, target: rc.targetKid, arrows: rc.arrows.length }, pre: { band: pre.band, deep: pre.deep, regions: pre.regions, cities: pre.cities, pop: pre.pop, capital: pre.capital }, h: sh.getBoundingClientRect().height, vh: innerHeight, cmdTarget: c.target.total }; }, [A, B]);
+  check('toggle switched: «Вся страна» on, the single-region button replaced by the red «Объявить тотальную войну»', c1.tm === 'total' && c1.seg[1] === true && c1.seg[0] === false && c1.go === false && /Объявить тотальную войну/.test(c1.goT || ''), JSON.stringify({ tm: c1.tm, seg: c1.seg, goT: c1.goT }));
+  const nReg = c1.pre.regions, nCit = c1.pre.cities;                                 // (B settles a seventh region while the arena warms up: the numbers come from the sim)
+  const regW = n => n + ' ' + (n % 10 === 1 && n % 100 !== 11 ? 'регион' : (n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20)) ? 'региона' : 'регионов');
+  check('header sub + chips: regions / cities / people / capital of the target country', c1.sub.startsWith('Вся страна: ' + regW(nReg)) && c1.chips.length === 4 && c1.chips[0].startsWith(regW(nReg)) && /^1 город/.test(c1.chips[1]) && /жит\.$/.test(c1.chips[2]) && /^Столица: /.test(c1.chips[3]), c1.sub + ' | ' + c1.chips.join(' / '));
+  check('the numbers come from War.canDeclareTotal (regions / cities / capital)', nReg >= 6 && nCit === 1 && c1.chips[3] === 'Столица: ' + c1.pre.capital, JSON.stringify(c1.pre));
+  check('the whole country is lit: the border band as attack targets, every other region of the country as «deep» (Render.cmd.deep)', JSON.stringify(c1.rc.cand) === JSON.stringify(c1.pre.band) && JSON.stringify(c1.rc.deep.slice().sort((x, y) => x - y)) === JSON.stringify(c1.pre.deep.slice().sort((x, y) => x - y)) && c1.rc.deep.length === nReg - c1.pre.band.length && c1.rc.target === B, JSON.stringify(c1.rc));
+  check('the single-goal star is gone (every region is a target), the arrow shows the attack, the cost bar is hidden', c1.rc.goals === 0 && c1.rc.arrows >= 1 && c1.costHidden);
+  check('honest costs: infamy +25, mobilisation 35–50 %, weariness x1.5, the victory condition', c1.lines.some(l => /Без повода: дурная слава \+25/.test(l)) && c1.lines.some(l => /Мобилизация: 35–50%/.test(l) && /600 солдат/.test(l)) && c1.lines.some(l => /Усталость от войны ×1,5/.test(l)) && c1.lines.some(l => /Цель: занять столицу и 60% регионов/.test(l)), c1.lines.join(' | '));
+  check('odds row with honest words', /:\s*1/.test(c1.odds) && /перевес|равны|сильнее|слабее/.test(c1.odds), c1.odds);
+  check('the card stays at most 62% of the screen (the map stays visible)', c1.h <= c1.vh * 0.62 + 1, Math.round(c1.h) + 'px');
+  await H.shot('t02_card_total_mode');
+  await H.focusRegion(rMid, 5.5); await H.frames(4); await b.wait(500);
+  await H.shot('t03_total_whole_country_lit');
+  const lit = await E(() => window.__god.Render.debugInfo().political);
+  check('the map keeps drawing (no render errors)', lit && lit.hasRegions === true && b.errors.length === 0, b.errors.slice(0, 2).join(' || '));
+
+  section('3.3 switching back and forth: «Регион» restores the single goal; a tap on a lit region of that country leaves the total mode');
+  await H.tapSel('[data-act="tgt-mode-region"]'); await b.wait(300);
+  const c2 = await E(() => { const g = window.__god, sh = document.getElementById('sheet'); return { tm: g.UI.cmd.target.mode, deep: g.Render.cmd.deep.length, goals: g.Render.cmd.goals.slice(), go: !!sh.querySelector('[data-act="tgt-go"]:not(.hide)'), goT: !!sh.querySelector('[data-act="tgt-total"]:not(.hide)'), cost: !sh.querySelector('.tc-cost').classList.contains('hide'), sub: sh.querySelector('.tc-sub').textContent }; });
+  check('back to «Регион»: the goal is starred again, deep regions off, the cost bar and «Объявить войну» back', c2.tm === 'region' && c2.deep === 0 && c2.goals.length === 1 && c2.goals[0] === rMid && c2.go && !c2.goT && c2.cost && /Цель — регион/.test(c2.sub), JSON.stringify(c2));
+  await H.tapSel('[data-act="tgt-mode-total"]'); await b.wait(300);
+  await H.tapRegion(rMid); await b.wait(300);
+  const c3 = await E(() => { const g = window.__god; return { tm: g.UI.cmd.target && g.UI.cmd.target.mode, mode: g.UI.cmd.mode }; });
+  check('a tap on the lit border region while «Вся страна» is on returns to the region mode (the card stays)', c3.mode === 'tc' && c3.tm === 'region', JSON.stringify(c3));
+  await H.tapSel('[data-act="tgt-mode-total"]'); await b.wait(300);
+
+  section('3.4 no modal: the first tap on the red button arms it («Подтвердить»), it disarms by itself; the second tap declares');
+  await H.tapSel('[data-act="tgt-total"]'); await b.wait(300);
+  const a1 = await E(() => { const g = window.__god, sh = document.getElementById('sheet'); const x = sh.querySelector('[data-act="tgt-total"]'); return { wars: g.War.active().length, armed: g.UI.cmd.target.armed, txt: x.textContent.trim(), cls: x.className, modal: !!document.querySelector('.m-card'), lines: [...sh.querySelectorAll('.tc-line')].map(l => l.textContent).slice(-1)[0] }; });
+  check('armed: «Подтвердить тотальную войну», pulsing, a warning line, no war yet, no modal', a1.wars === 0 && a1.armed === true && /Подтвердить войну/.test(a1.txt) && /arm/.test(a1.cls) && !a1.modal && /Это не отменить/.test(a1.lines || ''), JSON.stringify(a1));
+  await H.shot('t04_card_armed');
+  await b.wait(4600);
+  const a2 = await E(() => { const g = window.__god, sh = document.getElementById('sheet'); const x = sh.querySelector('[data-act="tgt-total"]'); return { wars: g.War.active().length, armed: g.UI.cmd.target && g.UI.cmd.target.armed, txt: x && x.textContent.trim() }; });
+  check('without a second tap it disarms after a few seconds (no war)', a2.wars === 0 && a2.armed === false && /Объявить тотальную войну/.test(a2.txt || ''), JSON.stringify(a2));
+  await E(() => { document.getElementById('feed').innerHTML = ''; });
+  await H.tapSel('[data-act="tgt-total"]'); await b.wait(250);
+  await H.tapSel('[data-act="tgt-total"]'); await b.wait(350);
+  const d1 = await E(() => { const g = window.__god; const ws = g.War.active(); const w = ws[0]; return { n: ws.length, total: w && w.total, agg: w && w.aggressor, def: w && w.defender, goals: w && w.goals.map(x => x.regionId), casus: w && w.casus, infamy: g.S.kingdoms.get(w.aggressor).infamy, mode: g.UI.cmd.mode, banner: g.UI.banner, bannerTxt: document.querySelector('.wb-card') && document.querySelector('.wb-card').textContent, bannerCls: document.querySelector('.wb-card') && document.querySelector('.wb-card').className, feed: [...document.querySelectorAll('#feed .fl')].map(x => x.textContent), armies: g.War.armiesOf(g.UI.cmdKid).length }; });
+  check('the second tap declares ONE total war (War.declareTotal): total === true, aggressor A, defender B, goals = the border band', d1.n === 1 && d1.total === true && d1.agg === A && d1.def === B && d1.goals.length === 1 && d1.goals[0] === rMid, JSON.stringify(d1));
+  check('infamy +25 for the aggressor, casus conquest', d1.infamy === 25 && d1.casus === 'conquest', d1.infamy + ' ' + d1.casus);
+  check('the banner says «ТОТАЛЬНАЯ ВОЙНА» with both names and «вся страна»', d1.banner && /ТОТАЛЬНАЯ ВОЙНА/.test(d1.bannerTxt) && d1.bannerTxt.includes(nameA) && d1.bannerTxt.includes(nameB) && d1.bannerTxt.includes('вся страна (' + regW(nReg) + ')') && /total/.test(d1.bannerCls), d1.bannerTxt);
+  check('no duplicate feed line for the declaration; back to the HUD; armies mustered', !d1.feed.some(t => /объявило/.test(t)) && d1.mode === 'hud' && d1.armies >= 1, JSON.stringify(d1.feed) + ' ' + d1.mode);
+  await H.shot('t05_total_banner');
+  await b.wait(3900);
+  check('the banner dismisses itself', (await E(() => window.__god.UI.banner)) === null);
+
+  section('3.5 the HUD shows the progress: «Столица ✗ · 0/6 рег. · до капитуляции 100%» + a bar; the drawer card has the meter');
+  await b.wait(500);
+  const h1 = await E(() => { const r = document.querySelector('.hud-tw'); return r && { txt: r.textContent.replace(/\s+/g, ' ').trim(), h: Math.round(r.getBoundingClientRect().height), w: Math.round(r.getBoundingClientRect().width), fill: getComputedStyle(r.querySelector('.tw-bar i')).transform, chips: document.querySelectorAll('.hud-wars .hwc').length, sheetH: Math.round(document.getElementById('sheet').getBoundingClientRect().height), vh: innerHeight }; });
+  check('HUD progress row for the total war: title, capital ✗, regions, remaining %', h1 && /Тотальная война · «/.test(h1.txt) && /Столица ✗/.test(h1.txt) && h1.txt.includes('0/' + nReg + ' рег.') && /до капитуляции 100%/.test(h1.txt), h1 && h1.txt);
+  check('the row is a full-width tap target and the HUD stays low (<= 30% of the screen)', h1 && h1.h >= 44 && h1.w >= 340 && h1.sheetH <= h1.vh * 0.3, h1 && (h1.w + 'x' + h1.h + ' sheet ' + h1.sheetH));
+  await H.shot('t06_total_hud');
+  // progress: take the capital + the regions
+  await E(([A, B]) => { const g = window.__god; g.Regions.setController(g.S.cities.get(g.S.kingdoms.get(B).capitalId).regionId, A, 'test'); g.step(70); }, [A, B]);
+  await b.wait(600);
+  const h2 = await E(() => { const r = document.querySelector('.hud-tw'); const ti = window.__god.War.totalInfo(window.__god.War.active()[0].id); return { txt: r.textContent.replace(/\s+/g, ' ').trim(), capital: ti.capital, prog: ti.progress, occ: ti.occ }; });
+  check('after the capital falls: «Столица ✓», 1/6 regions, the remaining percentage dropped', /Столица ✓/.test(h2.txt) && h2.txt.includes('1/' + nReg + ' рег.') && h2.capital === 'held' && h2.prog > 10, JSON.stringify(h2));
+  await H.tapSel('.hud-tw'); await b.wait(500);
+  const dr = await E(() => { const g = window.__god; const c = document.querySelector('.wcard.total'); return { mode: g.UI.cmd.mode, card: c && { tag: c.querySelector('.wc-tag') && c.querySelector('.wc-tag').textContent.replace(/\s+/g, ' '), bars: c.querySelectorAll('.bar').length, cap: c.querySelector('.wc-capbar .txt') && c.querySelector('.wc-capbar .txt').textContent, line: c.querySelector('.wc-capline') && c.querySelector('.wc-capline').textContent, goals: c.querySelectorAll('.wc-goals .chip').length, decide: c.querySelector('[data-act="cap-open"]') && c.querySelector('[data-act="cap-open"]').classList.contains('hide'), btns: [...c.querySelectorAll('.wc-acts .cbtn')].map(x => x.textContent.trim()) } }; });
+  check('tap on the row opens the drawer on the war card: «ТОТАЛЬНАЯ ВОЙНА», two score bars + the capitulation bar, no list of goals', dr.mode === 'dr' && dr.card && /ТОТАЛЬНАЯ ВОЙНА/.test(dr.card.tag) && /\d+% до капитуляции/.test(dr.card.cap) && dr.card.goals === 0, JSON.stringify(dr.card));
+  check('the situation in words; «Решить судьбу страны» only when a decision waits', dr.card && /Нужно занять столицу и 4 из 6 регионов|Правительство ещё держится|60%/.test(dr.card.line) && dr.card.decide === true, dr.card && dr.card.line);
+  await H.shot('t07_total_drawer');
+  await H.tapSel('[data-act="collapse"]'); await b.wait(250);
+
+  section('3.6 capitulation: the sheet opens for the commanded winner — three decisions, a suggestion, a timer, no stuck state');
+  const fc = await forceCapitulation(H, A, B);
+  check('the lead defender capitulated and the decision waits for the player (the war is not ended)', fc.pend === true && fc.ended === false, JSON.stringify(fc));
+  await b.wait(700);
+  const cs = await E(([A, B]) => {
+    const g = window.__god, sh = document.getElementById('sheet'); const r = sh.getBoundingClientRect(); const rc = g.Render.cmd;
+    return { mode: g.UI.cmd.mode, cap: g.UI.cmd.cap, cls: sh.className, title: sh.querySelector('.cs-head .sh-title b').textContent, sub: sh.querySelector('.cs-head .sh-title small').textContent, country: sh.querySelector('.cs-country').textContent.replace(/\s+/g, ' ').trim(),
+      opts: [...sh.querySelectorAll('.cs-opt')].map(o => ({ act: o.dataset.act, t: o.querySelector('b').textContent, sub: o.querySelector('small').textContent, off: o.classList.contains('off'), dis: o.disabled, badge: !o.querySelector('.cs-badge').classList.contains('hide'), h: Math.round(o.getBoundingClientRect().height) })),
+      timer: sh.querySelector('.cs-timer .txt').textContent, later: !!sh.querySelector('[data-act="cap-later"]'), h: Math.round(r.height), vh: innerHeight, rc: { cand: rc.candidates.length, target: rc.targetKid, deep: rc.deep.length, goals: rc.goals.length }, pending: g.War.capitulation(g.War.active()[0].id).suggest, hudRow: !!document.querySelector('.hud-tw'), body: document.body.className }; }, [A, B]);
+  check('the sheet «Страна «B» капитулировала»: mode cs, the capitulated country\'s numbers, a way to decide later', cs.mode === 'cs' && /cs/.test(cs.cls) && cs.title === 'Страна «' + nameB + '» капитулировала' && /Столица пала/.test(cs.sub) && cs.country.includes(regW(nReg)) && cs.later, JSON.stringify({ title: cs.title, sub: cs.sub, country: cs.country }));
+  check('three decisions: Присоединить / Сделать вассалом / Взять занятые регионы, each >= 56 px high, with a one-line consequence', cs.opts.length === 3 && cs.opts[0].t === 'Присоединить' && cs.opts[1].t === 'Сделать вассалом' && cs.opts[2].t === 'Взять занятые регионы' && cs.opts.every(o => o.h >= 56 && o.sub.length > 10), JSON.stringify(cs.opts.map(o => o.t + ':' + o.h)));
+  check('the AI\'s suggestion is marked («советуем») on exactly one option; options are guarded against an accidental tap right after opening', cs.opts.filter(o => o.badge).length === 1 && cs.opts.find(o => o.badge).act === 'cap-' + cs.pending, JSON.stringify(cs.opts.map(o => o.act + (o.badge ? '*' : ''))) + ' suggest ' + cs.pending);
+  check('the map highlights the capitulated country (Render.cmd) and the sheet is <= 66% of the screen', cs.rc.cand === nReg && cs.rc.target === B && cs.h <= cs.vh * 0.66 + 1 && /cmd-drawer/.test(cs.body), JSON.stringify(cs.rc) + ' ' + cs.h);
+  check('the timer bar tells when the ruler decides instead', /решит правитель/.test(cs.timer), cs.timer);
+  await H.shot('t08_capitulation_sheet');
+  // a tap on the map decides nothing
+  const sea1 = await H.seaPoint(); if (sea1) { await b.tap(sea1[0], sea1[1]); await b.wait(250); }
+  check('a tap on the map while the sheet is open changes nothing', (await E(() => window.__god.UI.cmd.mode)) === 'cs' && (await E(() => window.__god.War.active().length)) === 1);
+  // later -> HUD with a pulsing row; the row reopens the sheet; no automatic re-open loop
+  await H.tapSel('[data-act="cap-later"]'); await b.wait(900);
+  const lt = await E(() => { const g = window.__god; const r = document.querySelector('.hud-tw'); return { mode: g.UI.cmd.mode, txt: r && r.textContent.replace(/\s+/g, ' ').trim(), pend: r && r.classList.contains('pend'), cap: g.UI.cmd.cap }; });
+  check('«Решить позже»: back to the HUD, the row pulses and says what waits; the sheet does not pop up again by itself', lt.mode === 'hud' && lt.pend && /капитулировала — решите её судьбу/.test(lt.txt) && lt.cap === null, JSON.stringify(lt));
+  await H.shot('t09_hud_decision_waits');
+  await H.tapSel('.hud-tw'); await b.wait(500);
+  check('a tap on the pulsing row reopens the sheet', (await E(() => window.__god.UI.cmd.mode)) === 'cs');
+  await b.wait(500);
+  // decide: merge
+  const before = await E(([A, B]) => { const g = window.__god; return { bRegions: [...g.S.regions.values()].filter(r => r.ownerId === B).length, aRegions: [...g.S.regions.values()].filter(r => r.ownerId === A).length }; }, [A, B]);
+  await H.tapSel('[data-act="cap-merge"]'); await b.wait(500);
+  const mg = await E(([A, B]) => { const g = window.__god; const toast = [...document.querySelectorAll('.toast')].map(t => t.textContent).join('|'); return { wars: g.War.active().length, bAlive: g.S.kingdoms.has(B), aRegions: [...g.S.regions.values()].filter(r => r.ownerId === A).length, mode: g.UI.cmd.mode, toast, kid: g.UI.cmdKid, cmdFlag: g.S.kingdoms.get(A).cmd, rc: g.Render.cmd && { cand: g.Render.cmd.candidates.length, deep: g.Render.cmd.deep.length, goals: g.Render.cmd.goals.length, target: g.Render.cmd.targetKid }, out: [...g.S.wars.values()].map(w => w.tw && w.tw.out) }; }, [A, B]);
+  check('«Присоединить»: the war ended, the country is gone, all its regions are ours', mg.wars === 0 && !mg.bAlive && mg.aRegions === before.aRegions + before.bRegions && mg.out.includes('merge'), JSON.stringify(mg));
+  check('a toast tells the result; the HUD of the winner is back with the targets, nothing stuck', /присоединена/.test(mg.toast) && mg.mode === 'hud' && mg.kid === A && mg.cmdFlag === true && mg.rc.deep === 0 && mg.rc.goals === 0 && mg.rc.target === 0, mg.toast + ' ' + JSON.stringify(mg.rc));
+  await H.shot('t10_after_merge');
+  await H.tapSel('[data-act="release"]'); await b.wait(400);
+  const st1 = await H.state();
+  check('release: nothing left behind', isClean(st1), JSON.stringify(st1));
+  check('no page errors in the total-war flow', b.errors.length === 0, b.errors.slice(0, 3).join(' || '));
+  await b.close();
+
+  // ---- the other two decisions, the timeout and a released command (fresh worlds)
+  for (const choice of ['vassal', 'regions', 'timeout', 'release']) {
+    section('3.7 capitulation: ' + choice);
+    const H2 = await open(390, 844);
+    await H2.b.wait(1500);
+    const ar = await totalSetup(H2);
+    if (!ar) { check('arena for ' + choice, false); await H2.b.close(); continue; }
+    const E2 = H2.E;
+    await E2(([A, B]) => { const g = window.__god; const w = g.War.declareTotal(A, B); return !!w; }, [ar.A, ar.B]); await H2.b.wait(400);
+    const f2 = await forceCapitulation(H2, ar.A, ar.B);
+    await H2.b.wait(900);
+    check(choice + ': pending + the sheet is open', f2.pend && (await E2(() => window.__god.UI.cmd.mode)) === 'cs', JSON.stringify(f2));
+    if (choice === 'vassal' || choice === 'regions') {
+      await H2.tapSel('[data-act="cap-' + choice + '"]'); await H2.b.wait(500);
+      const r = await E2(([A, B]) => { const g = window.__god; const k = g.S.kingdoms.get(B); return { wars: g.War.active().length, bAlive: !!k, overlord: k && k.overlordId, toast: [...document.querySelectorAll('.toast')].map(t => t.textContent).join('|'), mode: g.UI.cmd.mode, out: [...g.S.wars.values()].map(w => w.tw && w.tw.out), owners: [...g.S.regions.values()].filter(r => r.ownerId === A).length }; }, [ar.A, ar.B]);
+      if (choice === 'vassal') check('«Сделать вассалом»: the country lives on as our vassal, a toast says so', r.wars === 0 && r.bAlive && r.overlord === ar.A && /вассал/.test(r.toast) && r.mode === 'hud' && r.out.includes('vassal'), JSON.stringify(r));
+      else check('«Взять занятые регионы»: the occupied regions are ours (all six: the country is left with nothing / falls), a toast', r.wars === 0 && r.owners >= 6 && /регионы|присоединена/.test(r.toast) && r.mode === 'hud' && r.out.includes('regions'), JSON.stringify(r));
+      await H2.shot('t11_after_' + choice);
+    } else if (choice === 'timeout') {
+      await E2(() => { const g = window.__god; g.step(1790); });
+      check('after ~1800 ticks the ruler decides instead and the sheet goes away by itself', await (async () => { for (let i = 0; i < 12; i++) { await E2(() => window.__god.step(20)); await H2.b.wait(260); if ((await E2(() => window.__god.UI.cmd.mode)) !== 'cs') break; } return (await E2(() => window.__god.UI.cmd.mode)) !== 'cs' && (await E2(() => window.__god.War.active().length)) === 0; })());
+    } else {
+      await E2(A => window.__god.UI.releaseCommand(), ar.A); await H2.b.wait(300);
+      await E2(() => window.__god.step(70)); await H2.b.wait(500);
+      const r = await E2(() => { const g = window.__god; return { wars: g.War.active().length, mode: g.UI.cmd.mode, kid: g.UI.cmdKid }; });
+      check('releasing the command: the AI decides within a pass, nothing stuck in the UI', r.wars === 0 && r.kid === 0, JSON.stringify(r));
+      check('clean state after the release', isClean(await H2.state()), '');
+    }
+    check(choice + ': no page errors', H2.b.errors.length === 0, H2.b.errors.slice(0, 3).join(' || '));
+    await H2.b.close();
+  }
+
+  // ---- an AI total war (the player is a bystander / the defender): the banner and the defender's HUD
+  section('3.8 an AI-declared total war: the same banner; the player\'s realm as the DEFENDER sees the danger');
+  const H3 = await open(390, 844);
+  await H3.b.wait(1500);
+  const ar3 = await totalSetup(H3);
+  if (ar3) {
+    const E3 = H3.E;
+    await E3(B => window.__god.UI.releaseCommand(), ar3.B);
+    await E3(B => window.__god.UI.commandKingdom(B, {}), ar3.B); await H3.b.wait(900);             // the player commands the victim
+    await E3(() => { document.getElementById('feed').innerHTML = ''; });
+    await E3(([A, B]) => { const g = window.__god; g.Kingdoms.setCommanded(B, true); g.Kingdoms.get(A).cmd = false; g.S.kingdoms.get(B).cmd = true; return !!g.War.declareTotal(A, B); }, [ar3.A, ar3.B]); await H3.b.wait(450);
+    const d = await E3(() => ({ banner: document.querySelector('.wb-card') && document.querySelector('.wb-card').textContent, cls: document.querySelector('.wb-card') && document.querySelector('.wb-card').className, feed: [...document.querySelectorAll('#feed .fl')].map(x => x.textContent) }));
+    check('an AI total war gets the «ТОТАЛЬНАЯ ВОЙНА» banner too, without a feed duplicate', d.banner && /ТОТАЛЬНАЯ ВОЙНА/.test(d.banner) && /total/.test(d.cls) && !d.feed.some(t => /объявило/.test(t)), JSON.stringify(d));
+    await H3.shot('t12_ai_total_banner');
+    await H3.b.wait(4200);
+    const hd = await E3(() => { const r = document.querySelector('.hud-tw'); const t = document.querySelector('.toast'); return { row: r && r.textContent.replace(/\s+/g, ' ').trim(), def: r && r.classList.contains('def'), toasts: [...document.querySelectorAll('.toast')].map(x => x.textContent) }; });
+    check('the defender\'s HUD: «Столица цела · потеряно 0/6 рег. · до капитуляции 100%» on a dark-red row', hd.row && /Тотальная война · «/.test(hd.row) && /Столица цела/.test(hd.row) && /потеряно 0\/\d+ ·/.test(hd.row) && hd.def, JSON.stringify(hd));
+    await H3.shot('t13_defender_hud');
+    await E3(([A, B]) => { const g = window.__god; const w = g.War.active()[0]; for (const r of g.S.regions.values()) if (r.ownerId === B) g.Regions.setController(r.id, A, 'test'); g.step(75); w.tw.sure = g.War.TOTAL.CAP_HOLD - 40; g.step(260); }, [ar3.A, ar3.B]);
+    await H3.b.wait(900);
+    const dd = await E3(([A, B]) => { const g = window.__god; return { wars: g.War.active().length, bAlive: g.S.kingdoms.has(B), mode: g.UI.cmd.mode, kid: g.UI.cmdKid, toast: [...document.querySelectorAll('.toast')].map(x => x.textContent).join('|'), cmdFlags: [...g.S.kingdoms.values()].filter(k => k.cmd).length }; }, [ar3.A, ar3.B]);
+    check('the player\'s realm capitulated to the AI: no sheet for the loser, a toast, and (if the realm fell) the HUD lets go cleanly', dd.wars === 0 && /капитулировала/.test(dd.toast) && dd.mode !== 'cs', JSON.stringify(dd));
+    await H3.b.wait(900);
+    const st = await H3.state();
+    check('nothing frozen: no kingdom keeps the command flag of a dead realm', (await E3(() => [...window.__god.S.kingdoms.values()].filter(k => k.cmd).length)) <= 1 && (st.kid === 0 || (await E3(k => window.__god.S.kingdoms.has(k), st.kid))), JSON.stringify(st));
+    check('no page errors', H3.b.errors.length === 0, H3.b.errors.slice(0, 3).join(' || '));
+  } else check('arena for the AI total war', false);
+  await H3.b.close();
+}
+
 if (!only || only.includes('small')) await states(360, 640, 'small');
 if (!args.quick) {
   if (!only || only.includes('tiny')) await states(320, 568, 'tiny');
   if (!only || only.includes('land')) await states(844, 390, 'land');
   if (!only || only.includes('lands')) await states(667, 375, 'lands');
   if (!only || only.includes('big')) await states(430, 932, 'big');
+}
+
+// ---- the total-war states at the other viewports: no overflow, nothing overlapping, touch targets, everything reachable
+async function totalStates(w, h, name) {
+  section(`viewport ${w}x${h} (${name}): TOTAL WAR — card (both modes), armed, banner, HUD row, drawer, capitulation sheet`);
+  const H = await open(w, h);
+  const { b, E } = H;
+  await b.wait(1500);
+  const ar = await buildArena(H, { chain: 7, popA: 110 });
+  check(`${name}: arena built`, !!ar);
+  if (!ar) { await b.close(); return; }
+  const { A, B, rMid } = ar;
+  const land = w > h;
+  const ok = async (label) => {
+    const r = await layoutCheck(H);
+    const bad = await overflowCheck(H);
+    const s = r.sheet;
+    check(`${name} ${label}: inside the screen, no horizontal overflow`, r.sw <= r.cw && bad.length === 0 && (!s || (s.x >= -1 && s.r <= r.vw + 1 && s.b <= r.vh + 1)) && r.banner, bad.join('; ') || (s ? `${Math.round(s.y)}-${Math.round(s.b)} of ${r.vh}` : 'no sheet'));
+    check(`${name} ${label}: floating buttons clear of the top bar, the panel and each other; feed clear of the panel`, !r.fabTop && !r.fabSheet && !r.fabFab && !r.feedSheet, JSON.stringify({ t: r.fabTop, s: r.fabSheet, f: r.fabFab, feed: r.feedSheet }));
+    const sm = await smallButtons(H);
+    check(`${name} ${label}: touch targets >= 44 px`, sm.length === 0, sm.slice(0, 4).join('; '));
+    return r;
+  };
+  /** the red button / the three options must be reachable: inside the sheet's box after scrolling the body */
+  const reachable = (sel) => E(sel => { const e = document.querySelector(sel); if (!e) return null; const bd = e.closest('.sh-body'); if (bd) e.scrollIntoView({ block: 'nearest' }); const r = e.getBoundingClientRect(), s = document.getElementById('sheet').getBoundingClientRect(); return r.top >= s.top - 1 && r.bottom <= s.bottom + 1 && r.left >= s.left - 1 && r.right <= s.right + 1; }, sel);
+  await E(A => window.__god.UI.commandKingdom(A, {}), A); await b.wait(1100);
+  await H.focusRegion(rMid, 7.5);
+  await H.tapRegion(rMid);
+  check(`${name}: the card opens`, (await H.cmd()).mode === 'tc');
+  await b.wait(450);                                                    // (the sheet slides in)
+  const r1 = await ok('card (region)');
+  if (!land) check(`${name}: the region card <= 60% of the screen (the toggle included)`, r1.sheet && r1.sheet.h <= r1.vh * 0.6 + 1, r1.sheet && Math.round(r1.sheet.h) + 'px of ' + r1.vh);
+  await H.shot(`${name}_t1_card_region`);
+  await H.tapSel('[data-act="tgt-mode-total"]'); await b.wait(700);
+  const r2 = await ok('card (total)');
+  if (!land) check(`${name}: the total card <= 66% of the screen`, r2.sheet && r2.sheet.h <= r2.vh * 0.66 + 1, r2.sheet && Math.round(r2.sheet.h) + 'px of ' + r2.vh);
+  check(`${name}: the red button stays visible in the footer and the toggle at the top (both reachable)`, (await reachable('[data-act="tgt-total"]')) === true && (await reachable('.tc-seg')) === true);
+  const map1 = await E(() => { const r = document.getElementById('sheet').getBoundingClientRect(); return { top: r.top, left: r.left, vw: innerWidth, vh: innerHeight }; });
+  check(`${name}: the map stays visible above (portrait) / beside (landscape) the card`, land ? map1.left >= map1.vw * 0.4 : map1.top >= 200, JSON.stringify(map1));
+  await H.shot(`${name}_t2_card_total`);
+  await H.tapSel('[data-act="tgt-total"]'); await b.wait(300);
+  await ok('armed'); await H.shot(`${name}_t3_armed`);
+  await H.tapSel('[data-act="tgt-total"]'); await b.wait(400);
+  check(`${name}: the total war is declared`, (await E(() => window.__god.War.active().filter(x => x.total).length)) === 1);
+  const r4 = await ok('banner'); await H.shot(`${name}_t4_banner`);
+  const bn = await E(() => { const c = document.querySelector('.wb-card'); const t = c && c.querySelector('.wb-t b'); const r = t && t.getBoundingClientRect(); return { fits: !!r && r.left >= 0 && r.right <= innerWidth, w: r && Math.round(r.width), vw: innerWidth, txt: t && t.textContent, scroll: t && t.scrollWidth <= t.clientWidth + 1 }; });
+  check(`${name}: «ТОТАЛЬНАЯ ВОЙНА» fits on one line inside the screen`, bn.fits && bn.scroll, JSON.stringify(bn));
+  void r4;
+  await b.wait(3900);
+  await H.step(120); await H.frames(3); await b.wait(400);
+  const r5 = await ok('HUD row'); await H.shot(`${name}_t5_hud`);
+  const hr = await E(() => { const r = document.querySelector('.hud-tw'); const q = r && r.getBoundingClientRect(); const s = document.getElementById('sheet').getBoundingClientRect(); return { inside: !!q && q.left >= s.left - 1 && q.right <= s.right + 1, txt: r && r.textContent.replace(/\s+/g, ' ').trim(), lines: r && Math.round(r.querySelector('.tw-t small').getBoundingClientRect().height / 14) }; });
+  check(`${name}: the progress row sits inside the HUD and says capital / regions / remaining %`, hr.inside && /Столица/.test(hr.txt) && /до капитуляции \d+%/.test(hr.txt), JSON.stringify(hr));
+  if (!land) check(`${name}: HUD with the progress row <= 36% of the screen`, r5.sheet && r5.sheet.h <= r5.vh * 0.36, r5.sheet && Math.round(r5.sheet.h) + 'px');
+  await H.tapSel('.hud-tw'); await b.wait(500);
+  await ok('drawer (total card)'); await H.shot(`${name}_t6_drawer`);
+  await H.tapSel('[data-act="collapse"]'); await b.wait(300);
+  const fc = await forceCapitulation(H, A, B);
+  check(`${name}: the lead defender capitulated`, fc.pend === true);
+  await b.wait(1000);
+  check(`${name}: the capitulation sheet is open`, (await E(() => window.__god.UI.cmd.mode)) === 'cs');
+  const r7 = await ok('capitulation sheet');
+  if (!land) check(`${name}: the sheet <= 66% of the screen`, r7.sheet && r7.sheet.h <= r7.vh * 0.66 + 1, r7.sheet && Math.round(r7.sheet.h) + 'px');
+  for (const id of ['merge', 'vassal', 'regions', 'later']) check(`${name}: «${id}» is reachable inside the sheet`, (await reachable('[data-act="cap-' + id + '"]')) === true);
+  await H.shot(`${name}_t7_capitulation`);
+  await E(() => { document.getElementById('sheet').querySelector('.sh-body').scrollTop = 0; });
+  await H.tapSel('[data-act="cap-vassal"]'); await b.wait(500);
+  check(`${name}: the decision was applied (vassal) and the HUD is back`, (await E(([A, B]) => { const g = window.__god; const k = g.S.kingdoms.get(B); return g.War.active().length === 0 && !!k && k.overlordId === A && g.UI.cmd.mode === 'hud'; }, [A, B])) === true);
+  await H.tapSel('[data-act="release"]'); await b.wait(400);
+  check(`${name}: release leaves nothing behind`, isClean(await H.state()), JSON.stringify(await H.state()));
+  check(`${name}: no page errors`, b.errors.length === 0, b.errors.slice(0, 3).join(' || '));
+  await b.close();
+}
+
+if (!only || only.includes('total360')) await totalStates(360, 640, 'ts360');
+if (!args.quick) {
+  if (!only || only.includes('total320')) await totalStates(320, 568, 'ts320');
+  if (!only || only.includes('total844')) await totalStates(844, 390, 'ts844');
 }
 
 // ===========================================================================================================================
