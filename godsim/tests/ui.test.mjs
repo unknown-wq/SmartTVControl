@@ -102,12 +102,12 @@ async function open(w, h, extra = {}) {
 
   section('tabs and tools');
   const tabs = ['land', 'life', 'powers', 'kingdoms', 'info'];
-  const expectCount = { land: 9, life: 4, powers: 9, kingdoms: 4, info: 4 };   // kingdoms: command + 3 diplomacy tools (stage 2)
+  const expectCount = { land: 9, life: 4, powers: 9, kingdoms: 4, info: 4 };   // built-in tools; kingdoms: command + 3 diplomacy tools (stage 2). Plugin powers (CONTRACT section 10) add buttons to the powers tab: there the count must equal ToolDefs and be >= 9
   for (const t of tabs) {
     await H.tapSel(`.tab[data-tab="${t}"]`);
     await b.wait(120);
-    const r = await E(() => ({ tab: window.__god.UI.state.tab, tools: document.querySelectorAll('#tools .tool').length, hint: document.getElementById('hint').textContent, brushVisible: !document.getElementById('brushbox').classList.contains('hide') }));
-    check(`tab ${t}: ${r.tools} buttons`, r.tab === t && r.tools === expectCount[t], r.hint.slice(0, 50));
+    const r = await E(() => ({ tab: window.__god.UI.state.tab, tools: document.querySelectorAll('#tools .tool').length, defs: window.__god.ToolDefs.filter(d => d.tab === window.__god.UI.state.tab).length, hint: document.getElementById('hint').textContent, brushVisible: !document.getElementById('brushbox').classList.contains('hide') }));
+    check(`tab ${t}: ${r.tools} buttons`, r.tab === t && (t === 'powers' ? r.tools === r.defs && r.tools >= expectCount[t] : r.tools === expectCount[t]), r.hint.slice(0, 50));
     await H.shot('02_tab_' + t);
   }
   // tool sizes >= 56

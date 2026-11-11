@@ -1,13 +1,14 @@
 /* =====================================================================
- * 17_power_poison.js — god power «Яд»: drifting toxic clouds (CONTRACT section 10 sim plugin). DOM-free.
+ * 17_power_poison.js — god power «Яд»: drifting toxic clouds (CONTRACT section 10 sim plugin). DOM-free. Docs: docs/feat_poison.md
  *
- *  Tool: id 'poison', Силы / Разрушение, brush radius 1..8 = cloud size, drag = spray a trail of smaller clouds.
+ *  Tool: id 'poison', Силы / Разрушение, brush radius 1..8 = cloud size (a tap makes radius r+1), drag = a trail of smaller puffs.
  *
  *  State (all JSON-safe, saved with the world)
- *   S.eff.clouds  [{id, x, y, r, r0, dens, d0, t0, until, dx, dy, nt, k}]   <= CFG.cap live clouds
+ *   S.eff.clouds  [{id, x, y, r, r0, dens, d0, t0, until, dx, dy, nt, k, f}]   <= CFG.cap (14) live clouds
  *        r / dens are the CURRENT radius (tiles) and density (0..1.6), derived every tick from r0 / d0 and the age: the cloud
  *        spreads (radius grows by CFG.grow = 40 % over its life) and thins out ((1-p)^0.75) until it vanishes. dx,dy = wind
- *        (tiles per tick, re-rolled rarely, bounces at the map edge), nt = next wind change, k = victims (for the chronicle).
+ *        (tiles per tick, re-rolled rarely, bounces at the map edge), nt = next wind change, k = victims (for the chronicle),
+ *        f = tick + 1 of a fresh tap cloud (0 = none): the first move of a stroke that started on it turns it into a normal spray puff.
  *   S.mod.poison  {nid, vic}                                                 id counter / total victims
  *   u.poison      tick until which the unit is poisoned (every unit carries the field, 0 = healthy, so Save keeps one table shape)
  *
@@ -15,16 +16,17 @@
  *   - Every CFG.scan (5) ticks a unit inside a cloud (local density = dens * (1 - 0.5 d^2/r^2) >= 0.1) gets
  *     u.poison = tick + CFG.tail (120). Poison is NOT contagious. Powers.heal clears it (one line in 11_powers.js).
  *   - Every CFG.dot (8) ticks every poisoned unit takes (tailDmg * taper + inDmg * densityHere) * vulnerability damage ('poison'),
- *     taper = remaining/tail (the lingering poison fades). Children x1.35, elders x1.25, sickly x1.2, strong x0.85.
+ *     taper = remaining/tail (the lingering poison fades). Children x1.15, elders x1.2, sickly x1.2, strong x0.85 (on top of their hp).
  *   - Units try to leave: a unit in a cloud (not a soldier, not settling / giving birth / fighting) switches to state 'flee' with a
- *     target outside every cloud (Units' own flee code walks it), and civilians that are about to walk INTO a cloud (destination
- *     inside, unit within CFG.ring tiles of it) are sent back to idle for a while. Soldiers (u.armyId) keep their orders.
+ *     target outside every cloud (Units' own flee code walks it; at most CFG.fleeBudget units per scan, lowest ids first, so a mass
+ *     panic costs a few ms spread over a few scans and a load continues identically), and civilians that are about to walk INTO a
+ *     cloud (destination inside, unit within CFG.ring tiles of it) are sent back to idle for a while. Soldiers (u.armyId) keep their orders.
  *   - Ecology (every 10 ticks per cloud): forest tiles lose wood (World.harvest: dead forest -> grass), lone trees and berry bushes
  *     wither, farms lose hp (Buildings.damage 'poison': a field under a dense cloud for its whole life is destroyed).
  *   - Rain over a cloud washes it out (it ages 3x faster).
  *   - Chronicle: a ruler killed by poison and a cloud that killed >= 4 people get one Log line each (never one per victim).
  *
- *  Cost: no cloud and nobody poisoned = one pass over S.units every 8 ticks (field check) ~ 5 us/tick.
+ *  Cost: no cloud and nobody poisoned = one pass over S.units every 8 ticks (field check), ~2 us per tick; 14 clouds over a crowd ~0.02-0.1 ms per tick.
  *  Randomness only through R, only when something happens (wind, bush kill), so worlds without poison keep their RNG stream.
  * ===================================================================== */
 
@@ -47,6 +49,7 @@ const PowerPoison = (() => {
     tailDmg: 0.7, inDmg: 1.3,
     minDens: 0.1,            // local density below which a cloud does nothing
     ring: 4.5,               // tiles around a cloud inside which civilians refuse to walk into it
+    strokeWindow: 8,         // ticks after a tap during which the first move of a stroke turns that cloud into a spray puff
     fleeBudget: 64,          // units that start running per scan (a bigger crowd panics over a few scans, lowest ids first)
     eco: 10,                 // ticks between ecology passes per cloud
     farmDmg: 0.9,            // farm hp per ecology pass at density 1 (a field under a dense cloud for its whole life is destroyed)
@@ -100,9 +103,11 @@ const PowerPoison = (() => {
     c.dx = Math.cos(a) * speed; c.dy = Math.sin(a) * speed;
     c.nt = S.tick + 150 + R.i(150);
   }
+  let madeNew = false;                                // did the last addCloud() create a cloud (true) or merge into one (false)?
   /** a cloud at (x,y): merges (sums the density) into a cloud that is nearly in the same place, otherwise creates one (the weakest is dropped at the cap) */
   function addCloud(x, y, r, dens, life, mergeFrac) {
     const L = clouds(), tick = S.tick, m = mod();
+    madeNew = false;
     r = Math.max(0.8, Math.min(CFG.maxR, r));
     let hit = null, hd = 1e9;
     for (let k = 0; k < L.length; k++) {
@@ -124,9 +129,10 @@ const PowerPoison = (() => {
       for (let k = 1; k < L.length; k++) if (L[k].until < L[oi].until) oi = k;
       L.splice(oi, 1);
     }
-    const c = { id: m.nid++, x, y, r, r0: r, dens, d0: dens, t0: tick, until: tick + life, dx: 0, dy: 0, nt: tick + 200, k: 0 };
+    const c = { id: m.nid++, x, y, r, r0: r, dens, d0: dens, t0: tick, until: tick + life, dx: 0, dy: 0, nt: tick + 200, k: 0, f: 0 };
     windOf(c, R.between(0.003, 0.010));
     L.push(c);
+    madeNew = true;
     return c;
   }
 
@@ -341,13 +347,19 @@ const PowerPoison = (() => {
     if (!(x >= 0 && y >= 0 && x < S.w && y < S.h)) return host.msg('Вне карты', false);
     r = host.rInt(r, 1, 8, 2);
     if (first) {                                       // a tap (or the start of a stroke): one proper cloud
-      const rad = r + 1;
-      addCloud(x, y, rad, CFG.tapDens, CFG.tapLife, 0.5);
+      const rad = r + 1, c = addCloud(x, y, rad, CFG.tapDens, CFG.tapLife, 0.5);
+      if (madeNew) c.f = S.tick + 1;                   // (tick + 1, 0 = unset) remembered for a few ticks: if this was the start of a stroke the first move shrinks it to a spray puff
       host.fx('poison_burst', x, y, { ttl: 1.1, r: rad });
       return host.msg('Ядовитое облако', true);
     }
     // spraying: a small puff whenever the finger has left the last one behind (the nearest cloud), thicker when it lingers
     const rs = 0.55 * r + 0.5, L = clouds();
+    for (let k = 0; k < L.length; k++) {               // the stroke started on this very cloud a moment ago: it was not a tap, make it a normal puff
+      const c = L[k];
+      if (c.f > 0 && S.tick + 1 - c.f <= CFG.strokeWindow && Math.abs(c.x - lx) < 0.15 && Math.abs(c.y - ly) < 0.15) {
+        c.f = 0; c.r0 = rs; c.r = rs; c.d0 = CFG.sprayDens; c.dens = CFG.sprayDens; c.t0 = S.tick; c.until = S.tick + CFG.sprayLife;
+      }
+    }
     let near = null, nd = 1e9;
     for (let k = 0; k < L.length; k++) { const c = L[k], d = Math.sqrt((c.x - x) * (c.x - x) + (c.y - y) * (c.y - y)); if (d < nd) { nd = d; near = c; } }
     const spacing = rs * (L.length >= CFG.cap - 3 ? 1.6 : 1.1);
@@ -377,6 +389,7 @@ const PowerPoison = (() => {
       if (!fin(c.dy)) c.dy = 0;
       if (!fin(c.nt)) c.nt = c.t0 + 200;
       if (!(c.k >= 0)) c.k = 0;
+      if (!(c.f >= 0)) c.f = 0;
       if (!(c.id >= 1)) c.id = m.nid++;
       c.r0 = Math.min(CFG.maxR, c.r0);
       c.d0 = Math.min(CFG.densMax, c.d0);
