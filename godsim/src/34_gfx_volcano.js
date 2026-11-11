@@ -252,16 +252,18 @@ const GfxVolcano = (() => {
     }
   }
 
-  const PLUME_N = 22;
+  // A software canvas pays for every translucent pixel, and the plume was ~80% of the cost of a whole eruption (22 uniform slots overlapped ~8-fold, the big faint puffs at the top
+  // cost the most and add the least). So the slots are packed toward the base (position = (slot / N) ^ PLUME_E): the dense dark body stays, the airy top gets fewer puffs: -32% pixels.
+  const PLUME_N = 18, PLUME_E = 1.5;
   function drawPlume(ctx, e, X, Y, sc, now, k, g) {
-    const N = sc < 10 ? 12 : PLUME_N;                                      // a fixed number of slots (fewer when the map is zoomed far out): the column never pops when the strength changes
+    const N = sc < 10 ? 12 : PLUME_N, E = sc < 10 ? 1 : PLUME_E;           // a fixed number of slots (fewer when the map is zoomed far out): the column never pops when the strength changes
     const kk = Math.min(1.25, k), hgt = (3.2 + 5.6 * kk + 0.3 * e.rb) * sc;
     const lean = (e.wd * 0.9 + 0.12 * Math.sin(now / 3700 + e.id)) * hgt * 0.55;
     const sizeK = (0.5 + 0.5 * Math.min(1, k)) * (0.62 + 0.13 * e.rb);                  // wider column for a wider cone (r=1: 1.08, r=3: 1.2, r=8: 1.53)
     const tN = (now / 6600 + hf(e.id)) * N, fl = Math.floor(tN), i0 = fl % N, f = tN - fl;   // slot ring: puff j climbs, wraps from the top to the crater
     const aMax = 0.4 + 0.45 * Math.min(1, k);
     for (let q = N - 1; q >= 0; q--) {
-      const p = (q + f) / N, j = ((q - i0) % N + N) % N;
+      const p = E === 1 ? (q + f) / N : Math.pow((q + f) / N, E), j = ((q - i0) % N + N) % N;
       const h1 = hf(j * 7.31 + e.id * 0.17), h2 = hf(j * 3.77 + 1.3 + e.id * 0.31), h3 = hf(j * 5.13 + 2.9 + e.id * 0.11);
       const yy = hgt * (1 - Math.pow(1 - p, 1.5));
       const xx = lean * Math.pow(p, 1.3) + Math.sin(now / 1500 + j * 1.7 + e.id) * (0.12 + 0.45 * p) * sc + (h1 - 0.5) * sc * (0.5 + 2.6 * p);      // the column billows out toward the top
