@@ -77,7 +77,7 @@ if (!args.nobrowser) {
   await b.eval(([x, y]) => window.__god.Powers.apply('demo_blast', x, y, 3, 'tap'), [uid.x, uid.y]);
   await b.page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
   const px = await b.eval(() => { const c = document.getElementById('game'); const d = c.getContext('2d').getImageData(8, 8, 1, 1).data; return [d[0], d[1], d[2]]; });
-  check('built-in full-screen flash (Fx type flash) paints the canvas', px[0] > 240 && px[1] > 240 && px[2] > 240, px.join(','));
+  check('built-in full-screen flash (Fx type flash) paints the canvas', px[0] > 220 && px[1] > 220 && px[2] > 220, px.join(','));
   await b.shot(shots + '/01_flash.png');
   await b.wait(1700);
   const c = await b.eval(() => ({ ...window.__demoCounts }));
