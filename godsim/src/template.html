@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="GODSIM">
+<meta name="theme-color" content="#060b17">
+<meta name="format-detection" content="telephone=no">
+<meta name="color-scheme" content="dark">
+<title>GODSIM — симулятор бога</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%230b1630'/%3E%3Ccircle cx='8' cy='8' r='5' fill='%2358c7ff'/%3E%3Cpath d='M3 9c3-3 6 2 10-2v3c-4 4-7-1-10 2z' fill='%2358e08a'/%3E%3C/svg%3E">
+<style>/*__CSS__*/</style>
+</head>
+<body>
+<canvas id="game" aria-label="Карта мира"></canvas>
+
+<div id="ui">
+  <div id="shade-top"></div>
+  <div id="paintframe"></div>
+
+  <div id="topwrap">
+    <header id="top" class="glass hit">
+      <div class="top-row top-stats">
+        <div id="year" class="year"><span>Год</span><b id="yearVal">1</b></div>
+        <button id="counters" class="counters" type="button" aria-label="Статистика мира"></button>
+      </div>
+      <div class="top-row top-ctl">
+        <div id="speeds" class="seg" role="group" aria-label="Скорость"></div>
+        <div id="pausedTag" class="paused-tag">Пауза</div>
+        <button id="btnMenu" class="ibtn" type="button" aria-label="Меню"></button>
+      </div>
+    </header>
+    <div id="feed"></div>
+  </div>
+
+  <div id="bottom">
+    <div id="fabs"></div>
+    <div id="toasts"></div>
+    <section id="sheet" class="glass hit" aria-live="polite"></section>
+    <nav id="dock" class="glass hit">
+      <div id="tabs" role="tablist"></div>
+      <div id="kbar" class="hscroll"></div>
+      <div id="toolswrap"><div id="tools" class="hscroll"></div><i id="tmoreL" class="more l"></i><i id="tmoreR" class="more r"></i></div>
+      <div id="ctx"><div id="hint"></div><div id="brushbox"></div></div>
+    </nav>
+  </div>
+
+  <div id="pops"></div>
+  <div id="banner" aria-live="assertive"></div>
+  <div id="modals"></div>
+  <div id="errbox" hidden></div>
+</div>
+
+<div id="splash">
+  <div class="splash-inner">
+    <div class="splash-logo">GODSIM</div>
+    <div class="splash-orb"></div>
+    <div id="splashMsg" class="splash-msg">Загрузка…</div>
+  </div>
+</div>
+
+<script>/*__JS__*/</script>
+</body>
+</html>
