@@ -122,7 +122,7 @@ async function open(w, h) {
     async shot(name) { const f = path.join(SHOTS, w + 'x' + h + '_' + name + '.png'); await b.shot(f); return f; },
     center: sel => E(sel => { const e = document.querySelector(sel); if (!e) return null; const r = e.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2, r.width, r.height]; }, sel),
     async tapSel(sel, wait = 220) {
-      await E(sel => { const e = document.querySelector(sel); if (e && e.closest('.sh-body')) e.scrollIntoView({ block: 'nearest' }); }, sel);
+      await E(sel => { const e = document.querySelector(sel); if (e && e.closest('.sh-body, .m-body')) e.scrollIntoView({ block: 'nearest' }); }, sel);
       const c = await H.center(sel); if (!c) throw new Error('no element ' + sel);
       await b.tap(c[0], c[1]); await b.wait(wait); return c;
     },
@@ -586,6 +586,232 @@ if (['main', 'alli', 'war', 'vassal', 'inbox', 'inspect', 'stuck', 'fuzz', 'perf
     await cleanSlate(H); await b.wait(200);
     check('clean slate afterwards', isClean(await H.state()), JSON.stringify(await H.state()));
   });
-  // @@PART3@@
+  if (want('stuck')) await scenario('7. nothing stays stuck: ✕, Esc, sea tap, tool switch, war tool, actor switch, new world, save/load, deaths', async () => {
+    let ar = await buildArena(H);
+    if (!ar) throw new Error('no arena');
+    let { A, B, C } = ar;
+    const clean = async (name) => { const s = await H.state(); check(name, isClean(s), JSON.stringify(s)); return s; };
+    const cmds = () => E(() => [...window.__god.S.kingdoms.values()].filter(k => k.cmd === true).map(k => k.id));
+    const focusSea = () => E(() => { const g = window.__god, S = g.S, T = g.Const.T; for (let y = 5; y < S.h - 5; y++) for (let x = 5; x < S.w - 5; x++) { if (S.tile[y * S.w + x] !== T.DEEP) continue; let land = false; for (let j = -4; j <= 4 && !land; j++) for (let i = -4; i <= 4; i++) if (S.region[(y + j) * S.w + x + i]) { land = true; break; } if (!land) { g.UI.focusVisible(x + 0.5, y + 0.5, 9, true); return [x, y]; } } return null; });
+    // a. ✕ in the HUD
+    await cleanSlate(H); await b.wait(150);
+    const mm0 = await E(() => window.__god.UI.state.mapMode);
+    await pickActor(H, A);
+    await H.tapSel('[data-act="release"]', 500);
+    let s = await clean('✕ in the HUD: dock, feed and paint button are back; no commanded kingdom, no Render.cmd, no sheet classes');
+    check('…and the map mode is what it was before the tool', s.mapMode === mm0, s.mapMode + ' vs ' + mm0);
+    // b. Esc walks back one step at a time
+    await pickActor(H, A); await openCard(H, B); await H.tapSel('.dbtn[data-kind="gift"]', 350);
+    let d = await H.d();
+    check('(setup) card with the gift panel open', d.mode === 'card' && d.sub === 'gift', JSON.stringify(d).slice(0, 90));
+    await b.page.keyboard.press('Escape'); await b.wait(300);
+    d = await H.d(); check('Esc: the panel closes first', d.sub === '' && d.mode === 'card', JSON.stringify(d).slice(0, 90));
+    await b.page.keyboard.press('Escape'); await b.wait(300);
+    d = await H.d(); check('Esc: then the card (the HUD stays)', d.mode === 'hud' && d.kid === A, JSON.stringify(d).slice(0, 90));
+    await b.page.keyboard.press('Escape'); await b.wait(300);
+    await clean('Esc in the HUD releases the actor');
+    // c. a tap on the sea is one step back
+    await pickActor(H, A); await openCard(H, B);
+    const sea0 = await focusSea(); await H.frames(4);
+    const sea = sea0 && await H.seaPoint();
+    if (sea) {
+      await b.tap(sea[0], sea[1]); await b.wait(350);
+      d = await H.d(); check('sea tap with a card open: back to the HUD', d.mode === 'hud' && d.kid === A, JSON.stringify(d).slice(0, 90));
+      await b.tap(sea[0], sea[1]); await b.wait(350);
+      await clean('second sea tap: released');
+    } else console.log('  note no free sea pixel on screen: the sea-tap steps are skipped');
+    // d. the war tool takes over (and back); a tool switch releases
+    await pickActor(H, A); await openCard(H, B);
+    await E(B => window.__god.UI.commandKingdom(B, { focus: false }), B); await b.wait(500);
+    s = await H.state();
+    check('war tool takes over: diplomacy released, only B commanded, no diplomacy sheet', s.diplo === 0 && !s.bodyDip && !s.sheetDip && s.cmdKid === B && (await cmds()).join() === String(B), JSON.stringify(s).slice(0, 200));
+    await E(A => window.__god.UI.DiploUI.select(A, { focus: false }), A); await b.wait(500);
+    s = await H.state();
+    check('diplomacy takes over from the war tool: war command released, only A commanded', s.diplo === A && s.cmdKid === 0 && !s.cmdBody && (await cmds()).join() === String(A), JSON.stringify(s).slice(0, 200));
+    await openCard(H, B);
+    await E(() => window.__god.UI.selectTool('command')); await b.wait(350);
+    await clean('switching to the war tool with a card open: diplomacy released');
+    check('…and the war tool is now the active one', (await E(() => window.__god.UI.state.tool)) === 'command');
+    await E(() => window.__god.UI.selectTool('diplomacy')); await b.wait(200);
+    // e. switching the actor with a card open
+    await pickActor(H, A); await openCard(H, B);
+    await E(B => window.__god.UI.DiploUI.select(B, { focus: false }), B); await b.wait(450);
+    d = await H.d();
+    check('another actor with a card open: card closed, new HUD, only the new actor is commanded, the outline follows', d.kid === B && d.mode === 'hud' && (await cmds()).join() === String(B) && (await E(() => window.__god.Render.cmd && window.__god.Render.cmd.kid)) === B, JSON.stringify(d).slice(0, 100));
+    await cleanSlate(H); await clean('…and a release afterwards is clean');
+    // f. release while the inbox modal is open
+    await pickActor(H, A); await openCard(H, B);
+    await H.setOp(B, A, 80); await E(([A, B]) => { window.__god.Diplomacy.propose(B, A, 'trade'); }, [A, B]); await b.wait(500);
+    await E(() => window.__god.UI.DiploUI.openInbox()); await b.wait(400);
+    check('(setup) the inbox modal is open over the card', (await H.state()).modal && (await H.d()).modal);
+    await E(() => window.__god.UI.DiploUI.release(true)); await b.wait(500);
+    await clean('release with the modal open: the modal closed too');
+    // g. a new world with a card and a panel open
+    await pickActor(H, A); await openCard(H, B); await H.tapSel('.dbtn[data-kind="pact"]', 300);
+    await E(() => { window.__god.Main.newWorld({ seed: 5, w: 64, h: 64, populate: true }); }); await b.wait(500);
+    await clean('a new world with a card and a panel open: HUD, card and map state are gone (the old sheet is off the screen)');
+    // h. save / load while the HUD is open; the treaties survive
+    ar = await buildArena(H); ({ A, B, C } = ar);
+    await pickActor(H, A);
+    const made = await E(([A, B]) => { const g = window.__god, D = g.Diplomacy; D.addOpinion(B, A, 70 - D.opinion(B, A), 'Тест'); g.step(1); return [D.propose(A, B, 'pact', { years: 20 }).accepted, D.propose(A, B, 'trade').accepted]; }, [A, B]);
+    await E(() => { window.__god.Save.save('2'); });
+    check('(setup) pact + trade made, the game saved with the HUD open', made[0] && made[1], JSON.stringify(made));
+    await E(() => { const g = window.__god; g.Save.load('2'); g.Main.worldReplaced('load'); }); await b.wait(500);
+    await clean('after a load: released everywhere, nothing stuck');
+    check('the treaties came back with the save', (await E(([A, B]) => window.__god.Diplomacy.pactLeft(A, B) > 0 && window.__god.Diplomacy.tradeOn(A, B), [A, B])));
+    await pickActor(H, A); await openCard(H, B);
+    const ci = await cardInfo(H);
+    check('the card of the loaded game shows the saved treaties', ci.chips.includes('pact') && ci.chips.includes('trade'), JSON.stringify(ci.chips));
+    // i. deaths
+    await E(B => { window.__god.Kingdoms.destroy(B, 'test'); }, B);
+    await H.until(() => window.__god.UI.diplo.mode === 'hud', null, 3000);
+    d = await H.d();
+    check('the partner dies while its card is open: back to the HUD, the actor stays', d.kid === A && d.mode === 'hud' && (await H.state()).rc !== null, JSON.stringify(d).slice(0, 100));
+    await E(A => { window.__god.Kingdoms.destroy(A, 'test'); }, A); await b.wait(900);
+    await clean('the actor dies: released, nothing stuck');
+    check('no page errors', b.errors.length === 0, b.errors.slice(0, 2).join(' || '));
+  });
+
+  if (want('fuzz')) await scenario('8. random taps, drags, proposals and steps with the tool open: no errors, nothing stuck afterwards', async () => {
+    const ar = await buildArena(H);
+    if (!ar) throw new Error('no arena');
+    const { A, B, C } = ar;
+    await pickActor(H, A);
+    let seed = args.seed ? +args.seed : 4242; const rnd = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
+    const N = args.fuzz ? +args.fuzz : 240; let taps = 0;
+    for (let i = 0; i < N; i++) {
+      const r = rnd();
+      if (r < 0.5) {
+        const pt = await E(q => { const bs = [...document.querySelectorAll('#sheet button, .dip-inbox button, .dipfab, .dchip')].filter(x => x.getClientRects().length && !x.disabled && x.getBoundingClientRect().height > 0); if (!bs.length) return null; const e = bs[Math.floor(q * bs.length)]; if (e.closest('.sh-body')) e.scrollIntoView({ block: 'nearest' }); const z = e.getBoundingClientRect(); return [z.left + z.width / 2, z.top + z.height / 2]; }, rnd());
+        if (pt && pt[1] > 0 && pt[1] < 844) { await b.tap(pt[0], pt[1]); taps++; }
+      } else if (r < 0.78) { await b.tap(20 + rnd() * 350, 110 + rnd() * 350); taps++; }
+      else if (r < 0.83) await E(() => window.__god.step(40));
+      else if (r < 0.88) await b.drag(100 + rnd() * 150, 200 + rnd() * 150, 100 + rnd() * 150, 200 + rnd() * 150, 5, 15);
+      else if (r < 0.93) await E(([A]) => { const g = window.__god; if (!g.UI.diplo.kid && g.S.kingdoms.has(A) && g.UI.state.tool === 'diplomacy') g.UI.DiploUI.select(A, { focus: false }); }, [A]);
+      else if (r < 0.97) await E(([A, B, C, q]) => { const g = window.__god, D = g.Diplomacy; try { const ks = ['trade', 'pact', 'alliance', 'guarantee']; const from = q < 0.5 ? B : C; if (g.S.kingdoms.has(from) && g.S.kingdoms.has(A)) D.propose(from, A, ks[Math.floor(q * 8) % 4]); } catch (e) { /* the sim may refuse */ } }, [A, B, C, rnd()]);
+      else await E(() => { window.__god.UI.DiploUI.openInbox(); });
+      if (i % 40 === 39) await b.wait(250);
+    }
+    await b.wait(500);
+    const st = await E(() => ({ err: document.getElementById('errbox').hidden }));
+    check(`${taps} random taps / drags / proposals over the tool: no page errors, the error box stays hidden`, b.errors.length === 0 && st.err, b.errors.slice(0, 2).join(' || '));
+    await H.shot('26_after_fuzz');
+    await cleanSlate(H); await b.wait(300);
+    const s = await H.state();
+    check('after the fuzz a release leaves nothing stuck', isClean(s), JSON.stringify(s));
+  });
+
+  if (want('perf')) await scenario('9. cost of the live refresh (UI.update 4× a second) with the HUD / card / panel / inbox open', async () => {
+    const ar = await buildArena(H);
+    if (!ar) throw new Error('no arena');
+    const { A, B, C } = ar;
+    await pickActor(H, A);
+    const measure = () => E(() => { const g = window.__god; const t0 = performance.now(); for (let i = 0; i < 100; i++) g.UI.update(300); return (performance.now() - t0) / 100; });
+    let ms = await measure();
+    console.log(`  UI.update (HUD): ${ms.toFixed(3)} ms`);
+    check('UI refresh with the HUD < 3 ms', ms < 3, ms.toFixed(3));
+    await openCard(H, B);
+    ms = await measure();
+    console.log(`  UI.update (pair card): ${ms.toFixed(3)} ms`);
+    check('UI refresh with the pair card < 3 ms', ms < 3, ms.toFixed(3));
+    await H.tapSel('.dbtn[data-kind="gift"]', 300);
+    ms = await measure();
+    console.log(`  UI.update (gift panel): ${ms.toFixed(3)} ms`);
+    check('UI refresh with a terms panel < 3 ms', ms < 3, ms.toFixed(3));
+    await H.tapSel('[data-act="dip-sub-back"]', 300);
+    await H.setOp(B, A, 80); await H.setOp(C, A, 80);
+    await E(([A, B, C]) => { const D = window.__god.Diplomacy; D.propose(B, A, 'alliance'); D.propose(C, A, 'trade'); D.propose(B, A, 'guarantee'); }, [A, B, C]);
+    await b.wait(500);
+    await E(() => window.__god.UI.DiploUI.openInbox()); await b.wait(400);
+    ms = await measure();
+    console.log(`  UI.update (inbox modal, 3 cards): ${ms.toFixed(3)} ms`);
+    check('UI refresh with the inbox modal < 3 ms', ms < 3, ms.toFixed(3));
+    const sim = await E(() => { const g = window.__god; const t0 = performance.now(); for (let i = 0; i < 50; i++) { g.Diplomacy.actionsFor(g.UI.diplo.kid, g.UI.diplo.other || 0); } return (performance.now() - t0) / 50; });
+    console.log(`  Diplomacy.actionsFor (pair): ${sim.toFixed(3)} ms`);
+    check('Diplomacy.actionsFor for one pair < 5 ms', sim < 5, sim.toFixed(3));
+    check('no page errors during the live refresh', b.errors.length === 0, b.errors.slice(0, 2).join(' || '));
+  });
   await b.close();
 }
+
+// ===========================================================================================================================
+// the same states on other screens
+// ===========================================================================================================================
+async function viewportRun(w, h) {
+  const H = await open(w, h);
+  const { b, E } = H;
+  await b.wait(1300);
+  await scenario(`viewport ${w}x${h}: HUD, card, result strip, panels, inbox, inspector — nothing sticks out, floating buttons clear, thumb-sized buttons`, async () => {
+    const ar = await buildArena(H);
+    if (!ar) throw new Error('no arena');
+    const { A, B, C } = ar;
+    const lay = async (name, minH) => {
+      await b.wait(220);
+      const l = await layoutCheck(H), ov = await overflowCheck(H), sm = await smallButtons(H, minH || 40);
+      check(`${name}: no horizontal scroll, nothing sticks out of the sheet`, l.sw <= l.cw + 1 && ov.length === 0, `scrollW ${l.sw}/${l.cw} ${JSON.stringify(ov)}`);
+      check(`${name}: floating buttons clear of the top bar, the sheet and each other`, !l.fabTop && !l.fabSheet && !l.fabFab, JSON.stringify({ top: l.fabTop, sheet: l.fabSheet, fab: l.fabFab }));
+      check(`${name}: every button is thumb-sized (≥ ${minH || 40} px)`, sm.length === 0, JSON.stringify(sm.slice(0, 6)));
+      return l;
+    };
+    await pickActor(H, A);
+    await H.shot('01_hud');
+    let l = await lay('HUD');
+    check('HUD: the sheet leaves the map free (≤ 45% of the height)', l.sheet && (l.sheet.b - l.sheet.y) <= h * 0.45, l.sheet && Math.round(l.sheet.b - l.sheet.y) + ' of ' + h);
+    await openCard(H, B);
+    await H.shot('02_card');
+    l = await lay('card');
+    if (w > h) check('card (landscape): the sheet is a side panel (≤ 52% of the width), the map stays visible on the left', l.sheet && (l.sheet.r - l.sheet.x) <= w * 0.52 + 2, l.sheet && Math.round(l.sheet.r - l.sheet.x) + ' of ' + w);
+    else check('card: the sheet is at most 62% of the screen (66% on short screens)', l.sheet && (l.sheet.b - l.sheet.y) <= h * (h <= 700 ? 0.66 : 0.62) + 2, l.sheet && Math.round(l.sheet.b - l.sheet.y) + ' of ' + h);
+    const fa = await E(() => { const e = document.querySelector('#sheet .dbtn'); const r = e.getBoundingClientRect(), s = document.getElementById('sheet').getBoundingClientRect(); return { top: r.top, bottom: r.bottom, st: s.top, sb: s.bottom }; });
+    check('card: the first action is fully visible without scrolling', fa.top >= fa.st - 1 && fa.bottom <= fa.sb + 1, JSON.stringify(fa));
+    const ci = await cardInfo(H);
+    check('card: both flags, opinion and chips are there', ci.flags === 2 && !!ci.op && ci.chips.length >= 1, JSON.stringify({ f: ci.flags, o: ci.op, c: ci.chips }));
+    await H.tapSel('.dbtn[data-kind="alliance"]', 450);
+    await H.shot('03_refused');
+    await lay('result strip');
+    check('result strip is on screen', !!(await resStrip(H)) && await E(() => { const r = document.querySelector('#sheet .dip-res').getBoundingClientRect(), s = document.getElementById('sheet').getBoundingClientRect(); return r.top >= s.top - 1 && r.bottom <= s.bottom + 1; }));
+    for (const [kind, nm] of [['pact', '04_pact'], ['gift', '05_gift'], ['demand', '06_demand']]) {
+      await H.tapSel('.dbtn[data-kind="' + kind + '"]', 420);
+      if (kind === 'gift') { await H.tapSel('[data-act="gift-plus"][data-good="gold"]', 120); await H.tapSel('[data-act="gift-all"][data-good="iron"]', 120); }
+      await H.shot(nm);
+      await lay(kind + ' panel');
+      const foot = await E(() => { const f = document.querySelector('.dip-foot'); const r = f && f.getBoundingClientRect(); return r ? { top: r.top, bottom: r.bottom, vis: !f.classList.contains('hide'), go: !!document.querySelector('[data-act="dip-sub-go"]'), vh: innerHeight } : null; });
+      check(kind + ' panel: the [Назад] / [send] footer is on screen', !!foot && foot.vis && foot.go && foot.top >= 0 && foot.bottom <= foot.vh + 1, JSON.stringify(foot));
+      await H.tapSel('[data-act="dip-sub-back"]', 320);
+    }
+    // inbox
+    await H.setOp(B, A, 80); await H.setOp(C, A, 80);
+    await E(([A, B, C]) => { const D = window.__god.Diplomacy; D.propose(B, A, 'alliance'); D.propose(C, A, 'trade'); }, [A, B, C]);
+    await b.wait(700);
+    await H.shot('07_proposals_arrived');
+    await lay('card with the ✉ badge');
+    await H.tapSel('[data-act="dip-fab"]', 550);
+    await H.shot('08_inbox');
+    const mod = await E(() => { const m = document.querySelector('.m-card'); if (!m) return null; const r = m.getBoundingClientRect(); const bs = [...m.querySelectorAll('.dmail button')].map(x => { const z = x.getBoundingClientRect(); return { h: Math.round(z.height), vis: z.top >= r.top - 1 && z.bottom <= r.bottom + 1 }; }); return { l: r.left, r: r.right, t: r.top, b: r.bottom, vw: innerWidth, vh: innerHeight, cards: m.querySelectorAll('.dmail').length, bs }; });
+    check('inbox modal: inside the screen, both proposals with their buttons (the first pair visible, the rest reachable by scrolling)', !!mod && mod.l >= -1 && mod.r <= mod.vw + 1 && mod.t >= -1 && mod.b <= mod.vh + 1 && mod.cards === 2 && mod.bs.length === 4 && mod.bs.every(x => x.h >= 40) && mod.bs.slice(0, 2).every(x => x.vis), JSON.stringify(mod));
+    check('inbox modal: no sideways overflow', (await overflowCheck(H)).length === 0);
+    await H.tapSel('.dmail[data-kind="trade"] [data-act="dip-decline"]', 600);
+    if (args.debug) { await H.shot('08b_after_first_decline'); console.log(JSON.stringify(await E(() => ({ modal: !!document.querySelector('.m-card'), cards: [...document.querySelectorAll('.dmail')].map(c => c.dataset.kind + ':' + c.className), d: window.__god.UI.diplo.inbox })))); }
+    await H.tapSel('.dmail[data-kind="alliance"] [data-act="dip-decline"]', 900);
+    await H.until(() => !document.querySelector('.m-card'), null, 3000);
+    // inspector
+    await H.tapSel('[data-act="dip-info"]', 650);
+    await H.shot('09_inspector');
+    check('inspector from the card: nothing sticks out sideways', (await overflowCheck(H)).length === 0 && (await layoutCheck(H)).sw <= (await layoutCheck(H)).cw + 1);
+    await E(() => window.__god.UI.closeInspector()); await b.wait(450);
+    check('back on the same card', (await H.d()).mode === 'card');
+    await H.tapSel('[data-act="dip-close"]', 450);
+    await H.tapSel('[data-act="release"]', 500);
+    const s = await H.state();
+    check('release: nothing stuck', isClean(s), JSON.stringify(s));
+    check('no page errors', b.errors.length === 0, b.errors.slice(0, 2).join(' || '));
+  });
+  await b.close();
+}
+if (want('tiny')) await viewportRun(320, 568);
+if (want('land')) await viewportRun(844, 390);
+if (want('small')) await viewportRun(360, 640);
+
+console.log(`\n${pass} passed, ${fail} failed`);
+if (fail) { console.log('FAILED:\n  ' + failures.join('\n  ')); process.exit(1); }
+console.log('screenshots in ' + SHOTS);

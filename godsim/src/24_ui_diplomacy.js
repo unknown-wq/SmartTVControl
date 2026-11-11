@@ -146,7 +146,7 @@ const DiploUI = (() => {
     rcSync();
     showSheet();
     if (opts.focus !== false) kit.defer(() => { if (dm.other === other) focusPair(); });
-    kit.hintOnce('dipcard', 'Кнопки показывают ответ заранее. Серые — недоступны: причина написана на кнопке.');
+    kit.hintOnce('dipcard', 'Кнопки показывают ответ заранее. Серые недоступны — причина на кнопке.');
     return true;
   }
   function closeCard() {

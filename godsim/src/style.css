@@ -1063,7 +1063,7 @@ body.dip-card .fab.feedfab, body.dip-card .fab.mapfab { display: none; }
 .dip-top .chip b { font-weight: 800; }
 .dip-chiprow { display: flex; align-items: flex-start; gap: 8px; margin: 0 0 10px; }
 .dip-chips { flex: 1; min-width: 0; }
-.dip-more { flex: none; display: inline-flex; align-items: center; gap: 5px; height: 30px; padding: 0 10px 0 7px; border-radius: 99px; background: rgba(var(--acc2-rgb), .12); border: 1px solid rgba(var(--acc2-rgb), .38); color: #d6f1ff; font-size: 11.5px; font-weight: 700; }
+.dip-more { flex: none; display: inline-flex; align-items: center; gap: 5px; height: 40px; padding: 0 12px 0 9px; border-radius: 99px; background: rgba(var(--acc2-rgb), .12); border: 1px solid rgba(var(--acc2-rgb), .38); color: #d6f1ff; font-size: 11.5px; font-weight: 700; }
 .dip-more:active { background: rgba(var(--acc2-rgb), .28); }
 #sheet.dsub .dip-op, #sheet.dsub .dip-chiprow { display: none; }
 .dip-chips .chip { min-height: 26px; }
@@ -1166,6 +1166,7 @@ body.dip-card .fab.feedfab, body.dip-card .fab.mapfab { display: none; }
 }
 @media (max-height: 700px) and (orientation: portrait) {
   body.dip .fab.mapfab { display: none; }
+  body.dip-card .zoom { display: none; }                 /* the card leaves only a thin strip of map: no room for the zoom buttons under the top bar (pinch still works) */
   #sheet.dip.dc { max-height: calc(var(--vh, 1vh) * 66); }
 }
 @media (max-width: 345px) {
