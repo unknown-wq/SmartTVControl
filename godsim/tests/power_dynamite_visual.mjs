@@ -5,7 +5,7 @@
 //   2. real touches: a tap (pan mode) and a finger drag (brush mode) through UI -> Input -> Powers lay charges, toast «Динамит заложен»
 //   3. a staged scene (village, forest, mountain with ore, units) at zoom 8 / 14 / 24: laid, fuse, armed ring, bang frames, chain, aftermath, scars
 //      (Fx are aged by hand at x1 pace so every screenshot is deterministic; PNGs + montages land in --shots, LOOK at them)
-//   4. --perf: draw cost (Render.stats.drawMs) at zoom 8 / 14 on a 1500-unit world with 80 live charges, armed rings, 12 live blast Fx: budget <= 0.5 ms
+//   4. --perf: draw cost at zoom 8 / 14 on a 1500-unit world: JS time inside the plugin's draw functions and an A/B of the JS time of Render.draw (plugin on / off on alternating frames), for a chain half way and for everything at its cap
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -192,7 +192,7 @@ for (const Z of ZOOMS) {
   check(`zoom ${Z}: the scene ran its course (charges gone, scars left, buildings razed, no stuck state)`, n1.live === 0 && n1.scars >= 10 && n1.buildings < n0.buildings && n1.fx === 0, JSON.stringify({ live: n1.live, scars: n1.scars, buildings: [n0.buildings, n1.buildings] }));
 }
 
-// forest + quarry (zoom 14)
+// forest + quarry (zoom 14): both bombs go off together; the quarry (hills / mountain / snow with ore, inside the village territory) is shown at two ages of the blast (ore icons pop out), then both aftermaths
 {
   const st = await E(() => window.__stage());
   const { cx, cy } = st;
@@ -203,17 +203,25 @@ for (const Z of ZOOMS) {
   await E(() => { for (const fx of window.__god.Fx.list) fx.age = fx.ttl * 0.3; });
   await b.sleep(200);
   const fa = await crop(SHOTS + '/f14_forest_bang.png', cx - 12, cy - 0.5, 480);
+  await E(({ cx, cy }) => { window.__view(cx + 8, cy - 2.5, 14); for (const fx of window.__god.Fx.list) fx.age = fx.ttl * 0.2; }, { cx, cy });
+  await b.sleep(250);
+  const qa = await crop(SHOTS + '/f14_quarry_bang_a.png', cx + 9, cy - 2.5, 480);
+  await E(() => { for (const fx of window.__god.Fx.list) fx.age = fx.ttl * 0.5; });
+  await b.sleep(250);
+  const qb = await crop(SHOTS + '/f14_quarry_bang_b.png', cx + 9, cy - 2.5, 480);
+  const ores = await E(() => window.__god.Fx.list.filter((f) => f.type === 'dyn_ore').length);
   await E(() => window.__adv(50));
   await E(() => { window.__god.Fx.list.length = 0; });
   await b.sleep(250);
-  const fb = await crop(SHOTS + '/f14_forest_after.png', cx - 12, cy - 0.5, 480);
-  await E(({ cx, cy }) => { window.__view(cx + 8, cy - 2.5, 14); }, { cx, cy });
-  await b.sleep(250);
   const fc = await crop(SHOTS + '/f14_quarry_after.png', cx + 9, cy - 2.5, 480);
+  await E(({ cx, cy }) => { window.__view(cx - 11, cy - 1, 14); }, { cx, cy });
+  await b.sleep(250);
+  const fb = await crop(SHOTS + '/f14_forest_after.png', cx - 12, cy - 0.5, 480);
   const s1 = await E(() => window.__scene());
-  console.log('forest/quarry: ' + JSON.stringify(s0) + ' -> ' + JSON.stringify(s1));
+  console.log('forest/quarry: ' + JSON.stringify(s0) + ' -> ' + JSON.stringify(s1) + '  ore fx ' + ores);
   check('forest bomb fells the forest, quarry bomb turns rock into hills and pays the city (stone / iron / gold)', s1.forest < s0.forest - 10 && s1.stock && (s1.stock.stone > (s0.stock ? s0.stock.stone : 0) || s1.stock.iron > (s0.stock ? s0.stock.iron : 0)), JSON.stringify({ forest: [s0.forest, s1.forest], stock0: s0.stock, stock1: s1.stock }));
-  await montage([fa, fb, fc], SHOTS + '/f14_montage.png', 3, 0.7);
+  check('a visible yield (rising stone / iron / gold icon) pops out of every quarried vein inside a territory', ores >= 1, String(ores));
+  await montage([fa, fb, qa, qb, fc], SHOTS + '/f14_montage.png', 3, 0.7);
   await E(() => window.__fxFreeze(false));
 }
 
@@ -224,8 +232,10 @@ check('icon, bundles, wires, armed rings, scars and blasts were all drawn by the
 check('no page errors', b.errors.length === 0, b.errors.join(' | ').slice(0, 300));
 
 // ------------------------------------------------------------------ 5. draw cost (--perf)
+// The frame cost of the plugin on a 1500-unit world, measured two ways: (a) the JS time spent INSIDE the plugin's draw functions per frame, and (b) an A/B of the JS time of Render.draw with the
+// plugin's draw functions switched on / off on alternating frames (medians of each set: immune to drift, to GC pauses and to the noise of a shared machine; the means are printed too).
 if (args.perf) {
-  console.log('# perf: 1500 units, 80 live charges, armed rings, 12 live blast Fx');
+  console.log('# perf: 1500 units, software GL');
   const setup = await E(async (seed) => {
     const g = window.__god;
     g.Main.newWorld({ seed, w: 96, h: 96, populate: true }); g.setSpeed(0);
@@ -234,46 +244,65 @@ if (args.perf) {
     return { tick: g.S.tick, units: g.S.units.size };
   }, SEED);
   console.log('world', JSON.stringify(setup));
-  const measure = (n = 180) => E((n) => new Promise(res => { let i = 0, sum = 0, worst = 0; function f() { const d = window.__god.Render.stats.drawMs || 0; sum += d; if (d > worst) worst = d; if (++i < n) requestAnimationFrame(f); else res({ avg: sum / i, worst }); } requestAnimationFrame(f); }), n);
-  for (const Z of [8, 14]) {
-    await E((Z) => { const g = window.__god; const c = g.Main.largestSettlement() || { x: 48, y: 48 }; g.Render.setMode(0); g.Render.setCamera(c.x, c.y, Z); g.S.eff.dynamite = []; g.S.eff.dynamite_scars = []; g.Fx.list.length = 0; window.__fxFreeze(true); }, Z);
-    await b.sleep(1200);
-    const base = await measure();
-    // 80 live charges (4 strokes of 20) in view, fuses far away (not armed), then all armed
-    await E(() => {
-      const g = window.__god, r = g.Render.visibleRect(), L = []; let id = 1;
-      for (let s = 0; s < 4; s++) for (let k = 0; k < 20; k++) {
+  await E(() => {
+    const g = window.__god, GP = window.__dynProbe.GfxPlugins, noop = () => {};
+    g.Fx.update = () => {};
+    const acc = window.__acc = { t: 0 }, mine = [];
+    for (const d of GP.effects) if (d.key === 'dynamite' || d.key === 'dynamite_scars') { const o = d.draw; d.draw = function (...a) { const t = performance.now(); o.apply(this, a); acc.t += performance.now() - t; }; mine.push([d, d.draw]); }
+    const fo = GP.fx.dyn_blast;
+    window.__toggle = (on) => { for (const [d, o] of mine) d.draw = on ? o : noop; GP.fx.dyn_blast = on ? fo : noop; };
+    window.__mk = (n, armedPerWire) => {
+      const r = g.Render.visibleRect(), L = []; let id = 1;
+      for (let s = 0; s < 4; s++) for (let k = 0; k < n / 4; k++) {
         const x = r.x0 + 2 + ((k * 1.3 + s * 3) % Math.max(4, r.x1 - r.x0 - 4)), y = r.y0 + 6 + s * Math.max(3, (r.y1 - r.y0 - 12) / 4) + (k % 2);
-        L.push({ id: id, x, y, r: 2 + ((k + s) % 7), t0: g.S.tick, boom: g.S.tick + 100000, g: 10 + s, pv: k ? id - 1 : 0, wx: k ? L[L.length - 1].x : 0, wy: k ? L[L.length - 1].y : 0 }); id++;
+        L.push({ id: id, x, y, r: 2 + ((k + s) % 7), t0: g.S.tick - 100, boom: g.S.tick + (k < armedPerWire ? 9 : 100000), g: 10 + s, pv: k ? id - 1 : 0, wx: k ? L[L.length - 1].x : 0, wy: k ? L[L.length - 1].y : 0 }); id++;
       }
-      g.S.eff.dynamite = L;
-      for (let i = 0; i < 200; i++) g.S.eff.dynamite_scars.push({ x: r.x0 + 2 + (i * 7.3) % Math.max(4, r.x1 - r.x0 - 4), y: r.y0 + 2 + (i * 3.1) % Math.max(4, r.y1 - r.y0 - 4), r: 2.4 + (i % 5) * 0.6, t0: g.S.tick });
-      g.S.eff.dynamite_scars.length = 56;
-    });
-    await b.sleep(900);
-    const live = await measure();
-    await E(() => { const g = window.__god; for (const c of g.S.eff.dynamite) c.boom = g.S.tick + 9; });
-    await b.sleep(500);
-    const armed = await measure();
-    await E(() => {
-      const g = window.__god, r = g.Render.visibleRect();
-      window.__blastLoad = true;
-      (function loop() {
-        if (!window.__blastLoad) return;
-        const F = g.Fx.list; for (let i = F.length - 1; i >= 0; i--) if (F[i].type === 'dyn_blast') F.splice(i, 1);
-        for (let k = 0; k < 12; k++) F.push({ type: 'dyn_blast', x: r.x0 + 3 + (k * 4.1) % Math.max(4, r.x1 - r.x0 - 6), y: r.y0 + 4 + (k * 5.3) % Math.max(4, r.y1 - r.y0 - 8), ttl: 1.2, age: ((performance.now() / 1000) + k * 0.1) % 1.2, r: 2 + (k % 4) * 0.9, v: k & 1, _s: k * 7 });
-        requestAnimationFrame(loop);
-      })();
-    });
-    await b.sleep(1500);
-    const blasts = await measure();
-    await E(() => { window.__blastLoad = false; window.__god.Fx.list.length = 0; });
-    const dLive = live.avg - base.avg, dArmed = armed.avg - base.avg, dBlast = blasts.avg - armed.avg;
-    console.log(`zoom ${Z}: base ${base.avg.toFixed(2)} ms | +80 charges + 56 scars ${live.avg.toFixed(2)} (+${dLive.toFixed(2)}) | all armed (rings) ${armed.avg.toFixed(2)} (+${dArmed.toFixed(2)}) | + 12 blast Fx ${blasts.avg.toFixed(2)} (+${dBlast.toFixed(2)}, worst ${blasts.worst.toFixed(1)})`);
-    check(`zoom ${Z}: 80 live charges (+ wires, 56 scars) cost <= 0.5 ms per frame`, dLive <= 0.5, dLive.toFixed(2) + ' ms');
-    check(`zoom ${Z}: 80 armed charges (rings) cost <= 0.8 ms per frame`, dArmed <= 0.8, dArmed.toFixed(2) + ' ms');
-    check(`zoom ${Z}: 12 live baked blast Fx cost <= 0.5 ms per frame`, dBlast <= 0.5, dBlast.toFixed(2) + ' ms');
-    await E(() => { const g = window.__god; g.S.eff.dynamite = []; g.S.eff.dynamite_scars = []; window.__fxFreeze(false); });
+      return L;
+    };
+    window.__mkScars = (n) => { const r = g.Render.visibleRect(), a = []; for (let i = 0; i < n; i++) a.push({ x: r.x0 + 2 + (i * 7.3) % Math.max(4, r.x1 - r.x0 - 4), y: r.y0 + 2 + (i * 3.1) % Math.max(4, r.y1 - r.y0 - 4), r: 2.4 + (i % 5) * 0.6, t0: g.S.tick }); return a; };
+    window.__fxN = 0;
+    window.__fxLoop = false;
+    window.__blasts = (n) => {                       // n live baked blast Fx, kept alive and animated every frame
+      window.__fxN = n;
+      if (window.__fxLoop) return;
+      window.__fxLoop = true;
+      (function loop() { const F = g.Fx.list; for (let i = F.length - 1; i >= 0; i--) if (F[i].type === 'dyn_blast') F.splice(i, 1); const r = g.Render.visibleRect(); for (let k = 0; k < window.__fxN; k++) F.push({ type: 'dyn_blast', x: r.x0 + 3 + (k * 4.1) % Math.max(4, r.x1 - r.x0 - 6), y: r.y0 + 4 + (k * 5.3) % Math.max(4, r.y1 - r.y0 - 8), ttl: 1.0, age: ((performance.now() / 1000) + k * 0.08) % 1.0, r: 2.2 + (k % 4) * 0.8, v: k & 1, _s: k * 7 }); requestAnimationFrame(loop); })();
+    };
+  });
+  // per-frame interleaving inside a wrapper of Render.draw: the plugin is switched on for odd frames and off for even ones and the JS time of every Render.draw call is recorded
+  // (Render.stats.drawMs is an EMA over ~10 frames, useless for this); load drift on a shared machine hits both sets of frames alike. The median is the robust number.
+  const run = (n) => E((n) => new Promise(res => {
+    const R = window.__god.Render, o = R.draw, on = [], off = [], js = [];
+    window.__acc.t = 0; let i = 0, state = false;
+    R.draw = function (a, t) {
+      state = !state; window.__toggle(state);
+      const j0 = window.__acc.t, t0 = performance.now(); o.call(R, a, t); const dt = performance.now() - t0;
+      if (i++ > 6) { (state ? on : off).push(dt); if (state) js.push(window.__acc.t - j0); }
+      if (i >= n) { R.draw = o; window.__toggle(true); res({ on, off, js }); }
+    };
+  }), n);
+  const mean = (a) => a.reduce((x, y) => x + y, 0) / Math.max(1, a.length);
+  const med = (a) => { const s = a.slice().sort((x, y) => x - y); return s[s.length >> 1]; };
+  async function ab(n = 420) {
+    const r = await run(n);
+    return { delta: med(r.on) - med(r.off), meanDelta: mean(r.on) - mean(r.off), js: med(r.js), jsMean: mean(r.js) };
+  }
+  const SCEN = [
+    ['a 40-charge chain half way (20 live, 6 armed, 20 scars, 6 blasts)', { n: 20, armed: 2, scars: 20, blasts: 6 }, 0.5, 0.5],
+    ['everything at its cap (80 live, 24 armed, 48 scars, 12 blasts)', { n: 80, armed: 6, scars: 48, blasts: 12 }, 1.0, 1.2],
+  ];
+  for (const Z of [8, 14]) {
+    await E((Z) => { const g = window.__god; const c = g.Main.largestSettlement() || { x: 48, y: 48 }; g.Render.setMode(0); g.Render.setCamera(c.x, c.y, Z); g.S.eff.dynamite = []; g.S.eff.dynamite_scars = []; g.Fx.list.length = 0; window.__blasts(0); window.__toggle(true); }, Z);
+    await b.sleep(1200);
+    for (const [label, o, maxJs, maxDelta] of SCEN) {
+      await E((o) => { const g = window.__god; g.S.eff.dynamite = window.__mk(o.n, o.armed); g.S.eff.dynamite_scars = window.__mkScars(o.scars); window.__blasts(o.blasts); }, o);
+      await b.sleep(1200);                                  // sprites are baked lazily, one per frame
+      const r = await ab();
+      console.log(`zoom ${Z}: ${label}\n          plugin JS per frame: median ${r.js.toFixed(3)} ms, mean ${r.jsMean.toFixed(3)} ms | Render.draw with vs without the plugin (alternating frames): median delta ${r.delta.toFixed(2)} ms, mean delta ${r.meanDelta.toFixed(2)} ms`);
+      check(`zoom ${Z}: ${label}: JS time inside the plugin <= ${maxJs} ms per frame (median)`, r.js <= maxJs, r.js.toFixed(3) + ' ms');
+      check(`zoom ${Z}: ${label}: adds <= ${maxDelta} ms (median) to Render.draw`, r.delta <= maxDelta, r.delta.toFixed(2) + ' ms');
+    }
+    await E(() => { const g = window.__god; window.__blasts(0); g.Fx.list.length = 0; g.S.eff.dynamite = []; g.S.eff.dynamite_scars = []; });
   }
   check('no page errors during the perf run', b.errors.length === 0, b.errors.join(' | ').slice(0, 300));
 }

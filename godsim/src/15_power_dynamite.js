@@ -42,7 +42,7 @@ const PowerDynamite = (() => {
   const STROKE_CAP = 40, LIVE_CAP = 80;
   const CALL_CAP = 12;                   // charges laid by one apply() call (a huge finger jump is spread over the next moves)
   const SAME_SPOT = 0.55;                // no second bundle closer than this to a live one
-  const SCAR_CAP = 56, SCAR_LIFE = 1800;
+  const SCAR_CAP = 48, SCAR_LIFE = 1500;
   const KB_CAP = 240, KB_TICKS = 6, KB_DECAY = 0.72;
   const CORE = 0.42, INNER = 0.72;       // lethal core / quarrying zone, as fractions of the blast radius
   const DMG_EDGE = 5, DMG_SPAN = 55;     // creature damage just outside the core = DMG_EDGE + DMG_SPAN, falls to DMG_EDGE at the rim
@@ -132,8 +132,9 @@ const PowerDynamite = (() => {
       if (!c.pv && !headFx) { headFx = true; host.fx('spark', px, py - 0.2, { ttl: 0.5, n: 6 }); }
     }
     if (laid > 0) {
-      Bus.emit('dynamiteLaid', laid, first ? 1 : 0, m.g);
-      return first ? host.msg('Динамит заложен', true) : true;
+      const opening = m.cnt === laid;                    // this call laid the first charge of the stroke (the tap itself, or the first one after a refused start)
+      Bus.emit('dynamiteLaid', laid, opening ? 1 : 0, m.g);
+      return opening ? host.msg('Динамит заложен', true) : true;
     }
     if (why === 'live' || why === 'stroke' || why === 'lava' || (first && why === 'crowd')) {
       if (m.told === 1 && !first) return host.msg('', false);        // one explanation per stroke

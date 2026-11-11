@@ -103,6 +103,7 @@ async function open(w, h, extra = {}) {
   section('tabs and tools');
   const tabs = ['land', 'life', 'powers', 'kingdoms', 'info'];
   const expectCount = { land: 9, life: 4, powers: 9, kingdoms: 4, info: 4 };   // kingdoms: command + 3 diplomacy tools (stage 2)
+  expectCount.powers += await E(() => window.__god.ToolDefs.filter(t => t.group === 'arsenal').length);   // + the plugin powers of the «Арсенал» group (src/15..19_power_*.js)
   for (const t of tabs) {
     await H.tapSel(`.tab[data-tab="${t}"]`);
     await b.wait(120);

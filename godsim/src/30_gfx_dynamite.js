@@ -4,14 +4,15 @@
  *  icon     'dynamite'        14x14 glyph for the dock (three red sticks, band, burning fuse)
  *  fx       'dyn_blast'       the explosion: fireball, white flash core, shock + dust ring, debris, smoke — BAKED frames (one drawImage per bang)
  *           'dyn_ore'         a stone / iron / gold icon pops out of a quarried vein
- *  effects  'dynamite'        S.eff.dynamite: the bundles (3 / 5 / 7 sticks by charge size), fuse that burns down + sparks, blink before the bang,
- *                             the wire between wired charges (sizzling sparks), the blast-radius ring (lethal core + damage radius) of charges about to go off
+ *  effects  'dynamite'        S.eff.dynamite: the bundles (3 / 5 / 7 sticks by charge size) with a fuse that burns down + sparks and a blink before the bang, the cord between wired
+ *                             charges (a spark runs along it while it is hot), the blast-radius ring (lethal core + damage radius) of charges about to go off and, for a moment, of a freshly laid
+ *                             head / lone bundle
  *           'dynamite_scars'  S.eff.dynamite_scars: soot scars with debris that stay behind and fade (cosmetic)
  *  Bus      'dynamiteLaid'    toast «Динамит заложен» (the UI only toasts failures of Powers.apply, so the success message is shown from here)
  *
- *  Budget: everything is pre-rendered into small canvases (bundle sprites: 3 sizes x 4 fuse stages x 5 spark frames x 2 blink; rings per charge size;
- *  blast frames: 4 radius buckets x 2 variants x 12 frames, baked lazily with a per-frame budget; scars: 4 x 3). A bundle costs 1-3 drawImage + 1 stroke,
- *  a bang 1 drawImage. Nothing allocates per frame.
+ *  Budget: everything is pre-rendered into small canvases (bundle sprites: 3 sizes x 4 fuse stages x 5 spark frames x 2 blink; rings per charge size; the cord is a baked rope stretched by ONE
+ *  transform + drawImage, path strokes cost ~1.3 ms per frame for 80 cords; blast frames: 4 radius buckets x 2 variants x 12 frames and scars: 4 x 3, both trimmed to their content and baked
+ *  lazily ONE per rendered frame with a background warm-up queue that starts when a charge of that size is first seen). A bundle costs 1-3 drawImage, a bang 1. Nothing allocates per frame.
  * ===================================================================== */
 
 const GfxDynamite = (() => {
@@ -79,6 +80,17 @@ const GfxDynamite = (() => {
         if ((y + 1 < h && (s[i + w] >>> 24) > 200) || (x + 1 < w && (s[i + 1] >>> 24) > 200) || (x > 0 && (s[i - 1] >>> 24) > 200) || (y > 0 && (s[i - w] >>> 24) > 200)) d[i] = col;
       }
       return this;
+    }
+    /** crop to the bounding box of the non-transparent pixels (less to fill per drawImage, less memory); the anchor ax,ay moves with the pixels */
+    trim() {
+      const w = this.w, h = this.h, d = this.d;
+      let x0 = w, y0 = h, x1 = -1, y1 = -1;
+      for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) if ((d[y * w + x] >>> 24) !== 0) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+      if (x1 < 0) { const e = new PB(1, 1); e.ax = 0; e.ay = 0; return e; }
+      const o = new PB(x1 - x0 + 1, y1 - y0 + 1);
+      for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) o.d[(y - y0) * o.w + (x - x0)] = d[y * w + x];
+      o.ax = (this.ax | 0) - x0; o.ay = (this.ay | 0) - y0;
+      return o;
     }
     toCanvas() {
       const c = document.createElement('canvas'); c.width = this.w; c.height = this.h;
@@ -381,8 +393,8 @@ const GfxDynamite = (() => {
     if (c === undefined) { const pb = buildRing(r, ph); c = pb.toCanvas(); c.ax = pb.ax; c.ay = pb.ay; ringCv[k] = c; }
     return c;
   }
-  function bakeScar(bk, v) { const k = bk * 3 + v; if (scarCv[k] === undefined) { const pb = buildScar(bk, v); const c = pb.toCanvas(); c.ax = pb.ax; c.ay = pb.ay; scarCv[k] = c; } return scarCv[k]; }
-  function bakeBlast(bk, v, f) { const k = (bk * 2 + v) * NF + f; if (blastCv[k] === undefined) { const pb = buildBlast(bk, v, f); const c = pb.toCanvas(); c.ax = pb.ax; c.ay = pb.ay; blastCv[k] = c; } return blastCv[k]; }
+  function bakeScar(bk, v) { const k = bk * 3 + v; if (scarCv[k] === undefined) { const pb = buildScar(bk, v).trim(); const c = pb.toCanvas(); c.ax = pb.ax; c.ay = pb.ay; scarCv[k] = c; } return scarCv[k]; }
+  function bakeBlast(bk, v, f) { const k = (bk * 2 + v) * NF + f; if (blastCv[k] === undefined) { const pb = buildBlast(bk, v, f).trim(); const c = pb.toCanvas(); c.ax = pb.ax; c.ay = pb.ay; blastCv[k] = c; } return blastCv[k]; }
   function scar(bk, v, now) {
     const c = scarCv[bk * 3 + v];
     if (c !== undefined) return c;
@@ -415,6 +427,25 @@ const GfxDynamite = (() => {
 
   // ------------------------------------------------------------------ drawing helpers
   const stats = { bundles: 0, scars: 0, blasts: 0, ores: 0, rings: 0, icon: 0, wires: 0 };
+  let cordCv = null;
+  /** the cord between two wired charges: a baked 3-row rope texture, stretched and rotated by ONE transform + drawImage (path strokes cost ~1.3 ms per frame for 80 cords in a 1500-unit scene, this ~0.2) */
+  function cordSprite() {
+    if (cordCv === null) {
+      const b = new PB(32, 3), d = rgba(58, 38, 22), m = rgba(120, 86, 52), l = rgba(160, 120, 74);
+      for (let x = 0; x < 32; x++) { b.set(x, 0, d); b.set(x, 1, ((x >> 1) & 1) ? m : l); b.set(x, 2, d); }
+      cordCv = b.toCanvas();
+    }
+    return cordCv;
+  }
+  /** draws the cord from (x0,y0) to (x1,y1) but leaves `trim` device px free at both ends (the bundles stand there) */
+  function drawCord(ctx, x0, y0, x1, y1, u, trim) {
+    const dx = x1 - x0, dy = y1 - y0, full = Math.sqrt(dx * dx + dy * dy), len = full - 2 * trim;
+    if (!(full >= 1) || len < 2) return;
+    const c = dx / full, s = dy / full, w = Math.max(2, u * 2.6);
+    ctx.setTransform(c, s, -s, c, x0 + c * trim, y0 + s * trim);
+    ctx.drawImage(cordSprite(), 0, -w / 2, len, w);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+  }
   function snapK(u) { return u >= 3 ? Math.round(u) : u; }
   /** blit a baked sprite with its anchor (ax,ay) at device px (X,Y), scaled k (nearest neighbour when magnified) */
   function blit(ctx, cv, X, Y, k, extra) {
@@ -459,20 +490,22 @@ const GfxDynamite = (() => {
       ctx.globalAlpha = 1;
       stats.rings++;
     }
-    // wire to the charge this one is wired to (burnt away when the predecessor has gone off)
+    // cord to the charge this one is wired to (it burns away when the predecessor has gone off); it only shows between the bundles, a spark glint runs along it while it is hot
     if (e.pv > 0 && scale >= 9) {
       const X1 = px + (e.wx - e.x) * scale, Y1 = py + (e.wy - e.y) * scale, by = scale * 0.30;
-      ctx.lineCap = 'round';
-      ctx.strokeStyle = '#3a2616'; ctx.lineWidth = Math.max(1, u * 1.5);
-      ctx.beginPath(); ctx.moveTo(px, py + by); ctx.quadraticCurveTo((px + X1) / 2, (py + Y1) / 2 + by + scale * 0.12, X1, Y1 + by); ctx.stroke();
-      if (scale >= 12) { ctx.strokeStyle = '#8a6a40'; ctx.lineWidth = Math.max(1, u * 0.6); ctx.beginPath(); ctx.moveTo(px, py + by - u * 0.6); ctx.quadraticCurveTo((px + X1) / 2, (py + Y1) / 2 + by + scale * 0.12 - u * 0.6, X1, Y1 + by - u * 0.6); ctx.stroke(); }
-      if (lit) {                                           // the fire running along the cord
-        const t = ((now / 420) + hf(e.id) * 3) % 1, sx = px + (X1 - px) * t, sy = py + by + (Y1 - py) * t + Math.sin(t * Math.PI) * scale * 0.06;
-        const s = Math.max(1.5, u * 1.6);
-        ctx.fillStyle = '#ffe85a'; ctx.fillRect(Math.round(sx - s / 2), Math.round(sy - s), Math.round(s), Math.round(s));
-        ctx.fillStyle = '#ffffff'; ctx.fillRect(Math.round(sx - s / 4), Math.round(sy - s / 2 - s / 3), Math.max(1, Math.round(s / 2)), Math.max(1, Math.round(s / 2)));
+      const dxw = X1 - px, dyw = Y1 - py, lw = Math.sqrt(dxw * dxw + dyw * dyw);
+      if (lw >= 1 && lw <= scale * 3) {                                  // (charges of a stroke are 1.3 tiles apart; anything longer is a damaged save)
+        const sm2 = ctx.imageSmoothingEnabled; ctx.imageSmoothingEnabled = true;      // smooth edges for the rotated rope
+        drawCord(ctx, px, py + by, X1, Y1 + by, u, scale * 0.34);
+        ctx.imageSmoothingEnabled = sm2;
+        if (lit) {                                           // the fire running along the cord
+          const t = 0.2 + 0.6 * (((now / 420) + hf(e.id) * 3) % 1), sx = px + dxw * t, sy = py + by + dyw * t;
+          const gs = Math.max(2, Math.round(u * 1.6));
+          ctx.fillStyle = '#ffe85a'; ctx.fillRect(Math.round(sx - gs / 2), Math.round(sy - gs / 2), gs, gs);
+          ctx.fillStyle = '#ffffff'; ctx.fillRect(Math.round(sx - gs / 4), Math.round(sy - gs / 4), Math.max(1, Math.round(gs / 2)), Math.max(1, Math.round(gs / 2)));
+        }
+        stats.wires++;
       }
-      stats.wires++;
     }
     blit(ctx, bundle(sizeOf(e.r | 0), stage, sprk, hot), px, py + scale * 0.38, k);
     ctx.imageSmoothingEnabled = sm;
@@ -487,7 +520,7 @@ const GfxDynamite = (() => {
     if (!(age >= 0) || age >= 1) return;
     const a = (age < 0.5 ? 1 : 1 - (age - 0.5) / 0.5) * Math.min(1, (S.tick - e.t0) / 5 + 0.15);
     const Rb = e.r > 0 ? e.r : 2.4, bk = bucketOf(Rb), v = ((e.x * 7 + e.y * 13) | 0) % 3;
-    const cv = scar(bk, v < 0 ? v + 3 : v, now), k = (scale / 16) * (Rb / SCAR_R[bk]);
+    const cv = scar(bk, v < 0 ? v + 3 : v, now), k = (scale / 16) * (Rb / SCAR_R[bk]) * 0.8;
     if (cv === null) return;
     const sm = ctx.imageSmoothingEnabled;
     ctx.imageSmoothingEnabled = k < 1.5;

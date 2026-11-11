@@ -185,6 +185,29 @@ section('refusals: outside the map, NaN, lava; every refusal explains itself and
   assert.equal(Powers.errors, 0);
 });
 
+section('Bus «dynamiteLaid» (the toast hook of the graphics plugin): once per stroke for the opening charge, silent for the rest and for refusals', () => {
+  const ctx = mkCtx();
+  const { S, Powers, Bus, World, Const } = ctx;
+  arena(ctx, 48, 48, 20);
+  const ev = [];
+  Bus.on('dynamiteLaid', (n, opening, g) => ev.push([n, opening, g]));
+  assert.equal(Powers.apply('dynamite', 30.5, 48.5, 2, 'tap'), true);
+  assert.deepEqual(ev.map((e) => [e[0], e[1]]), [[1, 1]], 'a tap: one charge, opening');
+  ev.length = 0;
+  Powers.apply('dynamite', 20.5, 40.5, 2, 'start');
+  for (let x = 21.5; x < 27; x += 0.8) Powers.apply('dynamite', x, 40.5, 2, 'move');
+  assert.equal(ev[0][1], 1, 'the start of a stroke opens it'); assert.ok(ev.slice(1).every((e) => e[1] === 0), 'moves never toast again');
+  assert.ok(ev.length >= 3 && ev.every((e) => e[2] === ev[0][2]), 'all of one stroke: ' + JSON.stringify(ev));
+  // a stroke that starts on lava: the first refusal says so, the first charge that does get laid is the opening one
+  ev.length = 0;
+  World.setTile(30, 30, Const.T.LAVA);
+  assert.equal(Powers.apply('dynamite', 30.5, 30.5, 2, 'start'), false); assert.ok(/лав/.test(Powers.lastMessage));
+  assert.equal(ev.length, 0, 'refusals are silent on the bus');
+  Powers.apply('dynamite', 33.5, 30.5, 2, 'move');
+  assert.equal(ev.length, 1, 'the first real charge of that stroke opens it'); assert.equal(ev[0][1], 1);
+  assert.equal(Powers.lastMessage, 'Динамит заложен', 'and carries the success text for UIs that show it');
+});
+
 // ================================================================== creatures
 section('creatures: lethal in the core, falloff outside, nothing beyond the radius, 3 races', () => {
   const ctx = mkCtx();
@@ -522,7 +545,7 @@ section('caps: 40 charges per stroke (one explanation, then silence), 80 live in
   // S.eff stays JSON-safe at the cap
   Powers.apply('dynamite', 5.5, 70.5, 1, 'start'); for (let x = 6.5; x < 60; x += 1) Powers.apply('dynamite', x, 70.5, 1, 'move');
   const e = S.eff; assert.deepEqual(JSON.parse(JSON.stringify(e)), e);
-  assert.ok(e.dynamite.length <= 80 && e.dynamite_scars.length <= 56);
+  assert.ok(e.dynamite.length <= 80 && e.dynamite_scars.length <= ctx.PowerDynamite.SCAR_CAP);
 });
 
 section('a big finger jump is spread over the moves (<= 12 charges per call), a stroke never lays beyond the map', () => {
@@ -656,7 +679,7 @@ section('3000 ticks mixed with every other power (taps, strokes, brushes, disast
   assert.equal(errs, 0, 'console.error calls');
   assert.equal(Powers.errors, 0, 'swallowed exceptions: ' + (Powers.lastError && Powers.lastError.stack));
   assert.ok(bangsSeen > 30, 'enough bangs happened to mean something: ' + bangsSeen);
-  assert.ok(maxLive <= 80 && maxScars <= 56);
+  assert.ok(maxLive <= 80 && maxScars <= ctx.PowerDynamite.SCAR_CAP);
   assert.equal(ctx.Sim.errors && Object.keys(ctx.Sim.errors).length || 0, 0, 'Sim reported no module errors');
 });
 
