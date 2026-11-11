@@ -55,11 +55,11 @@ const War = (() => {
   const TW_PAUSE = 800;                 // offensive pause after a bloodbath (limited wars: OFFENSIVE_PAUSE)
   const TW_STALEMATE = 6000;            // ticks without a controller change before autoPeace ends a total war
   const CAP_SHARE = 0.6;                // capital held + this share of the lead defender's regions occupied = capitulation
-  const CAP_HOLD = 4800;                // the government's 'will to resist': while the capitulation condition holds the timer fills by 0.8x (60 % of the country occupied) .. 2x (all of it) per tick, a lapse eats it twice as fast
+  const CAP_HOLD = 8000;                // THE DURATION KNOB. The government's 'will to resist': while the capitulation condition holds the timer fills by 0.8x (60 % of the country occupied) .. 2x (all of it) per tick, a lapse eats it twice as fast (2:1 attacker vs a 6-region country: ~4700-8500 ticks)
   const TW_REST = 120;                  // ticks an army consolidates in a captured region (+ 3 x the region's cost) before the AI sends it to the next goal
   const CAP_ASK = 1800;                 // ticks a commanded winner may think before the AI decides for him
   const TW_INFAMY = 25, TW_INFAMY_CLAIM = 8;
-  const TW_AI_MIN_TICK = 9000, TW_AI_COOLDOWN = 6000, TW_AI_GLOBAL = 5000, TW_AI_RATIO = 2.5, TW_AI_AGGR = 0.3, TW_AI_CHANCE = 0.2, TW_AI_PEACE = 1500;
+  const TW_AI_MIN_TICK = 9000, TW_AI_COOLDOWN = 6000, TW_AI_GLOBAL = 5000, TW_AI_RATIO = 2.5, TW_AI_AGGR = 0.1, TW_AI_CHANCE = 0.3, TW_AI_PEACE = 1500;
 
   // ------------------------------------------------------------------ transient state
   let pairs = new Map(), pairsFor = null, pairsSize = -1;
@@ -994,7 +994,8 @@ const War = (() => {
     if (!mod().autoPeace) return;
     if (w.tw && w.tw.pend) return;                                  // a capitulation is being settled
     const stale = isTotal(w) ? TW_STALEMATE : STALEMATE;
-    if (tick - w.started >= stale && tick - w.lastChange >= stale) { exhaust(w, 'stalemate', 0); return; }
+    const breaking = isTotal(w) && w.tw && w.tw.sure > 0;           // the government's will is being broken (the whole country is held, nothing changes hands any more): no stalemate, the timer ends it
+    if (!breaking && tick - w.started >= stale && tick - w.lastChange >= stale) { exhaust(w, 'stalemate', 0); return; }
     for (let s = 1; s <= 2; s++) {
       const p = leadOf(w, s), k = kget(p);
       if (!k) continue;
@@ -1714,6 +1715,19 @@ const War = (() => {
     const cc = capitalCity(D);
     if (cc && cc.occupierId && sideOf(w, cc.occupierId) === 1) return cc;
     if (t.fell) { const fc = S.cities.get(t.fell); if (fc && fc.kingdomId === D && fc.occupierId && sideOf(w, fc.occupierId) === 1) return fc; }
+    if (!cc) {                  // the government has no seat at all (its capital died out / was destroyed during the occupation) and every city that is left is ours: the biggest one stands in for the capital
+      const kd = kget(D);
+      let best = null;
+      if (kd && kd.cities.length) {
+        for (let i = 0; i < kd.cities.length; i++) {
+          const c = S.cities.get(kd.cities[i]);
+          if (!c) continue;
+          if (!c.occupierId || sideOf(w, c.occupierId) !== 1) return null;
+          if (!best || c.pop > best.pop) best = c;
+        }
+      }
+      return best;
+    }
     return null;
   }
   function sideSoldiers(w, s) { let n = 0; for (const a of S.armies.values()) if (a.warId === w.id && !a.dis && sideOf(w, a.kingdomId) === s) n += a.members.length; return n; }
@@ -2070,7 +2084,7 @@ const War = (() => {
     out.ratio = mr;
     if (!best) { out.why = nbn ? why2 : 'no neighbour'; return out; }
     out.best = best; out.ratio = br;
-    out.p = TW_AI_CHANCE * clamp((aggr - TW_AI_AGGR) / 0.4 + 0.5, 0.3, 1.5) * clamp(br / 4, 0.6, 1.4);
+    out.p = TW_AI_CHANCE * clamp(0.6 + (aggr - TW_AI_AGGR) / 0.5, 0.6, 1.4) * clamp(br / 3.5, 0.7, 1.4);        // 0.13 (a barely warlike ruler, 2.5x) .. 0.59 (a fierce one, 5x); looked at every 400 ticks
     return out;
   }
   /** evaluate one kingdom; `force` skips the dice (tests). Returns the new War or null. */
@@ -2078,7 +2092,7 @@ const War = (() => {
     const c = aiTotalCheck(kid);
     if (c.why || !c.best) return null;
     const m = mod(), tick = S.tick;
-    if (!force && !R.chance(c.p)) { m.tcd[kid] = tick + 800; return null; }                        // (it thought about it and let it be)
+    if (!force && !R.chance(c.p)) { m.tcd[kid] = tick + 400; return null; }                        // (it thought about it and let it be: looks again in 400 ticks)
     if (!feasibleGoals(kid, c.best.id).length) { m.tcd[kid] = tick + 1500; return null; }
     const w = declare(kid, c.best.id, null, null, { total: true });
     if (w) { m.tcd[kid] = tick + TW_AI_COOLDOWN; m.tlast = tick; } else m.tcd[kid] = tick + 1500;

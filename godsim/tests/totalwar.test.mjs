@@ -283,7 +283,8 @@ section('capitulation timer: fills at the rate of the occupation, eats twice as 
   const I = () => War.totalInfo(w.id);
   runBare(ctx, 600);
   const h1 = I().hold;
-  note(`after 600 ticks: timer ${h1.toFixed(0)} / 4800, meter ${I().progress}%`);
+  const HOLD = War.TOTAL.CAP_HOLD;
+  note(`after 600 ticks: timer ${h1.toFixed(0)} / ${HOLD}, meter ${I().progress}%`);
   assert.ok(h1 > 400 && h1 < 700, 'about 1x: ' + h1);
   assert.ok(I().progress > 50 && I().progress < 70, 'meter = 50 % pressure + the timer share: ' + I().progress);
   // a lapse: the capital is retaken -> the timer decays twice as fast
@@ -292,14 +293,14 @@ section('capitulation timer: fills at the rate of the occupation, eats twice as 
   runBare(ctx, 150);
   assert.ok(I().hold < before - 150, `timer eaten: ${before} -> ${I().hold}`);
   occupy(ctx, a.A, [capR]);
-  // all the way: the whole country occupied -> 2x -> 4800 / 2 = 2400 ticks from empty
+  // all the way: the whole country occupied -> 2x -> CAP_HOLD / 2 ticks from empty
   occupy(ctx, a.A, a.rB);
   const t0 = S.tick; const h0 = I().hold;
-  runBare(ctx, 3000, () => !w.ended);
+  runBare(ctx, Math.ceil(HOLD / 2) + 600, () => !w.ended);
   assert.equal(w.ended, true); assert.equal(w.how, 'capitulation'); assert.equal(ended, 'capitulation');
   const dur = S.tick - t0;
   note(`whole country occupied: capitulation after ${dur} ticks (timer was ${h0.toFixed(0)})`);
-  assert.ok(dur >= (4800 - h0) / 2 - 60 && dur <= (4800 - h0) / 2 + 90, 'at 2x: ' + dur);
+  assert.ok(dur >= (HOLD - h0) / 2 - 60 && dur <= (HOLD - h0) / 2 + 90, 'at 2x: ' + dur);
   const lg = logsSince(ctx, mark).map(e => e.msg);
   assert.ok(lg.some(m => /капитулировало перед королевством/.test(m)), lg.join('|'));
   assert.equal(S.wars.get(w.id).tw.cap, 100);
@@ -320,6 +321,51 @@ section('capitulation without a land grab: a collapsed defender (no soldiers, no
   runBare(ctx, 1500, () => !w.ended);
   assert.equal(w.ended, true, 'manpower collapse ends it'); assert.equal(w.how, 'capitulation'); assert.equal(w.tw.why, 'manpower');
   worldInvariants(ctx, 'manpower');
+});
+
+section('a state without a capital (it died out during the occupation, every city left is ours): the biggest city stands in, the timer keeps running; a free city = no seat held; the stalemate rule never ends a war whose timer is running', () => {
+  const { ctx, a } = std();
+  const { War, S, Kingdoms, Cities, Regions } = ctx;
+  const w = War.declareTotal(a.A, a.B);
+  War.setAutoPeace(false);
+  const allB = () => Regions.ofKingdom(a.B).map(r => r.id);          // (villages founded during the war count too)
+  occupy(ctx, a.A, allB());
+  runBare(ctx, 90);
+  assert.equal(War.totalInfo(w.id).capital, 'held');
+  const kb = Kingdoms.get(a.B);
+  const capCity = S.cities.get(kb.capitalId), capR = capCity.regionId;
+  assert.equal(w.tw.fell, capCity.id, 'the fallen capital is remembered');
+  // the capital city dies out while ANOTHER city of the loser is still free: the government sits there, nothing is held
+  const other = kb.cities.map(id => S.cities.get(id)).find(c => c.id !== capCity.id);
+  liberate(ctx, [other.regionId]);
+  Cities.destroy(capCity.id, 'test');
+  kb.capitalId = 0;
+  runBare(ctx, 150);
+  const mid = War.totalInfo(w.id);
+  note(`capital destroyed, one city free: capital '${mid.capital}', timer ${mid.hold}, loser's capitalId ${kb.capitalId}`);
+  assert.notEqual(mid.capital, 'held', 'a free city of the loser: not held (' + mid.capital + ')');
+  // ... every city that is left occupied again: the capital died out for good, the biggest city stands in
+  occupy(ctx, a.A, allB());
+  kb.capitalId = 0;
+  runBare(ctx, 150);
+  const ti = War.totalInfo(w.id);
+  note(`every city left occupied: capital '${ti.capital}', timer ${ti.hold}, loser's capitalId ${kb.capitalId}`);
+  assert.equal(ti.capital, 'held', 'the biggest occupied city stands in for the capital');
+  const h0 = ti.hold;
+  runBare(ctx, 300);
+  assert.ok(War.totalInfo(w.id).hold > h0 + 300, `the timer keeps filling: ${h0} -> ${War.totalInfo(w.id).hold}`);
+  noErrors(ctx, 'capital-less');
+  // the stalemate rule (6000 ticks without a change of hands) does not end a war while the timer runs: 4 of 6 regions = 1x -> CAP_HOLD ticks
+  const { ctx: c2, a: a2 } = std();
+  const w2 = c2.War.declareTotal(a2.A, a2.B);
+  c2.War.setAutoPeace(true);
+  occupy(c2, a2.A, a2.rB.slice(0, 4));
+  const HOLD = c2.War.TOTAL.CAP_HOLD;
+  const ok = runBare(c2, 6600, () => !w2.ended);
+  note(`stalemate rule: after ${c2.S.tick - w2.started} ticks the war ${w2.ended ? 'ended (' + w2.how + ')' : 'is running, timer ' + c2.War.totalInfo(w2.id).hold + ' / ' + HOLD}`);
+  assert.ok(ok && !w2.ended, 'no stalemate peace while the timer fills: ' + w2.how);
+  assert.ok(c2.War.totalInfo(w2.id).hold > 5000, 'the timer ran on: ' + c2.War.totalInfo(w2.id).hold);
+  noErrors(c2, 'stalemate');
 });
 
 // ================================================================== outcomes
@@ -392,7 +438,9 @@ section('outcome REGIONS (AI winner, nothing else fits / or chosen): the occupie
   const bCities = [...Kingdoms.get(a.B).cities];
   // drive the war to a pending decision by making A commanded, then choose 'regions'
   Kingdoms.setCommanded(a.A, true);
-  runBare(ctx, 6200, () => !(w.tw && w.tw.pend));
+  runBare(ctx, 70);                                            // (the timer itself is tested above: wind it nearly up, 4 of 6 regions + the capital are held)
+  w.tw.sure = War.TOTAL.CAP_HOLD - 40;
+  runBare(ctx, 300, () => !(w.tw && w.tw.pend));
   assert.ok(w.tw.pend, 'pending: a commanded winner is asked');
   assert.equal(War.resolveCapitulation(w.id, 'regions'), true);
   assert.equal(w.ended, true); assert.equal(w.tw.out, 'regions');
@@ -576,18 +624,29 @@ section('AI total war: aiConsiderTotal declares ONLY when every condition holds 
   noErrors(c3);
 });
 
-section('AI total war: the dice - nothing before tick 9000, then one in a while (never on every look)', () => {
+section('AI total war: the dice - nothing before tick 9000, then one in a while (p < 1: never certain), cooldowns after a "no" and after a war', () => {
   const { ctx, a, ka } = aiArena();
   const { War, S } = ctx;
   S.tick = 8000;
   let n = 0;
-  for (let i = 0; i < 1000; i++) { S.tick++; if (War.aiConsiderTotal(a.A, false)) n++; }
+  for (let i = 0; i < 990; i++) { S.tick++; if (War.aiConsiderTotal(a.A, false)) n++; }           // ticks 8001 .. 8990
   assert.equal(n, 0, 'nothing before 9000');
   War.setAutoPeace(false);
-  let trials = 0, hits = 0;
-  for (let i = 0; i < 400 && !hits; i++) { S.tick = 12000 + i * 400; trials++; ka.peaceAt = 0; if (War.aiConsiderTotal(a.A, false)) hits++; }
-  note(`dice: ${hits ? 'declared at consideration #' + trials + ' (one every 400 ticks)' : 'no declaration in ' + trials}`);
-  assert.equal(hits, 1, 'it does happen eventually'); assert.ok(trials >= 2, 'but not on the first look: ' + trials);
+  S.tick = 12000;
+  const inf = War.aiTotalInfo(a.A);
+  assert.equal(inf.why, '', 'every condition holds: ' + inf.why);
+  assert.ok(inf.p > 0.1 && inf.p <= 0.6, 'a roll, never a certainty: p = ' + inf.p.toFixed(3));
+  assert.ok(inf.ratio >= War.TOTAL.AI_RATIO && inf.best === a.B, 'the victim is the weak neighbour');
+  let trials = 0, hits = 0, firstNo = 0;
+  for (let i = 0; i < 400 && !hits; i++) {
+    S.tick = 12000 + i * 400; trials++; ka.peaceAt = 0;
+    const before = S.mod.war.tcd[a.A] || 0;
+    if (War.aiConsiderTotal(a.A, false)) hits++;
+    else if (!firstNo) { firstNo = trials; assert.ok(S.mod.war.tcd[a.A] > before && S.mod.war.tcd[a.A] <= S.tick + 400, 'a "no" is a short cooldown: ' + S.mod.war.tcd[a.A]); }
+  }
+  note(`dice: p ${inf.p.toFixed(2)}, declared at consideration #${trials} (one every 400 ticks)`);
+  assert.equal(hits, 1, 'it does happen eventually');
+  assert.ok(S.mod.war.tcd[a.A] >= S.tick + War.TOTAL.AI_COOLDOWN - 1, 'and then a long cooldown');
 });
 
 section('AI total war in populated worlds: rare (<= 2 per world), only under the conditions, cooldowns respected, nothing breaks', () => {
