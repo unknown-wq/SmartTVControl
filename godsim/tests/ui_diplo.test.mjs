@@ -1,5 +1,5 @@
 // Player-diplomacy UI test (tool «Дипломатия», src/24_ui_diplomacy.js): the REAL game driven with real touch events (CDP).
-//   node tests/ui_diplo.test.mjs [--shots=/tmp/godsim-diplo-ui-shots] [--html=/tmp/godsim-diplo-ui-test.html] [--nobuild] [--only=main,alli,war,vassal,inbox,inspect,stuck,fuzz,perf,small,tiny,land] [--fuzz=N --seed=S]
+//   node tests/ui_diplo.test.mjs [--shots=/tmp/godsim-diplo-ui-shots] [--html=/tmp/godsim-diplo-ui-test.html] [--nobuild] [--only=main,alli,war,call,vassal,inbox,inspect,stuck,fuzz,perf,small,tiny,land] [--fuzz=N --seed=S]
 // Flow (390x844), a hand-built world with three kingdoms A | B | C (A, B: one people, C: another):
 //   Kingdoms tab -> tool «Дипломатия» -> tap a country chip = ACTOR (slim HUD with the contacts strip) -> tap another country on the map (or a flag chip)
 //   = the PAIR CARD (both flags, opinion bar + causes, status chips, every action as a big button with the forecast / the reason why not) ->
@@ -264,7 +264,7 @@ const stockOf = (H, cid) => H.E(cid => { const c = window.__god.S.cities.get(cid
 // ===========================================================================================================================
 // 390x844: the whole flow
 // ===========================================================================================================================
-if (['main', 'alli', 'war', 'vassal', 'inbox', 'inspect', 'stuck', 'fuzz', 'perf'].some(want)) {
+if (['main', 'alli', 'war', 'call', 'vassal', 'inbox', 'inspect', 'stuck', 'fuzz', 'perf'].some(want)) {
   const H = await open(390, 844);
   const { b, E } = H;
   await b.wait(1400);
@@ -482,6 +482,31 @@ if (['main', 'alli', 'war', 'vassal', 'inbox', 'inspect', 'stuck', 'fuzz', 'perf
     check('contacts strip: the chip of the enemy (or the ended war) is up to date', !!chip, JSON.stringify(chip));
     await H.tapSel('[data-act="release"]', 500);
     check('release in a war: everything clean, the AI plays on', isClean(await H.state()), JSON.stringify(await H.state()));
+  });
+
+  if (want('call')) await scenario('3b. call allies into a war: the ally joins (the button forecasts it), then the button explains why it is spent', async () => {
+    const ar = await buildArena(H);
+    if (!ar) throw new Error('no arena');
+    const { A, B, C } = ar;
+    await H.setOp(A, B, 85);
+    const al = await E(([A, B]) => window.__god.Diplomacy.propose(A, B, 'alliance').accepted, [A, B]);
+    const wid = await E(([A, C]) => { const g = window.__god; const w = g.War.declare(A, C, [], undefined); g.step(1); return w ? w.id : 0; }, [A, C]);
+    check('(setup) A allied with B and at war with C', al && wid > 0, JSON.stringify({ al, wid }));
+    await pickActor(H, A); await openCard(H, B);
+    let rows = await actionRows(H);
+    const call = rows.find(r => r.kind === 'call');
+    check('the ally\'s card offers «Позвать в войну» with a friendly forecast', !!call && !call.off && !/Откажут/.test(call.hint), call && call.hint);
+    await H.shot('27_call_card');
+    await H.tapSel('.dbtn[data-kind="call"]', 800);
+    const rs = await resStrip(H);
+    const w = await E(wid => { const x = window.__god.S.wars.get(wid); return x ? { atk: x.attackers.slice(), def: x.defenders.slice() } : null; }, wid);
+    check('one war: no panel, the tap answers at once — «Принято», the ally joined our side', !!rs && /\bok\b/.test(rs.cls) && !!w && w.atk.includes(B) && w.atk.includes(A), `${rs && rs.text} ${JSON.stringify(w)}`);
+    rows = await actionRows(H);
+    const call2 = rows.find(r => r.kind === 'call');
+    check('afterwards the button explains why it is spent (the ally is already in every war)', !call2 || (call2.off && call2.hint.length > 6), call2 && call2.hint);
+    await H.shot('28_call_done');
+    await cleanSlate(H);
+    check('clean slate', isClean(await H.state()), JSON.stringify(await H.state()));
   });
 
   if (want('vassal')) await scenario('4. vassal management: tribute, release, annexation (conditions, no lottery)', async () => {
