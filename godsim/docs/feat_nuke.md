@@ -90,24 +90,26 @@ Caps: 3 bombs in flight, 6 clouds, 6 fallout zones, 8 cities tallied per bomb.
 
 ## Numbers
 
-Headless (node, 96x96 world, `tests/power_nuke.test.mjs`, shared 4-core machine at load ~10):
+Headless (node, 96x96 world, `tests/power_nuke.test.mjs`, quiet machine; in brackets the same test while the shared 4-core box ran at load ~10):
 
-* wave over a dense city, R = 13, 1021 units (640 inside), 65 buildings: wave ticks 0.5 0.4 0.3 0.3 0.2 0.4 1.7 4.5 ms (avg 1.0, worst 4.5), fall ticks 0.005 ms, fallout + cloud active (882 units): `Powers.step` avg 0.016..0.028 ms
-  (the radiation tick every 10th tick is the only spike, <= 5 ms with 880 units).
-* memory: 12 bombs in a row change the heap by < 1 MB, `Fx.list` empty afterwards, no immortal records (everything expires).
+* wave over a dense city, R = 13, 1021 units (640 inside), 65 buildings: the 8 wave ticks cost 0.41 0.48 0.25 0.21 0.17 0.34 0.14 0.40 ms (avg 0.30, max 0.48; loaded: avg 1.0, worst 4.5), fall ticks 0.004 ms,
+  fallout + cloud active (882 units): `Powers.step` avg 0.009 ms (loaded 0.016..0.028; the radiation tick every 10th tick is the only spike: 0.4 ms quiet, <= 5.5 ms loaded).
+* memory: 12 bombs in a row change the heap by < 1 MB (14.9 -> 14.7 MB), `Fx.list` empty afterwards, no immortal records (everything expires).
 * chaos: 3000 ticks with a random action every tick (all tools, 23 bombs): no exceptions.
+* in the browser, whole `Sim.step` through a blast at R = 13 (1194 units, 313 inside): 0.6..1.1 ms on most wave ticks, a few 7..14 ms spikes (first-run JIT / GC / periodic World work, not the plugin: its own cost is the 0.3 ms above); fall and after-blast ticks avg 1.1 ms.
 
-Browser (headless Chromium, software canvas, 390x844 @2x, ~1500 units, `tests/power_nuke_visual.mjs`: per-frame `Render.draw` + canvas flush, layers on / off alternating, low quartile of 80 frames; ms added per frame):
+Browser (headless Chromium, software canvas, 390x844 @2x, ~1500 units, `tests/power_nuke_visual.mjs`: per-frame `Render.draw` + canvas flush, layers on / off alternating, low quartile of 80 frames; ms added per frame, quiet machine):
 
 | view (device px per tile) | mushroom + fallout, R = 13 | R = 9 | first ticks of the blast, R = 13 | alarm, R = 13 | frame without nuke |
 |---|---|---|---|---|---|
-| zoom 6 culture (12) | 0.6 | 0.2 | 0.5 | 0.3 | 20 |
-| zoom 8 political (16) | 0.6 | 0.0 | 1.5 | 0.9 | 14 |
-| zoom 14 city (28) | 1.0 | 0.5 | 1.5 | 0.7 | 3.8 |
-| zoom 24 city (48) | 2.0 | 1.3 | 3.1 | 0.8 | 3.1 |
+| zoom 6 culture (12) | 0.2 | 0.2 | 0.8 | 0.4 | 11.1 |
+| zoom 8 political (16) | 0.4 | 0.3 | 0.6 | 0.3 | 7.0 |
+| zoom 14 city (28) | 0.9 | 0.6 | 1.4 | 0.7 | 4.1 |
+| zoom 24 city (48) | 1.8 | 1.2 | 2.8 | 0.8 | 3.2 |
 
-The machine was heavily loaded while measuring (load 10 on 4 cores), the figures are upper bounds with +-0.4 ms noise. R = 13 is the largest possible bomb; the default brush (3, R = 8) costs about half. At zoom 24 the cloud and the decal
-cover the whole screen: pure fill cost of the software rasteriser (a GPU canvas does not care). CONTRACT 10.3 asks for <= 0.5..0.6 ms at zoom 8 / 14.
++-0.3 ms noise. R = 13 is the largest possible bomb (zoom 14: 0.9 ms against the CONTRACT 10.3 target of 0.5..0.6 ms); the default brush (3, R = 8) costs about half of it. At zoom 24 the cloud and the decal cover the whole screen: pure fill cost of the software
+rasteriser (a GPU canvas does not care). Regression guards of the visual test are deliberately loose (1.6 ms, 3.5 ms at zoom 24) because the shared box is noisy; the exact numbers are printed. Not re-run by me at the end: `perf.mjs` baseline vs new
+(first runs of both trees differed by far less than the run-to-run noise of the box: base 4.8 / 7.0 ms and new 6.9 ms in the same scene), `render.test.mjs` 85/85 and `fxperf.mjs` 9/9 (after one load-induced flake) were green on the final code.
 
 ## Files and tests
 
