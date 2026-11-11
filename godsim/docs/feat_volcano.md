@@ -102,7 +102,7 @@ Icon: 14x14 pixel art — grey smoke discs top right, 4-tone cone, lava crater a
 node tests/power_volcano.test.mjs                  # headless (17 sections, ~10 s) + browser part (builds /tmp/godsim-volcano.html, screenshots)
 node tests/power_volcano.test.mjs --nobrowser      # headless only
 node tests/power_volcano.test.mjs --nohead         # browser part only (visual iteration);  --shots=<dir> (default /tmp/godsim-volcano-shots)
-node tests/power_volcano.test.mjs --perf [--seconds=10] [--seed=4] [--html=<other build>] [--control]   # full game A/B, two Chromium pages at once
+node tests/power_volcano.test.mjs --perf [--frames=240] [--reps=2] [--seed=4] [--world=<file>] [--html=<other build>] [--base=<build without the plugin>]   # whole-game cost, fixed work, CPU time (see Numbers)
 ```
 
 Headless sections: registration + dispatch; cone geometry for every brush size (base, crater, elevation profile, MOUNTAIN/HILL bands, nothing outside
@@ -116,21 +116,71 @@ identity (rumble, eruption, cooling) and in a living world; CPU cost (see Number
 Browser part: tool button + icon, screenshots of rumble / blast / eruption / flow / cooling / extinct cone at zoom 8, 14 and 24
 (`/tmp/godsim-volcano-shots`), pixel checks (glow, plume, bomb colours), draw cost with / without a volcano, save/load in the page, a real touch tap.
 
-## Numbers (this container, Node 22 / headless Chromium, software GL; the machine was shared with other agents: load average 8-11 on 4 cores, so every figure is pessimistic and noisy)
+## Numbers (this container: Node 22 / headless Chromium 390x844 @2x with a SOFTWARE canvas; the box was shared with other agents, load average 8-15 on 4 cores)
 
-Headless (CPU time per tick, minimum of 3 identical replays of a deterministic 903-unit living world with 25 cities, three r=8 volcanoes):
+Headless, CPU time per tick (minimum of 3 identical replays of a deterministic 903-unit living world with 25 cities and three r=8 volcanoes; range over three runs, quiet .. loaded box):
 
-| what | avg | p99 / worst |
+| what | avg | worst |
 |---|--:|--:|
-| the tap itself (`Powers.apply`, builds the rise list, logs, scares) | 0.24 .. 0.55 ms | worst 0.43 .. 1.25 ms |
-| plugin step while three r=8 cones rise (≤ 4 tile edits per tick) | 0.044 .. 0.055 ms | worst 0.34 .. 0.38 ms (whole sim tick worst 1.5 .. 3.4 ms) |
-| plugin step during three eruptions | 0.016 .. 0.022 ms | p99 0.15 .. 0.17, worst 0.18 .. 0.26 ms (whole sim tick avg 0.74 .. 0.86 ms) |
+| the tap itself (`Powers.apply`; the cone is built over the next 60 ticks) | 0.24 .. 1.14 ms | 0.43 .. 2.9 ms |
+| plugin step while three r=8 cones rise (<= 4 tile edits per tick) | 0.044 .. 0.065 ms | 0.34 .. 0.52 ms (whole sim tick worst 1.5 .. 6.6 ms) |
+| plugin step during three eruptions | 0.016 .. 0.022 ms (p99 0.14 .. 0.17) | 0.18 .. 0.26 ms (whole sim tick avg 0.74 .. 0.86 ms) |
 | idle plugin (no volcano alive) | one `L.length === 0` test per tick | - |
 
-Browser (390x844 @2x, plugin draw functions timed from inside the page; a whole eruption in view):
+Whole game, `node tests/power_volcano.test.mjs --perf` (1471-unit world, 3 wars, x4; FIXED work per run = 120 warm-up + 240 frames, 2 ticks per 3 frames, synthetic clock, the canvas flushed
+every frame, cost = renderer main-thread CPU time from CDP `ThreadTime`, median of 2 interleaved runs; wall-clock A / B runs were useless on the busy box: two IDENTICAL pages differed by +-50%).
+Three volcanoes erupting around the biggest city (136 burning tiles, 1162 of 1473 units left), CPU ms per frame:
 
-| view | plugin draw per frame |
-|---|---|
-| zoom 8, one eruption (13-unit test world) | +0.07 ms over the same frame without it (worst frame 2.3 ms) |
-| zoom 14, one eruption | +0.01 .. 0.17 ms (worst frame 1.9 ms) |
-| 1500-unit game, THREE eruptions around the biggest city, zoom 8 / 14 / 6 | 0.28 .. 0.54 ms (≈ 0.1 .. 0.18 ms per eruption), the first frame after a tap bakes ≤ 3 sprites (no hitch) |
+| scene | control | eruptions | what the eruptions do to the world (fires, lava, territory) | the plugin's drawing (incl. the software rasteriser) | plugin JS draw time, median / p90 |
+|---|--:|--:|--:|--:|--:|
+| whole map | 8.56 | 11.12 | +2.04 | +0.52 (0.17 per eruption) | 0.10 / 0.30 ms |
+| whole map, political | 9.73 | 13.35 | +3.12 | +0.49 | 0.10 / 0.20 ms |
+| zoom 8 political | 10.19 | 14.13 | +2.19 | +1.75 (0.58 per eruption) | 0.20 / 0.30 ms |
+| zoom 14 city | 5.86 | 10.35 | +1.66 | +2.83 (0.94 per eruption) | 0.20 / 0.30 ms |
+| zoom 6 culture | 14.56 | 18.96 | +2.88 | +1.51 (0.50 per eruption) | 0.20 / 0.30 ms |
+
+* The plugin's own JS work is <= 0.2 ms per frame for all three eruptions (budget 0.6 per eruption). A software canvas rasterises lazily and pays for every translucent pixel, so the
+  drawing costs ~1 ms per eruption at zoom 14 in this headless run; on a GPU canvas (iPhone) that part is off the main thread. The plume (a column of overlapping smoke puffs) was ~80% of it; its slots are
+  packed toward the base (`(slot / N) ^ 1.5`, 18 slots) which keeps the dense body and costs 32% fewer pixels than the first version (22 uniform slots; 3.9 -> 3.0 ms at zoom 14).
+* "World" is what a burning forest, lava tiles and fleeing people cost the existing machinery (Render's terrain repaints, flames, scorch decals, overlay rebuilds; sim +0.2..0.4 ms per tick).
+  It is not draw code of the plugin. With the political / culture overlay on, part of it is the Cities lava rule (see REQUESTS below).
+* IDLE plugin vs a build of the previous commit without it (`--base=`), same world, control runs: ratio 0.975 / 0.977 / 0.979 / 0.983 / 0.948 on the five scenes (no regression; the difference is noise).
+* Every `tests/perf.mjs` / `tests/fxperf.mjs` scene is unaffected while no volcano exists (no per-frame work, no per-tick work beyond the empty-list test); I did NOT re-run those two suites after the last
+  tuning (coordinator's request); `fxperf.mjs` printed one cold-start threshold failure (22.8 ms vs 12 ms) while the box ran at load 13, `plugins.test.mjs` fails its «flash paints the canvas» pixel threshold
+  (239 vs > 240) on the pristine base commit too.
+
+## For the lead (merge into the shared docs)
+
+### STATUS.md, suggested text (section "God powers (plugins)")
+* **Вулкан (volcano)**: plugin power (`src/19_power_volcano.js`, `src/34_gfx_volcano.js`, `docs/feat_volcano.md`). A tap raises a cone from the outside in (rumble 60 ticks, buildings on the footprint destroyed, people flee),
+  the crater opens and erupts for 500..800 ticks (lava bombs every 25..70 ticks hurt units, damage buildings, ignite forests; a lava tongue creeps downhill <= 40 live tiles and razes what it meets), then cools into an extinct
+  cone (a tap on it re-erupts). <= 3 live volcanoes, the 4th replaces the oldest. State only in `S.eff.volcanoes` / `S.mod.volcano`, save / load continues IDENTICALLY (private PRNG per volcano). Plugin step 0.02 ms per tick
+  (worst 0.26), plugin JS draw <= 0.2 ms per frame for three eruptions. Tests: `node tests/power_volcano.test.mjs` (17 headless + 13 browser), `--perf` for the whole-game cost.
+
+### REQUESTS.md, suggested lines
+* [from Volcano -> Cities (06_cities.js) / Regions (14_regions.js)] **Lava is non-land for territory in Cities (`Tiles.isLand`) but land in Regions (`isLandT` = anything except DEEP / SHALLOW).** Every lava tile inside a city's
+  sphere releases its owner (`S.owner[i] = 0`, `S.ownerVer++`) and reclaims it when it cools, so a volcano (or the lava brush) next to a city makes Render rebuild the political / culture overlay (~30 ms in software GL,
+  throttled to one per 150 ms) all the time: measured on the same world (counters, deterministic), `ownerVer` bumps in 10 s 80 -> 2..3 and political rebuilds 31 -> 2..3 with the change below; the frame cost of the overlay scenes dropped from 1.15 / 1.88 / 1.76 x
+  the control (whole-map political / zoom 8 political / culture, early wall-clock A / B, noisy) to about 1.0-1.1 x in the same kind of run. Proposed patch (4 lines, validated: `cities.test` 32/32, `regions.test` 20/20, `war.test --quick` 20/20): add
+  `const ownable = (t) => t !== T.DEEP && t !== T.SHALLOW;` next to the other helpers of 06_cities.js and use it instead of `Tiles.isLand(...)` in `recomputeTerritory` (`inside` test and the release condition) and in the `tileChanged`
+  handler (`ownable(o) === ownable(n)`). NOT applied by me (not my module).
+* [from Volcano -> tests/plugins.test.mjs] The check «built-in full-screen flash (Fx type flash) paints the canvas» needs a pixel > 240 two frames after the call; it reads 229..239 on the pristine base commit as well (the flash
+  fades in those two frames, more so under load). Suggest `> 220`.
+* [from Volcano -> World] After a load World rebuilds its fire / lava lists in tile-index order, so its own random fire / lava-cooling draws differ from the uninterrupted run (already printed as KNOWN ISSUE by `save.test.mjs`).
+  The volcano does not depend on it (own PRNG, lava schedule re-asserted); other plugins that draw from `R` between ticks will see the same drift.
+* [from Volcano -> Render] Observation, no action: the cost of a translucent sprite is mostly paid at the (lazy) raster flush, not in `Render.stats.drawMs`; the JS timings of `perf.mjs` / `fxperf.mjs` do not see it.
+  `--perf` of the volcano test measures it with `ThreadTime` + a 1 px `getImageData` flush per frame (a reusable recipe for load-proof frame-cost A / B tests).
+
+### Merge notes
+* My branch was based on an old main without `godsim/`; I fast-forwarded it to your 36e3f75 (`git merge --ff-only claude/relaxed-keller-n4fq7q`), so the 5 commits sit directly on top of it. Files touched: only the 5 new ones listed at the top
+  (nothing in shared / core / generated files; `godsim/index.html` is not committed).
+* `tests/fixtures/volcano_hooks.js` is only used with `build.mjs --extra=`; it is not part of the shipped game.
+
+## Known issues
+* Eruptions near a city with the political / culture overlay on rebuild the overlay far more often than needed until the Cities patch above is applied.
+* An eruption in a forest starts large fires (136 burning tiles in the test world); they are World's normal fire rules (the flammables of the cone's surroundings are ignited by bombs and by the lava tongue), and every burning tile costs Render flames,
+  scorch decals and terrain repaints. Grass catches fire with 20% (forest 85%) to keep that bounded; tell me if you want a global knob.
+* The lava tongue steps to one of the 4 neighbours of its newest tiles, always away from the crater (within 11 tiles of the cone), preferring low ground and its azimuth; it never enters water or a tile next to water, and when it finds no
+  way it picks another azimuth and waits 12 (later 40) ticks (`fs` counts the stalls), so on a basin it simply stops and cools.
+* Units on a tile that turns into LAVA take World's 40 damage (as for the lava brush); fleeing people are sent to a safe spot but can still be caught by a bomb.
+* The browser test uses a small hand-built world (13 units); the whole-game cost is measured only by the opt-in `--perf`.
