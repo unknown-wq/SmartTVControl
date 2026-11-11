@@ -681,6 +681,33 @@ section('AI total war in populated worlds: rare (<= 2 per world), only under the
   note(`AI total wars over ${seeds.length} world(s): ${total}`);
 });
 
+section('losses: soldiers who die of old age / plague are no war losses in a TOTAL war (a war of generations must not wear both sides out for nothing); fights and hunger still count; a limited war counts everything as before', () => {
+  for (const total of [true, false]) {
+    const { ctx, a } = std();
+    const { War, S, Units } = ctx;
+    War.setAutoPeace(false);
+    const goals = War.potentialGoals(a.A, a.B);
+    const w = total ? War.declareTotal(a.A, a.B) : War.declare(a.A, a.B, goals.slice(0, 1), 'conquest');
+    assert.ok(w, War.lastError);
+    run(ctx, 150);
+    const soldiers = [...S.armies.values()].filter(x => x.kingdomId === a.A).flatMap(x => x.members.map(id => S.units.get(id))).filter(Boolean);
+    assert.ok(soldiers.length >= 5, 'the attacker has an army: ' + soldiers.length);
+    const foe = [...S.units.values()].find(u => u.kingdomId === a.B);
+    const l0 = w.losses[a.A], we0 = w.wear[a.A], ev0 = w.ev[a.A];
+    Units.kill(soldiers[0], 'age'); Units.kill(soldiers[1], 'disease');
+    const natural = w.losses[a.A] - l0;
+    if (total) { assert.equal(natural, 0, 'old age / plague: no loss'); assert.equal(w.wear[a.A], we0, 'no weariness'); assert.equal(w.ev[a.A], ev0, 'no morale hit'); }
+    else assert.equal(natural, 2, 'a limited war counts them as before');
+    const l1 = w.losses[a.A];
+    Units.kill(soldiers[2], 'damage', foe);                       // an enemy killed him
+    Units.kill(soldiers[3], 'hunger');                            // supply attrition
+    assert.equal(w.losses[a.A] - l1, 2, 'a death in battle and a death by hunger count');
+    assert.ok(w.wear[a.A] > we0, 'and they wear the country out');
+    note(`${total ? 'total' : 'limited'} war: natural deaths counted ${natural}, fight + hunger counted ${w.losses[a.A] - l1}`);
+    noErrors(ctx, 'losses');
+  }
+});
+
 // ================================================================== save / load mid-war
 function mkStore() { const m = new Map(); return { getItem: k => (m.has(k) ? m.get(k) : null), setItem: (k, v) => { m.set(k, String(v)); }, removeItem: k => { m.delete(k); } }; }
 function diffCtx(a, b) {

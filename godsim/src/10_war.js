@@ -1550,6 +1550,8 @@ const War = (() => {
     if (killer && killer.kingdomId && killer.kingdomId !== vk) w = warBetween(killer.kingdomId, vk);
     if (!w && u.armyId) { const a = S.armies.get(u.armyId); if (a) w = S.wars.get(a.warId) || null; }
     if (!w || w.ended || !w.losses || !w.wear || !w.ev || !w.kills) return;
+    // a total war lasts for generations: soldiers who die of old age / plague (or are erased by a god) are not war losses - counting them would wear both sides out for nothing
+    if (w.total === true && !(killer && killer.kingdomId) && (cause === 'age' || cause === 'disease' || cause === 'erase' || cause === 'lost')) return;
     const soldier = u.armyId > 0;
     if (w.losses[vk] === undefined) return;
     w.losses[vk] += 1;

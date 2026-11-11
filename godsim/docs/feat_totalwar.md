@@ -30,8 +30,10 @@ A second kind of war next to the unchanged limited war («Регион»). On th
   The **AI** chooses by culture and size (same people & small → merge, much bigger foreign → vassal, otherwise regions). A **commanded** winner gets the
   **capitulation sheet** (the three buttons, suggestion marked) — the loser's armies are already at home and nobody attacks while it waits; the AI decides after
   `CAP_ASK` = 1800 ticks, or at once when the player's command is released. No stuck state: back/«X» keeps the decision open on the HUD («Решить»).
-* **AI total wars are rare**: ≥ tick 9000, kingdom ≥ 3000 old, stable, ≥ 60 people, aggressive ruler, a **land neighbour on the same landmass** that is ≥ 2.5×
-  weaker (joiners counted), no other war, ≥ 1500 ticks of peace, per-kingdom cooldown 6000 and a world cooldown 5000, a dice roll on top.
+* **AI total wars are rare**: ≥ tick 9000, kingdom ≥ 3000 old, stable (≥ 55), ≥ 60 people, a warlike ruler (`policy.war − 0.7·policy.peace ≥ 0.1`: an
+  aggressive / brave human, almost any orc), a **land neighbour on the same landmass** that is ≥ 2.5× weaker (joiners counted), no other war, ≥ 1500 ticks of
+  peace, per-kingdom cooldown 6000 and a world cooldown 5000, and a dice roll on top (p = 0.13 … 0.59, one look per kingdom every 400 ticks). The AI never starts a
+  total war from a commanded kingdom, a vassal, or against an ally / overlord / vassal / truce partner.
 
 ## 2. API (sim side, `War`)
 
@@ -65,7 +67,7 @@ saved with the war; the whole thing is deterministic through `R` (save/load mid-
 | `CAP_HOLD` | 8000 | **the duration knob**: the government's will-to-resist timer (see §1); 2:1 attacker vs a 6-region country ends after ~4600-8500 ticks |
 | `CAP_ASK` | 1800 | ticks a commanded winner may think |
 | `TW_INFAMY / _CLAIM` | 25 / 8 | infamy for a total war without / with a claim |
-| `TW_AI_*` | see the source | AI rule: `MIN_TICK 9000, COOLDOWN 6000, GLOBAL 5000, RATIO 2.5, AGGR 0.3, CHANCE 0.2, PEACE 1500` |
+| `TW_AI_*` | see the source | AI rule: `MIN_TICK 9000, COOLDOWN 6000, GLOBAL 5000, RATIO 2.5, AGGR 0.1, CHANCE 0.3, PEACE 1500` |
 
 ## 4. Tests
 
