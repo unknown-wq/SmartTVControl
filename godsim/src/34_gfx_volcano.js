@@ -230,10 +230,13 @@ const GfxVolcano = (() => {
     const rad = (e.rc + 1.9) * sc * pulse;
     ctx.globalAlpha = Math.min(1, g);                                       // warm tint on the ground (normal blend: additive washes grey rock out)
     ctx.drawImage(halo, X - rad, Y - rad, rad * 2, rad * 2);
-    const rr = (e.rc + 0.5) * sc * pulse;                                  // a small hot core over the lava
-    ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = 0.3 * g;
-    ctx.drawImage(heat, X - rr, Y - rr, rr * 2, rr * 2);
-    ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
+    if (sc >= 9) {                                                         // a small hot core over the lava (additive blending is the slow path of a software canvas: not when the map is far away)
+      const rr = (e.rc + 0.5) * sc * pulse;
+      ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = 0.3 * g;
+      ctx.drawImage(heat, X - rr, Y - rr, rr * 2, rr * 2);
+      ctx.globalCompositeOperation = 'source-over';
+    }
+    ctx.globalAlpha = 1;
     // bubbles popping on the lava surface
     if (sc >= 12 && e.phase === 1) {
       const u = sc / 16, cr = e.cr, w = S.w;
@@ -251,10 +254,10 @@ const GfxVolcano = (() => {
 
   const PLUME_N = 22;
   function drawPlume(ctx, e, X, Y, sc, now, k, g) {
-    const N = PLUME_N;                                                     // a fixed number of slots: the column never pops when the strength changes
+    const N = sc < 10 ? 12 : PLUME_N;                                      // a fixed number of slots (fewer when the map is zoomed far out): the column never pops when the strength changes
     const kk = Math.min(1.25, k), hgt = (3.2 + 5.6 * kk + 0.3 * e.rb) * sc;
     const lean = (e.wd * 0.9 + 0.12 * Math.sin(now / 3700 + e.id)) * hgt * 0.55;
-    const sizeK = (0.5 + 0.5 * Math.min(1, k)) * (0.85 + 0.05 * e.rb);
+    const sizeK = (0.5 + 0.5 * Math.min(1, k)) * (0.62 + 0.13 * e.rb);                  // wider column for a wider cone (r=1: 1.08, r=3: 1.2, r=8: 1.53)
     const tN = (now / 6600 + hf(e.id)) * N, fl = Math.floor(tN), i0 = fl % N, f = tN - fl;   // slot ring: puff j climbs, wraps from the top to the crater
     const aMax = 0.4 + 0.45 * Math.min(1, k);
     for (let q = N - 1; q >= 0; q--) {
@@ -270,7 +273,7 @@ const GfxVolcano = (() => {
     }
     ctx.globalAlpha = 1;
     // lit from below: a soft additive glow on the base of the column
-    if (g > 0.05) {
+    if (g > 0.05 && sc >= 9) {
       const rad = (1.4 + 0.7 * kk) * sc * (e.rb * 0.2 + 1);
       ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = 0.2 * g * Math.min(1, k);
       ctx.drawImage(heat, X - rad, Y - rad * 1.55, rad * 2, rad * 2);

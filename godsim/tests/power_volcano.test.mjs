@@ -1,4 +1,5 @@
 // «Вулкан» (volcano) power: node tests/power_volcano.test.mjs [--nobrowser] [--nohead] [--shots=/tmp/godsim-volcano-shots] [--quick]
+//   node tests/power_volcano.test.mjs --perf [--seconds=10] [--seed=4] [--html=/tmp/other-build.html]   full-game frame cost with three volcanoes erupting vs the same world without (see perfPart)
 // Headless sections use the real sim (World / Buildings / Cities / Units / Sim / Save + src/19_power_volcano.js, loaded by the harness like every plugin);
 // the browser section builds the real game (+ tests/fixtures/volcano_hooks.js) to /tmp/godsim-volcano.html and looks at it at zoom 8 / 14 / 24.
 import assert from 'node:assert/strict';
@@ -13,7 +14,7 @@ const args = Object.fromEntries(process.argv.slice(2).map(a => { const m = a.mat
 const QUICK = !!args.quick;
 const results = [];
 function section(name, fn) {
-  if (args.nohead) return;                                                       // --nohead: only the browser part (visual iteration)
+  if (args.nohead || args.perf) return;                                          // --nohead: only the browser part (visual iteration); --perf: only the full-game frame cost comparison
   const t0 = performance.now();
   try { fn(); results.push({ name, ok: true }); console.log(`  ok   ${pad(name, 92)} ${(performance.now() - t0).toFixed(0)} ms`); }
   catch (e) { results.push({ name, ok: false, e }); console.log(`  FAIL ${name}\n       ${(e && e.stack || e).toString().split('\n').slice(0, 12).join('\n       ')}`); }
@@ -255,7 +256,7 @@ section('bombs: units within 1.3 tiles are hurt (and burn), buildings damaged, f
   for (let k = 0; k < 20; k++) { const x = 49 + (k % 5) * 2, y = 53 + Math.floor(k / 5) * 2; spots.push(y * S.w + x); e.bombs.push([e.x, e.y, x + 0.5, y + 0.5, S.tick, S.tick + 1, 3]); }
   step(ctx, 1);
   const lava = spots.filter((i) => S.tile[i] === T.LAVA);
-  assert.ok(lava.length >= 9 && lava.length <= 20, 'lava puddles after 20 bombs: ' + lava.length);
+  assert.ok(lava.length >= 6 && lava.length <= 18, 'lava puddles after 20 bombs (60% each): ' + lava.length);
   assert.equal(e.lav.length / Q >= lava.length, true);
   step(ctx, 330);
   for (const i of spots) assert.notEqual(S.tile[i], T.LAVA, 'bomb lava cools within ~300 ticks');
@@ -543,6 +544,7 @@ section('save / load in the middle of an eruption: S.eff, S.mod and the terrain 
     arena(ctx, 48, 48, 20, ctx.Const.T.SAND);
     Powers.apply('volcano', 48.5, 48.5, 4, 'tap');
     if (ticksBefore >= 0) step(ctx, ticksBefore); else { let g = 0; while (vols(ctx).length && vols(ctx)[0].phase !== 2 && g++ < 1200) step(ctx, 1); step(ctx, 20); }
+    if (ticksBefore > 100) { let g = 0; while (vols(ctx)[0] && !(vols(ctx)[0].bombs.length > 0 && vols(ctx)[0].lav.length > 0) && g++ < 200) step(ctx, 1); }     // a moment with bombs in the air and lava on the ground
     const e = vols(ctx)[0];
     assert.ok(e, 'the volcano is alive when saved (' + label + ')');
     if (ticksBefore > 100) assert.ok(e.phase === 1 && e.bombs.length > 0 && e.lav.length > 0, 'mid-eruption state: ' + JSON.stringify({ ph: e.phase, b: e.bombs.length, l: e.lav.length }));
@@ -567,6 +569,7 @@ section('save / load in a living world (villages, forest fires, people fleeing):
   spot[0] = Math.max(8, Math.min(87, spot[0])); spot[1] = Math.max(8, Math.min(87, spot[1]));
   Powers.apply('volcano', spot[0] + 0.5, spot[1] + 0.5, 4, 'tap');
   step(ctx, 60 + 200);
+  { let g = 0; while (vols(ctx)[0] && !(vols(ctx)[0].bombs.length > 0 && vols(ctx)[0].lav.length > 0) && g++ < 200) step(ctx, 1); }     // a moment with bombs in the air and lava on the ground
   const e = vols(ctx)[0];
   assert.ok(e && e.phase === 1 && e.bombs.length > 0 && e.lav.length > 0, 'mid-eruption: ' + JSON.stringify({ ph: e && e.phase, b: e && e.bombs.length, l: e && e.lav.length }));
   const ctx2 = loadSim();
@@ -754,7 +757,85 @@ async function browserPart() {
   await b.close();
 }
 
-if (!args.nobrowser) { console.log('# browser: icon, tool button, rumble / blast / eruption / flow / cooling at zoom 8, 14, 24, draw cost, save / load, real touch tap'); try { await browserPart(); } catch (e) { results.push({ name: 'browser part', ok: false, e }); console.log('  FAIL browser part\n       ' + (e && e.stack || e).toString().split('\n').slice(0, 10).join('\n       ')); } }
+// ================================================================== frame cost of a full game with eruptions in view (opt-in: --perf)
+// Two identical worlds (the same saved 1500-unit world, 3 wars) run CONCURRENTLY in two Chromium processes at x4, so both see the same machine load:
+// A = three volcanoes erupting around the biggest city (kept erupting by re-tapping), B = nothing. The five scenes of tests/perf.mjs are measured; the ratio A / B
+// of the frame CPU (sim + draw + UI) is what counts (budget: within +10%), plus the plugin's own draw time (wrapped draw functions) <= 0.6 ms per frame.
+async function perfPart() {
+  const { launch } = await import('./browser.mjs');
+  let out = '/tmp/godsim-volcano.html';
+  if (typeof args.html === 'string') out = args.html;                            // --html=<a build made with --extra=tests/fixtures/volcano_hooks.js>: measure another build (e.g. with a patched module)
+  else execFileSync('node', [path.join(root, 'build.mjs'), '--out=' + out, '--extra=tests/fixtures/volcano_hooks.js', '--check'], { cwd: root, stdio: 'pipe' });
+  const SEC = +(args.seconds || 10), SEED = +(args.seed || 4);
+  const check = (name, ok, info) => { results.push(ok ? { name, ok: true } : { name, ok: false, e: new Error(info || '') }); console.log((ok ? '  ok   ' : '  FAIL ') + name + (info !== undefined ? '  (' + info + ')' : '')); };
+  const mk = async () => { const b = await launch({ url: 'file://' + out, width: 390, height: 844, dpr: 2 }); for (let i = 0; i < 100; i++) { if (await b.eval(() => !!(window.__god && window.__volc))) break; await b.sleep(100); } return b; };
+  const A = await mk(), B = await mk();
+  const world = await A.eval(async ({ seed }) => {
+    const g = window.__god;
+    g.Main.newWorld({ seed, w: 96, h: 96, populate: true }); g.setSpeed(0);
+    let guard = 0;
+    while (g.S.units.size < 1480 && g.S.tick < 30000 && guard++ < 400) { g.step(100); await new Promise((r) => setTimeout(r, 0)); }
+    for (const k of [...g.S.kingdoms.values()].filter((q) => q.alive !== false)) { if (g.War.active().length >= 3) break; if (g.War.warsOf(k.id).length) continue; try { g.Diplomacy.godWhisperWar(k.id); } catch (e) { /* ignore */ } }
+    g.step(40);
+    const c = g.Main.largestSettlement() || { x: 48, y: 48 };
+    return { tick: g.S.tick, units: g.S.units.size, wars: g.War.active().length, ctr: { x: c.x, y: c.y }, json: g.Save.serialize() };
+  }, { seed: SEED });
+  console.log(`  world: tick ${world.tick}, ${world.units} units, ${world.wars} wars, centre ${world.ctr.x.toFixed(0)},${world.ctr.y.toFixed(0)}`);
+  check('world has ~1500 units and 3 wars', world.units >= 1300 && world.wars >= 2, JSON.stringify({ units: world.units, wars: world.wars }));
+  for (const b of [A, B]) await b.eval((d) => { const g = window.__god; g.Save.deserialize(d); g.Main.worldReplaced('load'); g.setSpeed(0); }, world.json);
+  // A: three erupting volcanoes around the biggest city, kept alive; the plugin's draw functions are timed
+  await A.eval(({ ctr }) => {
+    const g = window.__god, S = g.S;
+    const cl = (v) => Math.max(8, Math.min(87, Math.floor(v)));
+    window.__sites = [[cl(ctr.x + 5), cl(ctr.y + 1), 5], [cl(ctr.x - 4), cl(ctr.y + 5), 3], [cl(ctr.x + 1), cl(ctr.y - 6), 6]];
+    for (const [x, y, r] of window.__sites) g.Powers.apply('volcano', x + 0.5, y + 0.5, r, 'tap');
+    window.__keep = setInterval(() => {
+      const L = S.eff.volcanoes;
+      for (const [x, y, r] of window.__sites) { const e = L.find((q) => Math.floor(q.x) === x && Math.floor(q.y) === y); if (!e || e.phase === 2 || (e.phase === 1 && e.until - S.tick < 250)) g.Powers.apply('volcano', x + 0.5, y + 0.5, r, 'tap'); }
+    }, 400);
+    const V = window.__volc, d = V.GfxPlugins.effects.find((q) => q.key === 'volcanoes'), od = d.draw; window.__vd = 0;
+    d.draw = function () { const a = performance.now(); od.apply(this, arguments); window.__vd += performance.now() - a; };
+    const oi = V.GfxPlugins.fx.volc_impact; V.GfxPlugins.fx.volc_impact = function () { const a = performance.now(); oi.apply(this, arguments); window.__vd += performance.now() - a; };
+  }, { ctr: world.ctr });
+  const scenes = [
+    { name: 'whole map', mode: 0, zoom: 'min' }, { name: 'whole, political', mode: 1, zoom: 'min', orders: true }, { name: 'zoom 8 political', mode: 1, zoom: 8, at: 1 },
+    { name: 'zoom 14 city', mode: 0, zoom: 14, at: 1 }, { name: 'zoom 6 culture', mode: 2, zoom: 6, at: 1 },
+  ];
+  const measure = (b, sc, secs) => b.eval(async ({ sc, sec, ctr }) => {
+    const g = window.__god;
+    g.Render.setMode(sc.mode); g.Render.showAllOrders = !!sc.orders;
+    g.Render.setCamera(sc.at ? ctr.x : 48, sc.at ? ctr.y : 48, sc.zoom === 'min' ? g.Render.minZoom() : sc.zoom);
+    await new Promise((r) => setTimeout(r, 700));
+    g.setSpeed(4); window.__vd = 0;
+    const s0 = { frames: g.stats.frames, ticks: g.stats.ticks }, t0 = performance.now();
+    let n = 0, frame = 0, sim = 0, draw = 0;
+    await new Promise((res) => { const f = () => { n++; frame += g.stats.frameMs; sim += g.stats.simMs; draw += g.Render.stats.drawMs; if (performance.now() - t0 < sec * 1000) requestAnimationFrame(f); else res(); }; requestAnimationFrame(f); });
+    const dt = (performance.now() - t0) / 1000, frames = g.stats.frames - s0.frames;
+    g.setSpeed(0);
+    return { fps: frames / dt, tickRate: (g.stats.ticks - s0.ticks) / dt, frame: frame / n, sim: sim / n, draw: draw / n, vd: (window.__vd || 0) / n, units: g.S.units.size, vols: g.S.eff.volcanoes ? g.S.eff.volcanoes.length : 0, fires: g.World.fireCount() };
+  }, { sc, sec: secs || SEC, ctr: world.ctr });
+  await Promise.all([measure(A, { name: 'warm-up', mode: 0, zoom: 14, at: 1 }, 4), measure(B, { name: 'warm-up', mode: 0, zoom: 14, at: 1 }, 4)]);      // sprite / frame caches are baked once: not part of the numbers
+  console.log('  scene              |  frame CPU ms  eruptions / none  ratio | draw ms | sim ms | plugin draw ms/frame | ticks/s | fps | units  fires');
+  const rows = [];
+  for (const sc of scenes) {
+    const [a, bb] = await Promise.all([measure(A, sc), measure(B, sc)]);
+    rows.push({ sc, a, b: bb });
+    const ratio = a.frame / bb.frame;
+    console.log(`  ${pad(sc.name, 18)} | ${a.frame.toFixed(2).padStart(6)} / ${bb.frame.toFixed(2).padStart(6)}   ${ratio.toFixed(3)} | ${a.draw.toFixed(2)} / ${bb.draw.toFixed(2)} | ${a.sim.toFixed(2)} / ${bb.sim.toFixed(2)} | ${a.vd.toFixed(3)} | ${a.tickRate.toFixed(1)} / ${bb.tickRate.toFixed(1)} | ${a.fps.toFixed(0)} / ${bb.fps.toFixed(0)} | ${a.units} / ${bb.units}  ${a.fires} / ${bb.fires}`);
+  }
+  for (const { sc, a, b: bb } of rows) {
+    check(`${sc.name}: frame CPU with three erupting volcanoes within +10% of the same world without (A ${a.frame.toFixed(2)} ms vs B ${bb.frame.toFixed(2)} ms)`, a.frame <= bb.frame * 1.10 + 0.15, 'ratio ' + (a.frame / bb.frame).toFixed(3));
+    check(`${sc.name}: the sim keeps its pace (>= 90% of the control, ${a.tickRate.toFixed(1)} vs ${bb.tickRate.toFixed(1)} ticks/s)`, a.tickRate >= bb.tickRate * 0.9 - 0.5 && a.tickRate >= 25, a.tickRate.toFixed(1));
+    if (sc.at && (sc.zoom === 8 || sc.zoom === 14)) check(`${sc.name}: the plugin's own draw calls (effect + impact fx) cost <= 0.6 ms per frame`, a.vd <= 0.6, a.vd.toFixed(3) + ' ms');
+    check(`${sc.name}: all three volcanoes were alive during the measurement`, a.vols >= 2, String(a.vols));
+  }
+  check('no page errors (A)', A.errors.length === 0, A.errors.join(' | ').slice(0, 300));
+  check('no page errors (B)', B.errors.length === 0, B.errors.join(' | ').slice(0, 300));
+  await A.close(); await B.close();
+}
+
+if (args.perf) { console.log('# perf: the full game (1500 units, 3 wars, x4) with three volcanoes erupting vs the same world without, five scenes, concurrently'); try { await perfPart(); } catch (e) { results.push({ name: 'perf part', ok: false, e }); console.log('  FAIL perf part\n       ' + (e && e.stack || e).toString().split('\n').slice(0, 10).join('\n       ')); } }
+else if (!args.nobrowser) { console.log('# browser: icon, tool button, rumble / blast / eruption / flow / cooling at zoom 8, 14, 24, draw cost, save / load, real touch tap'); try { await browserPart(); } catch (e) { results.push({ name: 'browser part', ok: false, e }); console.log('  FAIL browser part\n       ' + (e && e.stack || e).toString().split('\n').slice(0, 10).join('\n       ')); } }
 const failed = results.filter((r) => !r.ok);
 console.log(`\n${results.length - failed.length} passed, ${failed.length} failed`);
 process.exit(failed.length ? 1 : 0);

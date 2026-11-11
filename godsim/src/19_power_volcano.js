@@ -45,7 +45,8 @@ const PowerVolcano = (() => {
   const BURST_MIN = 25, BURST_MAX = 70, BOMBS_MIN = 3, BOMBS_MAX = 8, MAX_BOMBS = 24;
   const HIT_R = 1.3;                               // bomb blast radius against units (tiles)
   const FLOW_CAP = 40, LAVA_CAP = 56, FLOW_REACH = 11;   // live flow tiles / tracked lava tiles per volcano / tiles beyond the cone the tongue may travel
-  const FLOW_LIFE = 300, BOMB_LAVA_LIFE = 120;
+  const FLOW_LIFE = 240, BOMB_LAVA_LIFE = 90;      // base lifetime (ticks) of a flow tile / a bomb puddle before it solidifies (+ a random part)
+  const PUDDLE_P = 0.6;                            // chance that a bomb leaves a lava puddle
   const RIM = 232, BASE_E = 164, FLOOR = 204;      // cone profile: elevation of the crater rim, of the foot of the cone, of the crater floor
   const SM = 0.62;                                 // share of the slope (crater edge -> foot) that is MOUNTAIN
   const MTN_LO = 192;                              // MOUNTAIN from this elevation, HILL below
@@ -77,8 +78,8 @@ const PowerVolcano = (() => {
     if (t === T.FOREST) return 0.85;
     if (rk === RES.TREE) return 0.8;
     if (rk === RES.BERRY) return 0.5;
-    if (t === T.GRASS) return 0.4;
-    if (t === T.HILL) return 0.1;
+    if (t === T.GRASS) return 0.2;                                               // meadows catch fire less eagerly than woods / houses: every burning tile costs frame time (flames, scorch marks, terrain repaints)
+    if (t === T.HILL) return 0.04;
     return 0;
   }
   // the volcano's own random stream (mulberry32, state in e.rs): see the header
@@ -370,14 +371,14 @@ const PowerVolcano = (() => {
     }
     e.fs = 0;
     const x = best % w, y = (best - x) / w;
-    const ok = placeLava(e, x, y, FLOW_LIFE + ri(e, 150), tick, 1);
+    const ok = placeLava(e, x, y, FLOW_LIFE + ri(e, 100), tick, 1);
     e.fn = tick + 10 + ri(e, 5);
     if (ok) {
       for (let q = 0; q < 4; q++) {                                               // the front sets fire to what it touches
         const nx = x + DX4[q], ny = y + DY4[q];
         if (!inMap(nx, ny)) continue;
         const p = burnP(ny * w + nx);
-        if (p > 0 && rf(e) < p * 0.5) World.ignite(nx, ny);
+        if (p > 0 && rf(e) < p * 0.4) World.ignite(nx, ny);
       }
     }
     return ok;
@@ -449,8 +450,8 @@ const PowerVolcano = (() => {
     // the bomb leaves a lava puddle (not on water, not on the crater, never beyond the cap)
     const i = iy * w + ix, t = S.tile[i];
     if (t === T.DEEP || t === T.SHALLOW) { Fx.add('splash', tx, ty, { ttl: 0.7 }); return; }
-    if (t !== T.LAVA && !isCrater(e, i) && rf(e) < 0.75) {
-      const life = Math.min(BOMB_LAVA_LIFE + ri(e, 180), e.phase === 2 ? Math.max(5, e.until - tick - 5) : 1e6);
+    if (t !== T.LAVA && !isCrater(e, i) && rf(e) < PUDDLE_P) {
+      const life = Math.min(BOMB_LAVA_LIFE + ri(e, 110), e.phase === 2 ? Math.max(5, e.until - tick - 5) : 1e6);
       placeLava(e, ix, iy, life, tick, 0);
     }
   }
