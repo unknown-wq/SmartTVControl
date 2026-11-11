@@ -544,6 +544,7 @@ const GfxRocket = (() => {
     if (sp.cv === null) return;
     ctx.drawImage(sp.cv, Math.round(X + (sp.dx - sp.ow * 0.5) * k), Math.round(Y + (sp.dy - sp.oh * 0.5) * k), Math.round(sp.cv.width * k), Math.round(sp.cv.height * k));
   }
+  const FAR_SC = 12;                                                                                    // device px per tile below which cosmetic extras are skipped (zoom < 6, like the game's own FX gating)
   const P0 = { x: 0, y: 0, alt: 0, s: 0 }, P1 = { x: 0, y: 0, alt: 0, s: 0 }, P2 = { x: 0, y: 0, alt: 0, s: 0 };
   /** the smoke trail of a rocket = 2 baked strips laid along its flight curve behind distance fraction sHead (screen origin ox,oy; k = device px per baked px).
    *  lingering (age01 >= 0): after the impact: cooler puffs, rising + growing with the age, fading with alpha */
@@ -552,7 +553,7 @@ const GfxRocket = (() => {
     PowerRocket.pathS(e, sHead, P0); PowerRocket.pathS(e, sHead - ds, P1); PowerRocket.pathS(e, sHead - 2 * ds, P2);
     const x0 = ox + P0.x * sc, y0 = oy + (P0.y - P0.alt) * sc, x1 = ox + P1.x * sc, y1 = oy + (P1.y - P1.alt) * sc, x2 = ox + P2.x * sc, y2 = oy + (P2.y - P2.alt) * sc;
     const kn = lin && age01 > 0.2 ? 2 : 0;
-    for (let q = 0; q < 2; q++) {                                                                  // q = 0 near strip, 1 far strip
+    for (let q = 0; q < (sc < FAR_SC ? 1 : 2); q++) {                                              // q = 0 near strip, 1 far strip (zoomed far out: near strip only)
       const xa = q ? x1 : x0, ya = q ? y1 : y0, xb = q ? x2 : x1, yb = q ? y2 : y1, dx = xb - xa, dy = yb - ya;
       if (dx * dx + dy * dy < 4) continue;
       if ((xa < -m && xb < -m) || (xa > cw + m && xb > cw + m) || (ya < -m && yb < -m) || (ya > ch + m && yb > ch + m)) continue;
@@ -574,7 +575,7 @@ const GfxRocket = (() => {
   /** all warning reticles of the frame in one pass (called by the first rocket drawn): they lie under every rocket sprite. ref = the entry being drawn (screen origin) */
   function drawReticles(ctx, list, px, py, ref, sc, now, alpha, cw, ch) {
     const RT = PowerRocket.params.RETICLE_TICKS, k = sc / 16, ox = px - ref.x * sc, oy = py - ref.y * sc;
-    const Tn = S.tick + (alpha > 0 ? alpha : 0), sp = retCv(((now / 90) | 0) & 3);
+    const Tn = S.tick + (alpha > 0.98 ? 0.98 : alpha > 0 ? alpha : 0), sp = retCv(((now / 90) | 0) & 3);
     for (let i = 0; i < list.length; i++) {
       const e = list[i], left = e.eta - Tn;
       if (!(left <= RT) || left <= 0 || !(Tn >= e.t0)) continue;
@@ -589,7 +590,7 @@ const GfxRocket = (() => {
     tick(now); pump();
     const cw = ctx.canvas.width, ch = ctx.canvas.height, list = S.eff.rockets;
     if (newPass(list, e, now)) drawReticles(ctx, list, px, py, e, sc, now, alpha, cw, ch);
-    const Tn = S.tick + (alpha > 0 ? alpha : 0);
+    const Tn = S.tick + (alpha > 0.98 ? 0.98 : alpha > 0 ? alpha : 0);
     if (!(Tn >= e.t0)) return;
     const eta = e.eta, T = Tn > eta ? eta : Tn;
     const ox = px - e.x * sc, oy = py - e.y * sc, k = sc / 16;
@@ -634,6 +635,7 @@ const GfxRocket = (() => {
     }
   }
   function fxSmokeCol(ctx, fx, px, py, sc, u, p, now, H) {
+    if (sc < FAR_SC) return;
     tick(now);
     let fi = (p * SMK_N) | 0; if (fi >= SMK_N) fi = SMK_N - 1;
     const sp = smokeCv((fx._s | 0) & 1, fi);
@@ -641,13 +643,14 @@ const GfxRocket = (() => {
   }
   const TR = { x0: 0, y0: 0, x1: 0, y1: 0, b: 0, h: 1.5 };
   function fxTrail(ctx, fx, px, py, sc, u, p, now, H) {
-    if (typeof PowerRocket === 'undefined') return;
+    if (typeof PowerRocket === 'undefined' || sc < FAR_SC) return;
     tick(now);
     TR.x0 = fx.x0; TR.y0 = fx.y0; TR.x1 = fx.x1; TR.y1 = fx.y1; TR.b = fx.b; TR.h = fx.h;
     drawStrips(ctx, TR, 1, px - fx.x1 * sc, py - fx.y1 * sc, sc, sc / 16, p, Math.pow(1 - p, 1.2), ctx.canvas.width, ctx.canvas.height);
   }
   const LAUNCH_ANG = [0.7, 1.9, 3.1, 4.4, 5.5, 2.6];
   function fxLaunch(ctx, fx, px, py, sc, u, p, now, H) {
+    if (sc < FAR_SC) return;
     tick(now);
     const k = sc / 16, dx = fx.dx || 0, dy = fx.dy || 0;
     if (p < 0.2) {                                                                                         // muzzle flash

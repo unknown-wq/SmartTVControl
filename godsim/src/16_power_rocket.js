@@ -45,6 +45,7 @@ const PowerRocket = (() => {
   const UNIT_DMG = 90, BLD_DMG = 160;
   const IGNITE_P = 0.45;
   const FULL_FX = 3;                              // impacts per tick with the full effect set; later ones are merged into one burst
+  const SMOKE_CAP = 14, TRAIL_CAP = 18, BOOM_CAP = 40;   // live optional Fx (smoke columns / lingering trails / bursts): a barrage at x4 must not pile up hundreds of sprites
   const HIT_CAP = 120;                            // creatures processed per impact
   const AGG_WINDOW = 40;                          // ticks after which the aggregated log line is written even if rockets are still in the air
   const RETICLE_TICKS = 10;                       // (renderer) the warning reticle shows during the last ticks of a flight
@@ -197,6 +198,12 @@ const PowerRocket = (() => {
   }
 
   // ------------------------------------------------------------------ impact
+  let nSmoke = 0, nTrail = 0, nBoom = 0;           // live rocket Fx of this tick (counted once per tick with impacts)
+  function countFx() {
+    nSmoke = nTrail = nBoom = 0;
+    const l = Fx.list;
+    for (let i = 0; i < l.length; i++) { const t = l[i].type; if (t === 'rocket_smoke') nSmoke++; else if (t === 'rocket_trail') nTrail++; else if (t === 'rocket_boom') nBoom++; }
+  }
   const hit = [];                                  // scratch: creatures inside the blast
   function collectHit(u) { if (hit.length < HIT_CAP) hit.push(u); }
   function unitDamage(d) {
@@ -267,10 +274,10 @@ const PowerRocket = (() => {
     a.sx = r3(a.sx + cx); a.sy = r3(a.sy + cy); a.n++; a.dead += dead; a.razed += razed;
     // 4) show
     if (full) {
-      Fx.add('rocket_boom', cx, cy, { ttl: 1.0, w: water ? 1 : 0, m: 1, r: 3, _s: e.v });
+      if (nBoom < BOOM_CAP) { Fx.add('rocket_boom', cx, cy, { ttl: 1.0, w: water ? 1 : 0, m: 1, r: 3, _s: e.v }); nBoom++; }
       if (Fx.list.length < 320) {
-        if (!water) Fx.add('rocket_smoke', cx, cy, { ttl: 2.3, r: 4, _s: e.v + 7 });
-        Fx.add('rocket_trail', cx, cy, { ttl: 0.9, r: 14, x0: e.x0, y0: e.y0, x1: e.x1, y1: e.y1, b: e.b, h: e.h, _s: e.v + 3 });
+        if (!water && nSmoke < SMOKE_CAP) { Fx.add('rocket_smoke', cx, cy, { ttl: 2.3, r: 4, _s: e.v + 7 }); nSmoke++; }
+        if (nTrail < TRAIL_CAP) { Fx.add('rocket_trail', cx, cy, { ttl: 0.9, r: 14, x0: e.x0, y0: e.y0, x1: e.x1, y1: e.y1, b: e.b, h: e.h, _s: e.v + 3 }); nTrail++; }
       }
       if (water) Fx.add('splash', cx, cy, { ttl: 0.7 });
     }
@@ -299,6 +306,7 @@ const PowerRocket = (() => {
       const e = L[k];
       if (!goodEntry(e)) continue;
       if (tick >= e.eta) {
+        if (nImp === 0) countFx();
         nImp++;
         const full = nImp <= FULL_FX;
         const water = impact(e, full, mm);
@@ -346,7 +354,7 @@ const PowerRocket = (() => {
     name: 'rocket', ids: ['rocket'], apply, step, afterLoad, newWorld,
     // shared with the renderer / tests
     path, pathS, nearestEdge,
-    params: { N_BASE, N_MAX, COOLDOWN, LIVE_CAP, SPREAD_K, FLIGHT_MIN, FLIGHT_MAX, STAGGER_MAX, BLAST_R, CORE_R, FELL_R, IGNITE_P, FULL_FX, RETICLE_TICKS },
+    params: { N_BASE, N_MAX, COOLDOWN, LIVE_CAP, SPREAD_K, FLIGHT_MIN, FLIGHT_MAX, STAGGER_MAX, BLAST_R, CORE_R, FELL_R, IGNITE_P, FULL_FX, RETICLE_TICKS, SMOKE_CAP, TRAIL_CAP, BOOM_CAP },
     unitDamage,
   };
   PowerPlugins.push(api);
