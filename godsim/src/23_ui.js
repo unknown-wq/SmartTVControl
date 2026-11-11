@@ -1324,7 +1324,7 @@ const UI = (() => {
     const cmdBtn = actBtn('block primary', 'Выбрать для войны', 'war', () => commandKingdom(id, {}));
     cmdBtn.dataset.act = 'command'; s0.appendChild(cmdBtn);
     v.ups.push(() => { const k = get(); cmdBtn.classList.toggle('hide', !k || cm.kid === id); });
-    const dipBtn = actBtn('block', 'Дипломатия', 'handshake', () => { if (DiploUI.active() && DiploUI.kid !== id) DiploUI.openPair(id); else DiploUI.select(id); });
+    const dipBtn = actBtn('block', 'Дипломатия', 'handshake', () => { if (DiploUI.active() && DiploUI.kid !== id) { closeInspector(); DiploUI.openPair(id); } else DiploUI.select(id); });
     dipBtn.dataset.act = 'diplomacy'; s0.appendChild(dipBtn);
     v.ups.push(() => {
       const k = get();

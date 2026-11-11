@@ -400,6 +400,7 @@ const DiploUI = (() => {
     showResult(res, a || { kind, label: kind, icon: 'scroll' }, false);
     afterAction(res, kind);
     refreshCard();
+    if (res.accepted && !dm.other) kit.toast(cap1(res.effects && res.effects.length ? res.effects.join('. ') : 'Принято'), 'good');      // the card left with its kingdom (an annexation): say what happened
     return res;
   }
   function afterAction(res, kind) {
@@ -784,13 +785,18 @@ const DiploUI = (() => {
     const v = dm.view; if (!v) return;
     runUps(v.ups);
   }
+  /** the world was replaced (new world / load): forget everything, and take the old HUD / card off the screen too */
   function reset() {
     closeInboxModal();
     clearTimeout(dm.armedT);
     clearRc();
-    dm.kid = 0; dm.other = 0; dm.mode = 'hud'; dm.sub = null; dm.region = 0; dm.armed = ''; dm.view = null; dm.owns = false; dm.sig = ''; dm.stripSig = ''; dm.mapPrev = -1; dm.fabN = -1;
+    const owned = dm.owns, was = dm.kid;
+    dm.kid = 0; dm.other = 0; dm.mode = 'hud'; dm.sub = null; dm.region = 0; dm.armed = ''; dm.view = null; dm.owns = false; dm.sig = ''; dm.stripSig = ''; dm.fabN = -1;
+    if (was) leaveMapView(); else dm.mapPrev = -1;
     document.body.classList.remove('dip', 'dip-card');
-    const sh = kit && kit.refs && kit.refs.sheet; if (sh) { sh.classList.remove('dip', 'dh', 'dc', 'dsub'); }
+    const sh = kit && kit.refs && kit.refs.sheet;
+    if (owned) closeSheetDom();
+    else if (sh) sh.classList.remove('dip', 'dh', 'dc', 'dsub');
     if (dm.fab) kit.setCls(dm.fab.b, 'hide', true);
   }
   function init(k) {

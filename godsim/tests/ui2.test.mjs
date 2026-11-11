@@ -245,7 +245,7 @@ if (!only || only.includes('390')) {
   await H.tapSel('.tab[data-tab="kingdoms"]');
   const tab = await E(() => ({ tool: window.__god.UI.state.tool, chips: document.querySelectorAll('.kchip').length, on: document.querySelector('#tools .tool.on') && document.querySelector('#tools .tool.on').textContent.trim(), tools: document.querySelectorAll('#tools .tool').length, hint: document.getElementById('hint').textContent, toast: [...document.querySelectorAll('.toast')].map(t => t.textContent).join('|') }));
   check('the war tool is selected by default on the Kingdoms tab (label «Война»)', tab.tool === 'command' && tab.on === 'Война', JSON.stringify(tab));
-  check('kingdoms tab shows 4 tools (war + 3 diplomacy)', tab.tools === 4);
+  check('kingdoms tab shows 5 tools (war + 3 diplomacy powers + the player «Дипломатия» tool)', tab.tools === 5, tab.tools);
   check('both kingdoms are listed as chips', tab.chips === 2, tab.chips);
   check('the hint teaches the flow: «Выберите страну, затем регион, куда она нападёт»', /Выберите страну, затем регион, куда она нападёт/.test(tab.hint + '|' + tab.toast), tab.hint);
   check('no war icon on the chips in peace time', (await H.count('.kchip .wi:not(.hide)')) === 0);
