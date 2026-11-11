@@ -109,7 +109,7 @@ const PowerNuke = (() => {
   function detonate(b, tick) {
     // flashes + shake first: the Fx list is capped, the smoke of a hundred razed houses must not push them out
     Fx.add('flash', b.x, b.y, { ttl: 1.6, a: 1, color: '#ffffff' });
-    Fx.add('flash', b.x, b.y, { ttl: 2.6, a: 0.35, color: '#ffa850' });                          // orange afterglow: outlives the white peak
+    Fx.add('flash', b.x, b.y, { ttl: 2.6, a: 0.28, color: '#ffa850' });                          // orange afterglow: outlives the white peak
     Fx.add('shake', b.x, b.y, { ttl: 1.2, amp: 10 });
     const ms = list('mushrooms');
     while (ms.length >= MUSH_CAP) ms.shift();
