@@ -379,7 +379,7 @@ const GfxNuke = (() => {
     H.ringRows(ctx, px, py, cr, th, Math.max(1, u));
     // label with the countdown
     const secs = Math.max(0, Math.ceil((e.eta - (S.tick + alpha)) / 10));
-    const lp = Math.max(2, Math.round(scale / 4.6)), flashOn = ((now / 180) | 0) % 2 === 0;
+    const lp = Math.max(2, Math.min(7, Math.round(scale / 4.6))), flashOn = ((now / 180) | 0) % 2 === 0;       // label pixel size (capped: at zoom 24 the label stays well inside the screen)
     const lw = textCv('ТРЕВОГА', COL_RED, 'r'), lw2 = textCv('ТРЕВОГА', COL_WHITE, 'w'), dg = textCv(String(secs), COL_YEL, 'y');
     const ly = py + scale * 3.2;
     ctx.globalAlpha = 1;
