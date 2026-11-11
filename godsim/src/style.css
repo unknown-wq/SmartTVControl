@@ -996,3 +996,80 @@ body.cmd-pick #toasts { bottom: calc(100% + 8px); }
 @media (max-height: 520px) and (orientation: landscape) and (max-width: 760px) {
   .ac-acts .cbtn canvas { display: none; }
 }
+
+/* =====================================================================
+ * TOTAL WAR («Вся страна»): card toggle, HUD progress rows, drawer block, «ТОТАЛЬНАЯ ВОЙНА» banner, capitulation sheet
+ * ===================================================================== */
+/* the segmented toggle [Регион | Вся страна] under the header of the war card */
+.tc-seg { grid-template-columns: 1fr 1fr; margin-top: 6px; margin-bottom: 0; }
+.tc-seg button.total.on { background: linear-gradient(rgba(255, 91, 91, .38), rgba(255, 91, 91, .16)); color: #fff; box-shadow: 0 0 0 1px rgba(255, 130, 110, .85), 0 0 14px rgba(255, 70, 50, .3); }
+.tc-foot .cbtn.total { flex: 2.2; font-size: 13.5px; }
+.tc-foot.tot .cbtn:first-child { flex: 0 0 26%; }
+.tc-foot .cbtn.total, .tc-foot .cbtn.total span { white-space: normal; line-height: 1.12; }
+.tc-foot .cbtn.total span { overflow: visible; text-align: center; }
+@media (max-height: 700px) and (orientation: portrait) { #sheet.tc.tw { max-height: calc(var(--vh, 1vh) * 62); } }
+.cbtn.danger.total { background: linear-gradient(#ff5a4a, #c92f2f); border-color: rgba(255, 170, 150, .8); box-shadow: 0 0 12px rgba(255, 70, 50, .35); }
+.cbtn.danger.total.arm { animation: tw-arm .7s ease-in-out infinite; background: linear-gradient(#ff3b2e, #a81818); }
+@keyframes tw-arm { 50% { transform: scale(1.03); box-shadow: 0 0 0 2px rgba(255, 210, 190, .85), 0 0 22px rgba(255, 60, 40, .75); } }
+.tc-line.bad { font-weight: 700; }
+/* HUD: one progress row per total war */
+.hud-tws { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; padding: 2px 12px 6px; }
+.hud-tw { display: flex; flex-direction: column; gap: 6px; width: 100%; min-width: 0; padding: 8px 10px 9px; border-radius: 13px; text-align: left; background: linear-gradient(rgba(255, 70, 50, .26), rgba(255, 70, 50, .09)); border: 1px solid rgba(255, 120, 100, .62); transition: transform .1s ease; }
+.hud-tw:active { transform: scale(.985); }
+.hud-tw.def { background: linear-gradient(rgba(150, 20, 20, .4), rgba(150, 20, 20, .12)); border-color: rgba(255, 90, 90, .7); }
+.hud-tw.pend { border-color: rgba(255, 210, 110, .9); animation: tw-pend 1.3s ease-in-out infinite; }
+@keyframes tw-pend { 50% { box-shadow: 0 0 0 2px rgba(255, 210, 110, .55), 0 0 16px rgba(255, 200, 80, .4); } }
+.tw-top { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.tw-t { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.tw-t b { font-size: 13.5px; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tw-t small { font-size: 12px; line-height: 1.25; color: #ffd8c8; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; font-variant-numeric: tabular-nums; margin-top: 1px; }
+@media (max-height: 700px) and (orientation: portrait) { .hud-tws:not(.hide) ~ .hud-hint { display: none; } .hud-tws:not(.hide) { padding-bottom: calc(var(--sb) + 8px); } }
+.tw-bar { display: block; position: relative; height: 8px; border-radius: 5px; background: rgba(0, 0, 0, .42); overflow: hidden; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .08); }
+.tw-bar i { position: absolute; left: 0; top: 0; bottom: 0; width: 100%; transform-origin: 0 50%; transform: scaleX(0); border-radius: 5px; background: #ffc83d; transition: transform .4s ease, background-color .25s ease; }
+/* drawer: the total-war block of a war card */
+.wcard.total { border-color: rgba(255, 110, 90, .62); background: linear-gradient(rgba(255, 70, 50, .14), var(--fill)); }
+.wc-tot { margin: 0 0 8px; padding: 8px 10px 9px; border-radius: 12px; background: rgba(0, 0, 0, .24); border: 1px solid rgba(255, 110, 90, .35); }
+.wc-tag { display: flex; align-items: center; gap: 7px; margin-bottom: 6px; }
+.wc-tag b { font-size: 11.5px; font-weight: 900; letter-spacing: .16em; color: #ffb9a8; }
+.wc-tl { margin-left: auto; font-size: 12px; font-weight: 800; color: #ffd8c8; font-variant-numeric: tabular-nums; }
+.wc-capbar { margin-bottom: 5px; }
+.bar.wc-capbar > label { width: 94px; }
+.wc-capline { font-size: 12px; line-height: 1.35; color: #d6defa; margin-bottom: 2px; }
+.wc-tot .cbtn { width: 100%; margin-top: 7px; }
+/* «ТОТАЛЬНАЯ ВОЙНА» banner */
+.wb-card.total { background: linear-gradient(90deg, rgba(30, 2, 6, 0) 0%, rgba(80, 4, 8, .94) 12%, rgba(130, 8, 12, .97) 50%, rgba(80, 4, 8, .94) 88%, rgba(30, 2, 6, 0) 100%); border-color: rgba(255, 160, 120, .8); box-shadow: 0 10px 44px rgba(0, 0, 0, .6), inset 0 0 56px rgba(255, 70, 40, .3); }
+.wb-big { display: flex; align-items: center; justify-content: center; animation: wb-t .55s ease-out both; filter: drop-shadow(0 0 10px rgba(255, 90, 40, .85)); }
+.wb-t.tt b { font-size: 23px; letter-spacing: .16em; padding-left: .16em; }
+.wb-card.total .wb-row { gap: 12px; }
+/* capitulation sheet */
+@media (orientation: portrait) { #sheet.cmd.cs { max-height: calc(var(--vh, 1vh) * 66); } }
+.cs-head { gap: 10px; min-height: 60px; }
+.cs-ava { width: 52px; background: rgba(255, 255, 255, .1); border-color: rgba(255, 255, 255, .22); }
+.cs-body { padding-top: 6px; }
+.cs-country { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 13px; background: var(--fill); border: 1px solid var(--line2); }
+.cs-country canvas { box-shadow: 0 0 0 1px rgba(0, 0, 0, .6); flex: none; }
+.cs-cn { display: flex; flex-direction: column; min-width: 0; }
+.cs-cn b { font-size: 15px; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cs-cn small { font-size: 12px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cs-q { margin: 10px 2px 6px; font-size: 10.5px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; color: var(--faint); }
+.cs-opts { display: grid; gap: 7px; }
+.cs-opt { position: relative; display: flex; align-items: center; gap: 11px; width: 100%; min-height: 62px; padding: 8px 12px 8px 11px; border-radius: 14px; text-align: left; background: linear-gradient(rgba(var(--acc-rgb), .16), rgba(var(--acc-rgb), .05)); border: 1px solid rgba(var(--acc-rgb), .5); transition: transform .1s ease, opacity .15s ease, background .15s ease; }
+.cs-opt:active:not(:disabled) { transform: scale(.985); background: rgba(var(--acc-rgb), .24); }
+.cs-opt:disabled { opacity: .5; }
+.cs-opt.off { background: var(--fill); border-color: var(--line2); }
+.cs-opt canvas { flex: none; }
+.cs-ot { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.cs-ot b { font-size: 15px; font-weight: 800; }
+.cs-ot small { font-size: 12px; line-height: 1.3; color: #c9d5f2; margin-top: 2px; }
+.cs-opt.off .cs-ot small { color: #ffb4a0; }
+.cs-badge { position: absolute; top: -8px; right: 10px; padding: 2px 9px; border-radius: 99px; font-style: normal; font-size: 10.5px; font-weight: 900; letter-spacing: .04em; color: #1b1300; background: linear-gradient(var(--acc), #f0aa1e); box-shadow: 0 2px 8px rgba(0, 0, 0, .4); }
+.cs-timer { margin-top: 10px; }
+.bar.cs-timer > label { width: 58px; }
+.cs-note { margin: 5px 2px 0; font-size: 11.5px; color: var(--faint); line-height: 1.35; }
+@media (max-width: 345px) {
+  .tw-t small { font-size: 11px; }
+  .wb-t.tt b { font-size: 19px; }
+  .tc-foot .cbtn.total { font-size: 12.5px; }
+  .cs-opt { min-height: 58px; gap: 9px; }
+  .cs-ot b { font-size: 14px; }
+}

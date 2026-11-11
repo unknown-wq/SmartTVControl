@@ -1685,7 +1685,7 @@ const War = (() => {
   }
 
   // ================================================================== TOTAL WAR («Вся страна»)
-  //   w.total === true  and  w.tw = {cap, own, occ, fell, fellLog, peak, sure, pend, out}  (JSON-safe, saved with the war)
+  //   w.total === true  and  w.tw = {cap, own, occ, fell, fellLog, peak, sure, pend, out, base, why, dn, an}  (JSON-safe, saved with the war)
   //     cap   capitulation progress of the lead defender 0..100 (smoothed)      own / occ  its regions: owned / occupied by our side
   //     fell  id of the capital city our side holds (0 = none; sticky while the government has fled and the old capital is still held)
   //     peak  most soldiers the defender side ever had   sure  consecutive score passes the capitulation condition held
@@ -1695,8 +1695,8 @@ const War = (() => {
   //   a FRONTIER CHAIN of goals (every enemy region next to land our side controls / our armies stand in, capital first) so armies keep advancing, and the
   //   END-GAME: capital held + 60 % of the regions (or progress 100) => the lead defender capitulates, the war ends for BOTH sides (the defender's allies get a
   //   white peace + truce) and the winner takes the whole country (merge), makes it a vassal or takes the occupied regions.
-  const TW_DEFAULTS = { cap: 0, own: 0, occ: 0, fell: 0, fellLog: 0, peak: 0, sure: 0, pend: null, out: '', base: null, why: '' };
-  function mkTw() { return { cap: 0, own: 0, occ: 0, fell: 0, fellLog: 0, peak: 0, sure: 0, pend: null, out: '', base: null, why: '' }; }
+  const TW_DEFAULTS = { cap: 0, own: 0, occ: 0, fell: 0, fellLog: 0, peak: 0, sure: 0, pend: null, out: '', base: null, why: '', dn: '', an: '' };
+  function mkTw() { return { cap: 0, own: 0, occ: 0, fell: 0, fellLog: 0, peak: 0, sure: 0, pend: null, out: '', base: null, why: '', dn: '', an: '' }; }
   function twOf(w) {
     if (!w.tw || typeof w.tw !== 'object' || Array.isArray(w.tw)) w.tw = mkTw();
     const t = w.tw;
@@ -1869,6 +1869,7 @@ const War = (() => {
     const D = leadOf(w, 2), A = leadOf(w, 1);
     if (!D || !A) return false;
     t.cap = 100; t.sure = 0; t.why = why || '';
+    t.dn = S.kingdoms.get(D) ? S.kingdoms.get(D).name : ''; t.an = S.kingdoms.get(A) ? S.kingdoms.get(A).name : '';          // (the names survive a merge: the UI and the log read them)
     const cc = capitalCity(D);
     const ka = kget(A), kd = S.kingdoms.get(D);
     Log.add('Королевство ' + kname(D) + ' капитулировало перед королевством ' + kname(A), LOG.WAR, cc ? cc.x : -1, cc ? cc.y : -1, A);
