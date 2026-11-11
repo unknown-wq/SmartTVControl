@@ -30,7 +30,7 @@ const PowerNuke = (() => {
   const T = Const.T, RES = Const.RES, LOG = Const.LOG, TAU = Math.PI * 2;
   ToolDefs.groupLabels.arsenal = 'Арсенал';
   ToolDefs.add({ id: 'nuke', tab: 'powers', group: 'arsenal', afterGroup: 'destroy', name: 'Ядерная бомба', short: 'Ядерка', icon: 'nuke', brush: true, drag: false,
-    hint: 'Ядерный удар: тревога, бомба падает. Радиус взрыва = кисть + 5' });
+    hint: 'Ядерный удар (радиус = кисть + 5)' });                    // (the dock shows 2 lines of ~15 characters: keep it short)
 
   // ------------------------------------------------------------------ tunables
   const R_BASE = 5;                 // blast radius = R_BASE + brush (1..8) = 6..13 tiles
@@ -109,7 +109,7 @@ const PowerNuke = (() => {
   function detonate(b, tick) {
     // flashes + shake first: the Fx list is capped, the smoke of a hundred razed houses must not push them out
     Fx.add('flash', b.x, b.y, { ttl: 1.6, a: 1, color: '#ffffff' });
-    Fx.add('flash', b.x, b.y, { ttl: 2.4, a: 0.5, color: '#ffa850' });
+    Fx.add('flash', b.x, b.y, { ttl: 2.6, a: 0.35, color: '#ffa850' });                          // orange afterglow: outlives the white peak
     Fx.add('shake', b.x, b.y, { ttl: 1.2, amp: 10 });
     const ms = list('mushrooms');
     while (ms.length >= MUSH_CAP) ms.shift();

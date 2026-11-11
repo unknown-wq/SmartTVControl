@@ -16,7 +16,8 @@ const GfxNuke = (() => {
   const TAU = Math.PI * 2;
   const WAVE_TICKS = 8, MUSH_LIFE = 220;          // keep in sync with PowerNuke.consts
   const P = 10;                                   // baked pixels per tile (cloud parts)
-  const P2 = 5;                                   // baked pixels per tile (ground decals: scorch, haze)
+  const P2 = 6;                                   // baked pixels per tile (ground decals: scorch, haze)
+  const SCORCH_K = 0.92;                          // scorch decal radius / blast radius
   const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
   const easeOut = (x, k) => 1 - Math.pow(1 - clamp(x, 0, 1), k || 2);
   const hash = (n) => { const s = Math.sin(n * 12.9898 + 78.233) * 43758.5453; return s - Math.floor(s); };
@@ -151,13 +152,14 @@ const GfxNuke = (() => {
     return pb.outline(OUT);
   }
   let glowCv = null, fireCv = null, signCv = null, bombCv = null;
-  function bakeGlow() {                           // soft light disc (no gradient API: per-pixel alpha, drawn smoothed)
-    const S0 = 64, pb = new PB(S0, S0);
+  function bakeGlow() {                           // soft light disc as a banded, dithered pixel sprite (blitted nearest-neighbour: a smoothed blit costs 6x more)
+    const S0 = 80, pb = new PB(S0, S0);
     for (let y = 0; y < S0; y++) for (let x = 0; x < S0; x++) {
       const d = Math.hypot(x + 0.5 - S0 / 2, y + 0.5 - S0 / 2) / (S0 / 2);
       if (d >= 1) continue;
-      const a = Math.pow(1 - d, 1.8), t = d;
-      pb.d[y * S0 + x] = rgba(255 - 35 * t, 230 - 90 * t, 150 - 100 * t, Math.round(a * 235));
+      const a = Math.pow(1 - d, 1.7), lvl = clamp(Math.floor(a * 9 + (bay(x, y) - 0.5) * 1.1), 0, 8);
+      if (lvl <= 0) continue;
+      pb.d[y * S0 + x] = rgba(255 - 30 * d, 232 - 80 * d, 160 - 90 * d, Math.round(lvl * 28));
     }
     return pb;
   }
@@ -170,7 +172,7 @@ const GfxNuke = (() => {
     return pb;
   }
   function bakeScorch(R) {                        // blackened ground: soft dark disc with radial blast streaks and a glassy centre (2x2-block dither, 7 levels)
-    const rad = 1.14 * R * P2, S0 = Math.ceil(rad * 2) + 2, pb = new PB(S0, S0), rnd = mulberry(R * 31 + 7);
+    const rad = SCORCH_K * R * P2, S0 = Math.ceil(rad * 2) + 2, pb = new PB(S0, S0), rnd = mulberry(R * 31 + 7);
     const ph = [rnd() * 6, rnd() * 6];
     for (let y = 0; y < S0; y++) for (let x = 0; x < S0; x++) {
       const dx = x + 0.5 - S0 / 2, dy = y + 0.5 - S0 / 2, d = Math.hypot(dx, dy) / rad;
@@ -295,21 +297,15 @@ const GfxNuke = (() => {
 
   // ------------------------------------------------------------------ drawing helpers
   function off(ctx, H, x0, y0, x1, y1) { const s = H.screen(ctx); return x1 < 0 || y1 < 0 || x0 > s.w || y0 > s.h; }
-  function blit(ctx, cv, x, y, w, h, smooth) {
+  /** nearest-neighbour blit (crisp pixels and ~6x cheaper than a smoothed one); smoothing only when the sprite is shrunk by more than 30% (far zoom) */
+  function blit(ctx, cv, x, y, w, h) {
     if (!cv || w < 1 || h < 1) return;
-    ctx.imageSmoothingEnabled = !!smooth;
+    ctx.imageSmoothingEnabled = w < cv.width * 0.7;
     ctx.drawImage(cv, Math.round(x), Math.round(y), Math.max(1, Math.round(w)), Math.max(1, Math.round(h)));
   }
   function sq(ctx, x, y, s) { ctx.fillRect(Math.round(x - s / 2), Math.round(y - s / 2), Math.max(1, Math.round(s)), Math.max(1, Math.round(s))); }
-  /** a ring of marching dashes on the ground, drawn as small pixel squares */
-  function dashRing(ctx, X, Y, rr, ps, phase, on, off2) {
-    const n = Math.max(24, Math.round(TAU * rr / ps)), per = on + off2;
-    for (let i = 0; i < n; i++) {
-      if (((i + phase) % per + per) % per >= on) continue;
-      const a = i / n * TAU;
-      sq(ctx, X + Math.cos(a) * rr, Y + Math.sin(a) * rr, ps);
-    }
-  }
+  /** a circle path (the game's own brush preview is vector too: a handful of calls instead of hundreds of pixel squares) */
+  function circle(ctx, x, y, r) { ctx.beginPath(); ctx.arc(x, y, r, 0, TAU); }
 
   // ------------------------------------------------------------------ fallout: scorched ground + haze + signs + motes
   function drawFallout(ctx, e, px, py, scale, now, H, alpha) {
@@ -318,21 +314,21 @@ const GfxNuke = (() => {
     const life = e.until - e.t0, age = S.tick + alpha - e.t0;
     if (!(life > 0) || age < 0.5) return;
     const I = clamp(1 - age / life, 0, 1);
-    const ext = Rb * 1.16 * scale;
+    const ext = Rb * (SCORCH_K + 0.03) * scale;
     if (off(ctx, H, px - ext, py - ext, px + ext, py + ext)) return;
     const kit = kitFor(Rb); pump(kit, 1);
-    const smooth = scale < 12, u = scale / 16, hz = r * scale;
+    const u = scale / 16, hz = r * scale;
     // scorched ground: strongest at first, fades with the fallout
-    if (kit.scorch) { ctx.globalAlpha = clamp(0.35 + I * 1.1, 0, 1) * clamp(age / 6, 0, 1); const sd = 2 * 1.14 * Rb * scale; blit(ctx, kit.scorch, px - sd / 2, py - sd / 2, sd, sd, smooth); }
+    if (kit.scorch) { ctx.globalAlpha = clamp(0.35 + I * 1.1, 0, 1) * clamp(age / 6, 0, 1); const sd = 2 * SCORCH_K * Rb * scale; blit(ctx, kit.scorch, px - sd / 2, py - sd / 2, sd, sd); }
     // radiation haze
     const pulse = 0.88 + 0.12 * Math.sin(now / 520);
-    if (kit.haze) { ctx.globalAlpha = clamp(Math.pow(I, 0.7), 0, 1) * 0.78 * pulse * clamp(age / 10, 0, 1); const hd = 2 * 0.74 * Rb * scale; blit(ctx, kit.haze, px - hd / 2, py - hd / 2, hd, hd, smooth); }
+    if (kit.haze) { ctx.globalAlpha = clamp(Math.pow(I, 0.7), 0, 1) * 0.78 * pulse * clamp(age / 10, 0, 1); const hd = 2 * 0.74 * Rb * scale; blit(ctx, kit.haze, px - hd / 2, py - hd / 2, hd, hd); }
     if (scale < 5 || I < 0.08) { ctx.globalAlpha = 1; return; }
     // trefoil signs on the rim and a few rising motes
     shared();
     ctx.globalAlpha = clamp(Math.pow(I, 0.5), 0, 1) * (0.7 + 0.3 * Math.sin(now / 380));
     const ss = Math.max(9, Math.min(scale * 1.1, 40));
-    for (let k = 0; k < 6; k++) { const a = k * TAU / 6 + 0.5; blit(ctx, signCv, px + Math.cos(a) * hz * 0.97 - ss / 2, py + Math.sin(a) * hz * 0.97 - ss / 2, ss, ss, false); }
+    for (let k = 0; k < 6; k++) { const a = k * TAU / 6 + 0.5; blit(ctx, signCv, px + Math.cos(a) * hz * 0.97 - ss / 2, py + Math.sin(a) * hz * 0.97 - ss / 2, ss, ss); }
     const n = scale > 12 ? 18 : 10;
     for (let i = 0; i < n; i++) {
       const t = ((now / 2600) + hash(i * 3.1 + e.t0)) % 1, a = hash(i * 7.7 + 1) * TAU, d = Math.sqrt(hash(i * 5.3 + 2)) * r * 0.92;
@@ -352,16 +348,16 @@ const GfxNuke = (() => {
     const p = clamp((S.tick + alpha - e.t0) / span, 0, 1);
     if (off(ctx, H, px - rr - 10, py - rr - FALL_H * scale - 40, px + rr + 10, py + rr + 40)) return;
     const kit = kitFor(R); pump(kit, 4); shared();
-    const pulse = 0.5 + 0.5 * Math.sin(now / 110), ps = Math.max(2, Math.round(rr / 64));
-    ctx.save();
+    const pulse = 0.5 + 0.5 * Math.sin(now / 110), lwid = Math.max(2, u * 1.5), dash = Math.max(6, scale * 0.45);
     // hazard disc + zone rings: total destruction (0.45 R), firestorm (0.8 R), the blast edge (R, marching dashes)
-    ctx.globalAlpha = 0.07 + 0.07 * pulse + 0.06 * p; ctx.fillStyle = '#ff2a1a'; H.discRows(ctx, px, py, rr, u * Math.max(1, Math.ceil(rr / 20 / u)));
-    ctx.globalAlpha = 0.16 + 0.08 * pulse; ctx.fillStyle = '#ff3a1a'; H.discRows(ctx, px, py, rr * 0.45, u * Math.max(1, Math.ceil(rr / 36 / u)));
-    ctx.globalAlpha = 0.5 + 0.35 * pulse; ctx.fillStyle = '#ff4a30'; dashRing(ctx, px, py, rr * 0.45, ps, 0, 40, 0);
-    ctx.globalAlpha = 0.55; ctx.fillStyle = '#ffb040'; dashRing(ctx, px, py, rr * 0.8, ps, 0, 3, 5);
-    const ph = Math.floor(now / 130);
-    ctx.globalAlpha = 0.95; ctx.fillStyle = '#ffffff'; dashRing(ctx, px, py, rr, ps * 1.15, ph, 5, 5);
-    ctx.fillStyle = '#ff3a26'; dashRing(ctx, px, py, rr, ps * 1.15, ph + 5, 5, 5);
+    ctx.fillStyle = '#ff2a1a'; ctx.globalAlpha = 0.08 + 0.07 * pulse + 0.06 * p; circle(ctx, px, py, rr); ctx.fill();
+    ctx.globalAlpha = 0.16 + 0.08 * pulse; circle(ctx, px, py, rr * 0.45); ctx.fill();
+    ctx.strokeStyle = '#ff4a30'; ctx.lineWidth = lwid; ctx.globalAlpha = 0.55 + 0.35 * pulse; circle(ctx, px, py, rr * 0.45); ctx.stroke();
+    ctx.strokeStyle = '#ffb040'; ctx.lineWidth = Math.max(1.5, lwid * 0.8); ctx.globalAlpha = 0.6; ctx.setLineDash([dash * 0.6, dash * 0.9]); circle(ctx, px, py, rr * 0.8); ctx.stroke();
+    ctx.lineWidth = lwid * 1.5; ctx.globalAlpha = 0.95; ctx.setLineDash([dash, dash]); ctx.lineDashOffset = -now / 40 * (scale / 16);
+    ctx.strokeStyle = '#ffffff'; circle(ctx, px, py, rr); ctx.stroke();
+    ctx.lineDashOffset -= dash; ctx.strokeStyle = '#ff3a26'; circle(ctx, px, py, rr); ctx.stroke();
+    ctx.setLineDash([]); ctx.lineDashOffset = 0;
     // crosshair
     const cr = scale * (0.8 + 0.25 * pulse);
     ctx.globalAlpha = 0.95; ctx.fillStyle = pulse > 0.5 ? '#ff4a30' : '#ffe27a';
@@ -377,12 +373,12 @@ const GfxNuke = (() => {
     const lw = textCv('ТРЕВОГА', COL_RED, 'r'), lw2 = textCv('ТРЕВОГА', COL_WHITE, 'w'), dg = textCv(String(secs), COL_YEL, 'y');
     const ly = py + scale * 3.2;
     ctx.globalAlpha = 1;
-    blit(ctx, flashOn ? lw : lw2, px - (lw.width * lp) / 2 - dg.width * lp * 0.6, ly, lw.width * lp, lw.height * lp, false);
-    blit(ctx, dg, px + (lw.width * lp) / 2 - dg.width * lp * 0.6 + lp * 3, ly, dg.width * lp, dg.height * lp, false);
+    blit(ctx, flashOn ? lw : lw2, px - (lw.width * lp) / 2 - dg.width * lp * 0.6, ly, lw.width * lp, lw.height * lp);
+    blit(ctx, dg, px + (lw.width * lp) / 2 - dg.width * lp * 0.6 + lp * 3, ly, dg.width * lp, dg.height * lp);
     const sg = lp * 11;
-    blit(ctx, signCv, px - (lw.width * lp) / 2 - dg.width * lp * 0.6 - sg - lp * 2, ly - lp, sg, sg, false);
+    blit(ctx, signCv, px - (lw.width * lp) / 2 - dg.width * lp * 0.6 - sg - lp * 2, ly - lp, sg, sg);
     // ground shadow, growing as the bomb comes down
-    ctx.fillStyle = '#000'; ctx.globalAlpha = 0.18 + 0.3 * p * p; H.discRows(ctx, px, py + u * 2, scale * (0.3 + 0.9 * p), Math.max(1, u));
+    ctx.fillStyle = '#000'; ctx.globalAlpha = 0.18 + 0.3 * p * p; ctx.save(); ctx.translate(px, py + u * 2); ctx.scale(1, 0.55); circle(ctx, 0, 0, scale * (0.3 + 0.9 * p)); ctx.fill(); ctx.restore();
     // the bomb: nearly vertical path, slight lean, accelerating
     const h = FALL_H * (1 - p * p), bx = px + 0.1 * h * scale, by = py - h * scale;
     if (kit.cap[0] || true) {
@@ -397,7 +393,7 @@ const GfxNuke = (() => {
       ctx.globalAlpha = 1;
       const bw = scale * 1.55, bh = bw * 32 / 13;
       ctx.translate(bx, by); ctx.rotate(0.1);
-      blit(ctx, bombCv, -bw / 2, -bh * 0.62, bw, bh, scale < 12);
+      blit(ctx, bombCv, -bw / 2, -bh * 0.62, bw, bh);
     }
     ctx.restore();
     ctx.globalAlpha = 1;
@@ -417,22 +413,21 @@ const GfxNuke = (() => {
     const capHt = 0.72 * R, HC = 0.98 * R + 2.1;
     if (off(ctx, H, px - R * scale * 1.3, py - (HC + capHt) * scale - 20, px + R * scale * 1.3, py + R * scale * 1.3)) return;
     const kit = kitFor(R); pump(kit, 2); shared();
-    const fade = age > life - 45 ? clamp((life - age) / 45, 0, 1) : 1, k = scale / P, smooth = scale < 12;
+    const fade = age > life - 45 ? clamp((life - age) / 45, 0, 1) : 1, k = scale / P;
     ctx.save();
     // ground flash + shock rings (the sim front: radius R * (1 - (1 - k/8)^1.5), then a little further while fading)
     if (age < 22) {
       const front = age < WAVE_TICKS ? 1 - Math.pow(1 - age / WAVE_TICKS, 1.5) : 1 + (age - WAVE_TICKS) * 0.028, fa = clamp(1 - (age - 4) / 16, 0, 1);
-      const rs = R * scale * front, pr = u * Math.max(1, Math.ceil(rs / 70 / u)), pd = u * Math.max(1, Math.ceil(rs / 26 / u));
-      ctx.globalAlpha = 0.36 * clamp(1 - age / 12, 0, 1); ctx.fillStyle = '#ffe6a0'; H.discRows(ctx, px, py, rs, pd);
-      ctx.globalAlpha = 0.3 * fa; ctx.fillStyle = '#2a1c14'; H.ringRows(ctx, px, py, rs * 0.93, Math.max(u * 3, rs * 0.12), pr);
-      ctx.globalAlpha = fa; ctx.fillStyle = '#ffd890'; H.ringRows(ctx, px, py, rs, Math.max(u * 2.2, scale * 0.3 * (1 - age / 30)), pr);
-      ctx.fillStyle = '#ffffff'; H.ringRows(ctx, px, py, rs * 1.012, Math.max(u * 1.2, scale * 0.1), pr);
+      const rs = R * scale * front, pr = u * Math.max(1, Math.ceil(rs / 40 / u));
+      ctx.globalAlpha = 0.34 * clamp(1 - age / 12, 0, 1); ctx.fillStyle = '#ffe6a0'; circle(ctx, px, py, rs); ctx.fill();            // ground flash
+      ctx.globalAlpha = 0.3 * fa; ctx.fillStyle = '#2a1c14'; H.ringRows(ctx, px, py, rs * 0.92, Math.max(u * 3, rs * 0.12), pr);        // dust wall behind the front
+      ctx.globalAlpha = fa; ctx.fillStyle = age < 10 ? '#ffffff' : '#ffd890'; H.ringRows(ctx, px, py, rs, Math.max(u * 2.2, scale * 0.3 * (1 - age / 30)), pr);   // the front
     }
     // fireball at ground zero: grows fast, lifts off and becomes the cap
     if (age < 24) {
       const rf = R * scale * 0.5 * easeOut(age / 10, 2), fa = age < 9 ? 1 : clamp((24 - age) / 15, 0, 1);
-      ctx.globalAlpha = 0.9 * fa; blit(ctx, glowCv, px - rf * 1.9, py - rf * 1.5 - rf * 0.5, rf * 3.8, rf * 3.8, true);
-      ctx.globalAlpha = fa; blit(ctx, fireCv, px - rf, py - rf * 1.4, rf * 2, rf * 2, smooth);
+      ctx.globalAlpha = 0.9 * fa; blit(ctx, glowCv, px - rf * 1.9, py - rf * 1.5 - rf * 0.5, rf * 3.8, rf * 3.8);
+      ctx.globalAlpha = fa; blit(ctx, fireCv, px - rf, py - rf * 1.4, rf * 2, rf * 2);
     }
     // cloud geometry
     const rise = easeOut((age - 1.5) / 80, 2.3), spread = clamp((age - 60) / 140, 0, 1);
@@ -443,14 +438,14 @@ const GfxNuke = (() => {
     const sf = stageOf(age), s0 = Math.min(3, Math.floor(sf)), fr = sf - s0, v = ((now / 260) | 0) % 3;
     const warm = clamp(1 - sf / 2.2, 0, 1);
     // glow behind everything
-    if (rise > 0.02) { const gr = (cw * 0.62 + scale * 1.5) * (0.9 + 0.1 * Math.sin(now / 300)); ctx.globalAlpha = 0.6 * warm * fade; blit(ctx, glowCv, ccx - gr, ccy - gr * 0.85, gr * 2, gr * 1.7, true); }
+    if (rise > 0.02) { const gr = (cw * 0.5 + scale * 1.2) * (0.92 + 0.08 * Math.sin(now / 300)); ctx.globalAlpha = 0.6 * warm * fade; blit(ctx, glowCv, ccx - gr, ccy - gr * 0.85, gr * 2, gr * 1.7); }
     // dust skirt at the base
     const ks = easeOut(age / 55, 2);
     const skCv = kit.skirt[s0] || kit.skirt[0];
     if (skCv && age > 1) {
       const sw2 = skCv.width * k * (0.3 + 0.7 * ks), sh2 = skCv.height * k * (0.4 + 0.6 * ks);
-      ctx.globalAlpha = fade * clamp(age / 5, 0, 1); blit(ctx, skCv, px - sw2 / 2, py - sh2 * 0.62, sw2, sh2, smooth);
-      if (fr > 0 && kit.skirt[s0 + 1]) { ctx.globalAlpha = fade * fr; blit(ctx, kit.skirt[s0 + 1], px - sw2 / 2, py - sh2 * 0.62, sw2, sh2, smooth); }
+      ctx.globalAlpha = fade * clamp(age / 5, 0, 1); blit(ctx, skCv, px - sw2 / 2, py - sh2 * 0.62, sw2, sh2);
+      if (fr > 0 && kit.skirt[s0 + 1]) { ctx.globalAlpha = fade * fr; blit(ctx, kit.skirt[s0 + 1], px - sw2 / 2, py - sh2 * 0.62, sw2, sh2); }
     }
     // stem: from the ground to the underside of the cap
     const stCv = kit.stem[s0] || kit.stem[0];
@@ -458,24 +453,24 @@ const GfxNuke = (() => {
       const top = ccy + chh * 0.26, bot = py + scale * 0.1, hs = bot - top;
       if (hs > 2) {
         const ws = stCv.width * k * (0.5 + 0.5 * rise) * (1 - 0.22 * spread);
-        ctx.globalAlpha = fade; blit(ctx, stCv, px + sway * rise * 0.4 - ws / 2, top, ws, hs, smooth);
-        if (fr > 0 && kit.stem[s0 + 1]) { ctx.globalAlpha = fade * fr; blit(ctx, kit.stem[s0 + 1], px + sway * rise * 0.4 - ws / 2, top, ws, hs, smooth); }
+        ctx.globalAlpha = fade; blit(ctx, stCv, px + sway * rise * 0.4 - ws / 2, top, ws, hs);
+        if (fr > 0 && kit.stem[s0 + 1]) { ctx.globalAlpha = fade * fr; blit(ctx, kit.stem[s0 + 1], px + sway * rise * 0.4 - ws / 2, top, ws, hs); }
       }
     }
     // cap
     const capCv = kit.cap[s0 * 3 + v] || kit.cap[s0 * 3] || kit.cap[0];
     if (capCv && rise > 0.01) {
-      ctx.globalAlpha = fade; blit(ctx, capCv, ccx - cw / 2, ccy - chh / 2, cw, chh, smooth);
+      ctx.globalAlpha = fade; blit(ctx, capCv, ccx - cw / 2, ccy - chh / 2, cw, chh);
       const nx = kit.cap[(s0 + 1) * 3 + v] || kit.cap[(s0 + 1) * 3];
-      if (fr > 0 && nx) { ctx.globalAlpha = fade * fr; blit(ctx, nx, ccx - cw / 2, ccy - chh / 2, cw, chh, smooth); }
+      if (fr > 0 && nx) { ctx.globalAlpha = fade * fr; blit(ctx, nx, ccx - cw / 2, ccy - chh / 2, cw, chh); }
     }
     // embers falling out of the cap, then grey ash
     if (scale >= 4 && rise > 0.2) {
       if (age < 160) {
         for (let i = 0; i < 16; i++) {
           const t = ((age * 0.016) + hash(i * 3.7)) % 1, a = hash(i * 5.1) * 2 - 1, x = ccx + a * cw * 0.46, y = ccy + chh * 0.2 + t * (HC * 0.55 * scale);
-          ctx.globalAlpha = Math.sin(t * Math.PI) * fade * clamp((160 - age) / 40, 0, 1); ctx.fillStyle = t < 0.35 ? '#ffd23c' : t < 0.7 ? '#ff7a1e' : '#c63e18';
-          sq(ctx, x + Math.sin(t * 9 + i) * u * 2, y, Math.max(2, u * 2));
+          ctx.globalAlpha = Math.sin(t * Math.PI) * fade * clamp((160 - age) / 40, 0, 1); ctx.fillStyle = t < 0.35 ? '#fff0a0' : t < 0.7 ? '#ffa030' : '#e2481c';
+          sq(ctx, x + Math.sin(t * 9 + i) * u * 2, y, Math.max(3, u * 2.8));
         }
       }
       if (age > 50) {
@@ -491,9 +486,16 @@ const GfxNuke = (() => {
   }
 
   // ------------------------------------------------------------------ registration (bottom layer first)
-  GfxPlugins.addEffect({ key: 'fallout', margin: 18, draw: drawFallout });
-  GfxPlugins.addEffect({ key: 'nukes', margin: 40, draw: drawBombs });
-  GfxPlugins.addEffect({ key: 'mushrooms', margin: 40, draw: drawMushroom });
+  /** every layer leaves the shared context as it found it (smoothing flag, alpha, transform) */
+  function guard(fn) {
+    return (ctx, e, px, py, scale, now, H, alpha) => {
+      const sm = ctx.imageSmoothingEnabled;
+      try { fn(ctx, e, px, py, scale, now, H, alpha); } finally { ctx.imageSmoothingEnabled = sm; ctx.globalAlpha = 1; }
+    };
+  }
+  GfxPlugins.addEffect({ key: 'fallout', margin: 18, draw: guard(drawFallout) });
+  GfxPlugins.addEffect({ key: 'nukes', margin: 40, draw: guard(drawBombs) });
+  GfxPlugins.addEffect({ key: 'mushrooms', margin: 40, draw: guard(drawMushroom) });
 
   return {
     /** every baked canvas of one blast radius (tests / sprite review): builds whatever is still pending */

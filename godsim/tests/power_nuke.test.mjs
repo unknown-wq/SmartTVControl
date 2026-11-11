@@ -576,6 +576,288 @@ section('loading an old / damaged save: missing or malformed plugin lists are re
   assert.equal(Powers.errors, 0, String(Powers.lastError && Powers.lastError.stack));
 });
 
+// ================================================================== graphics plugin against a fake DOM (no browser)
+/** canvas with real pixel buffers for ImageData + a recording context: counts calls per method, flags non-finite numeric arguments */
+const gfxStats = { calls: Object.create(null), bad: 0, badLog: [], canvases: 0 };
+function gfxCtxFactory() {
+  const makeCanvas = () => {
+    gfxStats.canvases++;
+    const c = { width: 0, height: 0, _img: null, style: {} };
+    const target = {
+      canvas: c, imageSmoothingEnabled: true, globalAlpha: 1, fillStyle: '#000',
+      createImageData(w, h) { return { width: w, height: h, data: new Uint8ClampedArray(w * h * 4) }; },
+      putImageData(id) { c._img = id; },
+      getImageData() { return c._img; },
+      drawImage(src, ...a) {                                    // nearest-neighbour pixel copy for the 9-argument form (Sprites.icon scales that way); counted + checked like every call
+        gfxStats.calls.drawImage = (gfxStats.calls.drawImage || 0) + 1;
+        for (let i = 0; i < a.length; i++) if (typeof a[i] === 'number' && !Number.isFinite(a[i])) { gfxStats.bad++; if (gfxStats.badLog.length < 6) gfxStats.badLog.push('drawImage(' + a.join(',') + ')'); }
+        if (a.length === 8 && src && src._img) {
+          if (!c._img) c._img = { width: c.width, height: c.height, data: new Uint8ClampedArray(c.width * c.height * 4) };
+          const [sx, sy, sw, sh, dx, dy, dw, dh] = a, S0 = src._img, D = c._img;
+          for (let y = 0; y < dh; y++) for (let x = 0; x < dw; x++) {
+            const X = dx + x, Y = dy + y; if (X < 0 || Y < 0 || X >= D.width || Y >= D.height) continue;
+            const u = sx + Math.floor(x * sw / dw), v = sy + Math.floor(y * sh / dh), si = (v * S0.width + u) * 4, di = (Y * D.width + X) * 4;
+            D.data[di] = S0.data[si]; D.data[di + 1] = S0.data[si + 1]; D.data[di + 2] = S0.data[si + 2]; D.data[di + 3] = S0.data[si + 3];
+          }
+        }
+      },
+    };
+    const ctx = new Proxy(target, {
+      get(t, k) {
+        if (k in t) return t[k];
+        return function () {
+          gfxStats.calls[k] = (gfxStats.calls[k] || 0) + 1;
+          for (let i = 0; i < arguments.length; i++) if (typeof arguments[i] === 'number' && !Number.isFinite(arguments[i])) { gfxStats.bad++; if (gfxStats.badLog.length < 6) gfxStats.badLog.push(String(k) + '(' + Array.prototype.join.call(arguments, ',') + ')'); }
+        };
+      },
+      set(t, k, v) { t[k] = v; return true; },
+    });
+    c.getContext = () => ctx;
+    return c;
+  };
+  return { createElement(tag) { assert.equal(tag, 'canvas'); return makeCanvas(); }, makeCanvas };
+}
+function loadGfx() {
+  const doc = gfxCtxFactory();
+  const code = ['00_core.js', '01_tiles.js', '02_data.js', '20_sprites.js', '33_gfx_nuke.js'].map(f => fs.readFileSync(path.join(root, 'src', f), 'utf8')).join('\n');
+  const m = new Function('document', '"use strict";\n' + code + '\nreturn { Sprites, GfxPlugins, UIPlugins, GfxNuke, S, Fx, Const };')(doc);
+  m.doc = doc;
+  return m;
+}
+
+section('graphics plugin: icon, unit tint + badge, three effect layers in drawing order, margins cover the cloud', () => {
+  const G = loadGfx();
+  const { Sprites, GfxPlugins, UIPlugins, S } = G;
+  assert.ok(Sprites.iconKeys().includes('nuke'), 'icon key known to the sprite sheet');
+  const px = (c) => c._img.data;
+  const opaque = (c) => { const d = px(c); let n = 0; for (let i = 3; i < d.length; i += 4) if (d[i] > 40) n++; return n; };
+  for (const sz of [16, 24, 32, 48, 64]) { const c = Sprites.icon('nuke', sz); assert.equal(c.width, sz); assert.ok(opaque(c) > sz * sz * 0.2, 'icon not empty at ' + sz); }
+  const fb = Sprites.icon('definitely_not_an_icon', 32), ic = Sprites.icon('nuke', 32);
+  let diff = 0; const a = px(fb), b = px(ic); for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) diff++;
+  assert.ok(diff > 200, 'not the "?" fallback');
+  assert.equal(Sprites.icon('nuke', 48), Sprites.icon('nuke', 48), 'icons are cached');
+  assert.deepEqual(GfxPlugins.unitTints.filter(t => t.field === 'rad').map(t => t.color.indexOf('rgba') === 0), [true], 'one pale-green tint for u.rad');
+  S.tick = 500;
+  const badge = (u) => UIPlugins.unitBadges.map(f => f(u)).filter(Boolean);
+  assert.deepEqual(badge({ rad: 501 }), [{ t: 'Облучён', cls: 'bad' }]);
+  assert.deepEqual(badge({ rad: 500 }), []); assert.deepEqual(badge({}), []); assert.deepEqual(badge({ rad: 0 }), []);
+  const keys = GfxPlugins.effects.map(d => d.key);
+  assert.deepEqual(keys, ['fallout', 'nukes', 'mushrooms'], 'ground haze first, then the bomb, the cloud on top');
+  for (const d of GfxPlugins.effects) assert.equal(typeof d.draw, 'function');
+  const m = Object.fromEntries(GfxPlugins.effects.map(d => [d.key, d.margin]));
+  assert.ok(m.fallout >= 14 && m.nukes >= 30 && m.mushrooms >= 30, 'culling margins (tiles) cover the largest blast: ' + JSON.stringify(m));
+});
+
+section('graphics plugin: every layer draws without throwing or NaN over zoom x radius x age (and leaves the context as it found it)', () => {
+  const G = loadGfx();
+  const { GfxPlugins, Sprites, S } = G, H = Sprites.fxHelpers;
+  const eff = Object.fromEntries(GfxPlugins.effects.map(d => [d.key, d]));
+  const cv = G.doc.makeCanvas(); cv.width = 780; cv.height = 1688;
+  const ctx = cv.getContext('2d');
+  gfxStats.bad = 0; gfxStats.badLog.length = 0;
+  let draws = 0;
+  for (const scale of [3, 6, 8, 12, 16, 28, 48, 96]) for (const R of [6, 7, 9, 11, 13]) {
+    for (const k of [-1, 0, 3, 11, 24, 25.5]) {
+      S.tick = 1000 + Math.floor(k); const alpha = k - Math.floor(k);
+      for (const [px, py] of [[390, 840], [-200, 300], [900, 1800]]) {
+        ctx.globalAlpha = 1; ctx.imageSmoothingEnabled = true;
+        eff.nukes.draw(ctx, { x: 30.5, y: 40.5, r: R, t0: 1000 - 12, eta: 1000 + 13, s: 7, w: 0, hit: [] }, px, py, scale, 123456 + k * 77, H, alpha);
+        eff.nukes.draw(ctx, { x: 30.5, y: 40.5, r: R, t0: 1000, eta: 1000 + 25, s: 7, w: 3, hit: [] }, px, py, scale, 5, H, alpha);     // w > 0: nothing drawn
+        draws += 2;
+      }
+    }
+    for (const age of [-2, -0.5, 0, 1, 4, 7.5, 12, 20, 30, 45, 70, 100, 140, 170, 200, 219, 221, 260]) {
+      S.tick = 5000 + Math.floor(age); const alpha = age - Math.floor(age);
+      for (const [px, py] of [[390, 840], [-300, 100], [800, 2000]]) {
+        ctx.globalAlpha = 1; ctx.imageSmoothingEnabled = true;
+        eff.mushrooms.draw(ctx, { x: 30.5, y: 40.5, r: R, t0: 5000, until: 5220 }, px, py, scale, 1e6 + age * 31, H, alpha);
+        eff.fallout.draw(ctx, { x: 30.5, y: 40.5, r: R * 0.7, R, t0: 5000, until: 6500 }, px, py, scale, 3e5 + age * 13, H, alpha);
+        draws += 2;
+        assert.equal(ctx.globalAlpha, 1, 'alpha restored'); assert.equal(ctx.imageSmoothingEnabled, true, 'smoothing flag restored');
+      }
+    }
+  }
+  // fallout over its whole life, odd inputs
+  for (const t of [0, 1, 10, 100, 700, 1499, 1500, 1600]) { S.tick = 5000 + t; eff.fallout.draw(ctx, { x: 10, y: 10, r: 6, R: 9, t0: 5000, until: 6500 }, 400, 800, 16, 99, H, 0.3); }
+  eff.fallout.draw(ctx, { x: 10, y: 10, r: 6, t0: 5000, until: 6500 }, 400, 800, 16, 99, H, 0.3);               // record without R (old save)
+  eff.mushrooms.draw(ctx, { x: 10, y: 10, t0: 5000, until: 5000 }, 400, 800, 16, 99, H, 0.3);                    // zero life / no radius
+  eff.nukes.draw(ctx, { x: 10, y: 10, r: 0, t0: 5000, eta: 5000, w: 0, hit: [] }, 400, 800, 16, 99, H, 0.3);
+  assert.equal(gfxStats.bad, 0, 'non-finite draw arguments: ' + gfxStats.badLog.join(' | '));
+  note(`${draws} draw calls swept; ${gfxStats.canvases} canvases made; context calls: ${Object.entries(gfxStats.calls).map(([k, v]) => k + ' ' + v).join(', ')}`);
+});
+
+section('graphics plugin: draw-call budget per frame (cached sprites, no per-pixel loops), bake budget, bounded caches', () => {
+  const G = loadGfx();
+  const { GfxPlugins, Sprites, S, GfxNuke } = G, H = Sprites.fxHelpers;
+  const eff = Object.fromEntries(GfxPlugins.effects.map(d => [d.key, d]));
+  const cv = G.doc.makeCanvas(); cv.width = 780; cv.height = 1688;
+  const ctx = cv.getContext('2d');
+  const R = 13, cloud = { x: 30.5, y: 40.5, r: R, t0: 5000, until: 5220 }, zone = { x: 30.5, y: 40.5, r: 9.1, R, t0: 5000, until: 6500 };
+  const calls = () => Object.values(gfxStats.calls).reduce((a, b) => a + b, 0);
+  // warm up (the parts bake over a few frames)
+  S.tick = 5070; for (let i = 0; i < 40; i++) { eff.mushrooms.draw(ctx, cloud, 390, 1000, 16, 1000 + i * 16, H, 0.5); eff.fallout.draw(ctx, zone, 390, 1000, 16, 1000 + i * 16, H, 0.5); }
+  assert.equal(GfxNuke.stats().pending, 0, 'every part of the kit is baked after a few frames');
+  const perFrame = (fn) => { const c0 = calls(); fn(); return calls() - c0; };
+  const rows = [];
+  for (const scale of [8, 16, 28, 48]) {
+    S.tick = 5070;
+    const steady = perFrame(() => { eff.mushrooms.draw(ctx, cloud, 390, 1000, scale, 777, H, 0.5); eff.fallout.draw(ctx, zone, 390, 1000, scale, 777, H, 0.5); });
+    S.tick = 5004;
+    const blast = perFrame(() => { eff.mushrooms.draw(ctx, cloud, 390, 1000, scale, 777, H, 0.5); eff.fallout.draw(ctx, zone, 390, 1000, scale, 777, H, 0.5); });
+    S.tick = 1010;
+    const alarm = perFrame(() => eff.nukes.draw(ctx, { x: 30.5, y: 40.5, r: R, t0: 1000, eta: 1025, s: 1, w: 0, hit: [] }, 390, 1000, scale, 777, H, 0.5));
+    rows.push(`scale ${scale}: cloud + fallout ${steady} calls, first 22 ticks ${blast}, alarm ${alarm}`);
+    assert.ok(steady <= 80, 'cloud + fallout stay a handful of calls per frame at scale ' + scale + ': ' + steady);
+    assert.ok(blast <= 450, 'the 22-tick ring phase stays bounded: ' + blast);
+    assert.ok(alarm <= 200, 'the alarm stays bounded: ' + alarm);
+  }
+  note(rows.join(' | '));
+  // lazy bake: at most a few canvases per frame for a brand-new radius (no frame is stalled by baking a whole kit)
+  const c0 = gfxStats.canvases;
+  S.tick = 1002; eff.nukes.draw(ctx, { x: 30.5, y: 40.5, r: 9, t0: 1000, eta: 1025, s: 1, w: 0, hit: [] }, 390, 1000, 16, 5, H, 0.5);
+  const first = gfxStats.canvases - c0;
+  assert.ok(first <= 12, 'first frame of a new radius bakes only a few parts (shared ones included): ' + first);
+  for (let i = 0; i < 30; i++) eff.nukes.draw(ctx, { x: 30.5, y: 40.5, r: 9, t0: 1000, eta: 1025, s: 1, w: 0, hit: [] }, 390, 1000, 16, 5 + i, H, 0.5);
+  assert.equal(GfxNuke.stats().pending, 0, 'the kit finishes baking while the bomb falls (25 ticks)');
+  // caches stay bounded however many radii come by
+  for (let r = 3; r <= 20; r++) { S.tick = 5070; eff.mushrooms.draw(ctx, { x: 30.5, y: 40.5, r, t0: 5000, until: 5220 }, 390, 1000, 16, 5, H, 0.5); }
+  const st = GfxNuke.stats();
+  assert.ok(st.kits <= 9, 'at most 9 kits are kept: ' + st.kits);
+  assert.ok(st.canvases < 400, 'canvas count bounded: ' + st.canvases);
+});
+
+// ================================================================== browser (390x844 @2x): the built game with the plugin, driven through the real UI
+async function asection(name, fn) {
+  const t0 = performance.now();
+  try { await fn(); results.push({ name, ok: true }); console.log(`  ok   ${pad(name, 82)} ${(performance.now() - t0).toFixed(0)} ms`); }
+  catch (e) { results.push({ name, ok: false, e }); console.log(`  FAIL ${name}\n       ${(e && e.stack || e).toString().split('\n').slice(0, 10).join('\n       ')}`); }
+}
+if (!args.nobrowser) {
+  const { launch } = await import('./browser.mjs');
+  const { execFileSync } = await import('node:child_process');
+  const shots = String(args.shots || '/tmp/godsim-nuke-shots');
+  fs.mkdirSync(shots, { recursive: true });
+  const out = '/tmp/godsim-nuke-test.html';
+  execFileSync('node', [path.join(root, 'build.mjs'), '--out=' + out, '--extra=tests/fixtures/nuke_hook.js'], { cwd: root, stdio: 'pipe' });
+  console.log('# browser: tool button, one bomb through the real UI path (tap, cooldown toast, alarm, flash, cloud, fallout, save / load), no page errors');
+  const b = await launch({ file: out });
+  const E = (fn, a) => b.eval(fn, a);
+  const frame = () => b.page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
+  const centre = (sel) => E((s) => { const el = document.querySelector(s); if (!el) return null; el.scrollIntoView({ inline: 'center', block: 'nearest' }); const r = el.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2, w: r.width, h: r.height }; }, sel);
+  const tapSel = async (sel) => { const c = await centre(sel); assert.ok(c, 'element ' + sel); await b.wait(120); const c2 = await centre(sel); await b.tap(c2.x, c2.y); return c2; };
+  /** pixel statistics of a rectangle (css px) of the game canvas */
+  const pixels = (x, y, w, h) => E(({ x, y, w, h }) => {
+    const cv = document.getElementById('game'), d = cv.getContext('2d').getImageData(Math.round(x * 2), Math.round(y * 2), Math.round(w * 2), Math.round(h * 2)).data;
+    let red = 0, orange = 0, green = 0, white = 0, n = 0;
+    for (let i = 0; i < d.length; i += 4) { n++; const r = d[i], g = d[i + 1], bl = d[i + 2]; if (r > 190 && g < 110 && bl < 100) red++; if (r > 220 && g > 110 && g < 200 && bl < 90) orange++; if (g > 200 && r > 100 && r < 200 && bl < 120) green++; if (r > 240 && g > 205 && bl > 170) white++; }      // white = the (slightly warm) double flash
+    return { red, orange, green, white, n };
+  }, { x, y, w, h });
+  try {
+    await b.page.waitForFunction(() => window.__god && window.__gfxNuke && document.querySelector('.tab'), null, { timeout: 30000 });
+    await b.wait(500);
+    await asection('browser: «Ядерка» button with its icon in the Силы tab, group «Арсенал» between Разрушение and Благословение', async () => {
+      await tapSel('.tab[data-tab="powers"]');
+      await b.wait(300);
+      const tool = await E(() => {
+        const btn = document.querySelector('.tool[data-tool="nuke"]');
+        if (!btn) return null;
+        const cv = btn.querySelector('canvas'); let lit = 0;
+        if (cv) { const d = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data; for (let i = 3; i < d.length; i += 4) if (d[i] > 0) lit++; }
+        return { label: btn.textContent.trim(), lit, w: btn.getBoundingClientRect().width, groups: [...document.querySelectorAll('.grp-lbl')].map(x => x.textContent.trim()) };
+      });
+      assert.ok(tool, 'button exists');
+      assert.equal(tool.label, 'Ядерка'); assert.ok(tool.lit > 250, 'icon drawn: ' + tool.lit); assert.ok(tool.w >= 48, 'touch target ' + tool.w);
+      assert.ok(/^Разрушение\|Арсенал\|Благословение$/.test(tool.groups.join('|')), tool.groups.join('|'));
+      await b.shot(shots + '/nuke_01_tool.png');
+    });
+    // a grown world, camera on its biggest city
+    const city = await E(async () => {
+      const g = window.__god;
+      g.Main.newWorld({ seed: 4, w: 96, h: 96, populate: true }); g.setSpeed(0);
+      let n = 0; while (n < 4500) { g.step(250); n += 250; await new Promise(r => setTimeout(r, 0)); }
+      const c = [...g.S.cities.values()].sort((a, b) => b.pop - a.pop)[0];
+      g.Render.setMode(0); g.Render.setCamera(c.x + 0.5, c.y + 0.5, 10);
+      return { x: c.x, y: c.y, name: c.name, pop: c.pop };
+    });
+    await b.wait(400);
+    let target = null, popBefore = 0;
+    await asection('browser: tool + brush through the UI, a tap on the map arms the bomb («Тревога»), the cooldown refuses a second tap with a toast', async () => {
+      await tapSel('.tab[data-tab="powers"]'); await b.wait(200);
+      await tapSel('.tool[data-tool="nuke"]'); await b.wait(200);
+      const st = await E(() => { window.__god.UI.setBrush(3); const g = window.__god; return { tool: g.UI.state.tool, brush: g.UI.state.brush, brushBox: !document.getElementById('brushbox').classList.contains('hide') }; });
+      assert.equal(st.tool, 'nuke'); assert.equal(st.brush, 3); assert.ok(st.brushBox, 'the brush slider is shown for a brush tool');
+      popBefore = await E(() => window.__god.S.units.size);
+      target = await E(({ x, y }) => { const p = window.__god.Render.tileToScreen(x + 0.5, y + 0.5); return { sx: p.x, sy: p.y }; }, city);
+      assert.ok(target.sy < 640 && target.sy > 100, 'target is on the visible map: ' + JSON.stringify(target));
+      await b.tap(target.sx, target.sy);
+      await frame();
+      const armed = await E(() => { const g = window.__god; return { n: g.S.eff.nukes.length, b: g.S.eff.nukes[0] && { x: g.S.eff.nukes[0].x, y: g.S.eff.nukes[0].y, r: g.S.eff.nukes[0].r, eta: g.S.eff.nukes[0].eta, t0: g.S.eff.nukes[0].t0 }, msg: g.Powers.lastMessage }; });
+      assert.equal(armed.n, 1, 'bomb armed: ' + JSON.stringify(armed)); assert.equal(armed.b.r, 8); assert.ok(Math.hypot(armed.b.x - city.x - 0.5, armed.b.y - city.y - 0.5) < 1.2, 'at the tap');
+      assert.ok(/Тревога/.test(armed.msg), armed.msg);
+      await b.tap(target.sx + 3, target.sy + 3);
+      await b.wait(250);
+      const toast = await E(() => [...document.querySelectorAll('.toast')].map(t => t.textContent));
+      assert.ok(toast.includes('Бомба ещё не готова'), 'cooldown toast: ' + JSON.stringify(toast));
+      assert.equal(await E(() => window.__god.S.eff.nukes.length), 1, 'no second bomb');
+    });
+    await asection('browser: the alarm is drawn (red hazard ring + disc + label + falling bomb), screenshot taken', async () => {
+      await E(() => window.__god.step(12));
+      await frame(); await b.wait(150);
+      const ring = await pixels(target.sx - 160, target.sy - 160, 320, 320);
+      assert.ok(ring.red > 300, 'hazard disc / rings are visible: ' + JSON.stringify(ring));
+      await b.shot(shots + '/nuke_02_alarm.png');
+      await E(() => window.__god.step(11));
+      await frame();
+      await b.shot(shots + '/nuke_03_bomb_close.png');
+    });
+    await asection('browser: detonation = full-screen white flash (Fx), the cloud + fallout records appear, ring phase draws', async () => {
+      await E(() => { const g = window.__god; window.__fxUpdate = g.Fx.update; g.Fx.update = () => {}; });      // freeze the real-time Fx clock: deterministic flash pixels
+      try {
+        await E(() => window.__god.step(2));
+        await frame();
+        const fl = await pixels(2, 2, 12, 12);
+        assert.ok(fl.white > fl.n * 0.5, 'the flash whitens the screen: ' + JSON.stringify(fl));
+        const rec = await E(() => { const e = window.__god.S.eff; return { m: e.mushrooms.length, f: e.fallout.length, n: e.nukes.length, shake: window.__god.Fx.list.filter(x => x.type === 'shake').length, flash: window.__god.Fx.list.filter(x => x.type === 'flash').length }; });
+        assert.equal(rec.m, 1); assert.equal(rec.f, 1); assert.equal(rec.shake, 1); assert.ok(rec.flash >= 1);
+        await b.shot(shots + '/nuke_04_flash.png');
+      } finally { await E(() => { const g = window.__god; g.Fx.update = window.__fxUpdate; g.Fx.clear(); }); }
+      await E(() => window.__god.step(4));
+      await frame(); await b.wait(150);
+      await b.shot(shots + '/nuke_05_wave.png');
+    });
+    await asection('browser: the mushroom cloud rises (orange pixels above ground zero), then cools; the baked parts are all built', async () => {
+      await E(() => window.__god.step(40));
+      await frame(); await b.wait(300);
+      const cloud = await pixels(target.sx - 130, target.sy - 330, 260, 260);
+      assert.ok(cloud.orange > 800, 'cloud pixels: ' + JSON.stringify(cloud));
+      await b.shot(shots + '/nuke_06_cloud.png');
+      const st = await E(() => window.__gfxNuke.stats());
+      assert.equal(st.pending, 0, 'every part is baked: ' + JSON.stringify(st));
+      const pop = await E(() => window.__god.S.units.size);
+      assert.ok(pop < popBefore - 20, 'the blast killed: ' + popBefore + ' -> ' + pop);
+      const log = await E(() => window.__god.S.log.filter(l => l.msg.indexOf('Ядерный удар') >= 0).map(l => l.msg));
+      assert.ok(log.length >= 1 && log.length <= 4, 'headline(s): ' + log.join(' | '));
+      await E(() => window.__god.step(100));
+      await frame(); await b.wait(200);
+      await b.shot(shots + '/nuke_07_cloud_cooling.png');
+    });
+    await asection('browser: save / load in the middle of the cloud keeps the effects, no error; later the cloud ends and the fallout haze remains', async () => {
+      const keep = await E(() => { const g = window.__god, d = g.Save.serialize(); g.Save.deserialize(d); g.Main.worldReplaced('load'); g.setSpeed(0); const e = g.S.eff; return { m: e.mushrooms.length, f: e.fallout.length }; });
+      assert.equal(keep.m, 1); assert.equal(keep.f, 1);
+      await frame(); await b.wait(300);
+      await b.shot(shots + '/nuke_08_after_load.png');
+      await E(() => window.__god.step(140));
+      await frame(); await b.wait(300);
+      const haze = await pixels(target.sx - 90, target.sy - 90, 180, 180);
+      assert.ok(haze.green > 40, 'fallout haze / signs are drawn: ' + JSON.stringify(haze));
+      const eff = await E(() => ({ m: window.__god.S.eff.mushrooms.length, f: window.__god.S.eff.fallout.length }));
+      assert.equal(eff.m, 0, 'the cloud has ended'); assert.equal(eff.f, 1, 'the fallout lasts');
+      await b.shot(shots + '/nuke_09_aftermath.png');
+    });
+    await asection('browser: no page errors, no console errors', async () => { assert.equal(b.errors.length, 0, b.errors.join(' | ').slice(0, 400)); });
+  } finally { await b.close(); }
+}
+
 // ------------------------------------------------------------------ summary
 const failed = results.filter(r => !r.ok);
 console.log(`\n${results.length - failed.length}/${results.length} sections passed`);
