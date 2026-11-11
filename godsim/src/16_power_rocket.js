@@ -77,13 +77,20 @@ const PowerRocket = (() => {
     const dur = e.eta - e.t0;
     let u = dur > 0 ? (T0 - e.t0) / dur : 1;
     u = u < 0 ? 0 : u > 1 ? 1 : u;
-    const s = u * (0.6 + 0.4 * u), q = 1 - s;
+    pathS(e, u * (0.6 + 0.4 * u), out);
+    out.u = u;
+    return out;
+  }
+  /** same curve by eased distance fraction s (0 = launch point, 1 = impact point) instead of time (the renderer lays smoke trails along it) */
+  function pathS(e, s, out) {
+    s = s < 0 ? 0 : s > 1 ? 1 : s;
+    const q = 1 - s;
     const dx = e.x1 - e.x0, dy = e.y1 - e.y0, b = e.b || 0;
     const cx = (e.x0 + e.x1) * 0.5 - dy * b, cy = (e.y0 + e.y1) * 0.5 + dx * b;          // chord midpoint pushed sideways by b * length
     out.x = q * q * e.x0 + 2 * q * s * cx + s * s * e.x1;
     out.y = q * q * e.y0 + 2 * q * s * cy + s * s * e.y1;
     out.alt = (e.h > 0 ? e.h : 1.5) * 4 * s * q;
-    out.u = u; out.s = s;
+    out.s = s;
     return out;
   }
 
@@ -334,11 +341,11 @@ const PowerRocket = (() => {
   function newWorld() { hit.length = 0; cand.length = 0; cuUnits.length = 0; }
 
   ToolDefs.groupLabels.arsenal = 'Арсенал';
-  ToolDefs.add({ id: 'rocket', tab: 'powers', group: 'arsenal', afterGroup: 'destroy', name: 'Ракеты', short: 'Ракеты', icon: 'rocket', brush: true, drag: false, hint: 'Ракетный залп с края карты (кисть = размер залпа)' });
+  ToolDefs.add({ id: 'rocket', tab: 'powers', group: 'arsenal', afterGroup: 'destroy', name: 'Ракеты', short: 'Ракеты', icon: 'rocket', brush: true, drag: false, hint: 'Ракетный залп (кисть = размер)' });
   const api = {
     name: 'rocket', ids: ['rocket'], apply, step, afterLoad, newWorld,
     // shared with the renderer / tests
-    path, nearestEdge,
+    path, pathS, nearestEdge,
     params: { N_BASE, N_MAX, COOLDOWN, LIVE_CAP, SPREAD_K, FLIGHT_MIN, FLIGHT_MAX, STAGGER_MAX, BLAST_R, CORE_R, FELL_R, IGNITE_P, FULL_FX, RETICLE_TICKS },
     unitDamage,
   };
