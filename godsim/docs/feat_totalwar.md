@@ -46,7 +46,7 @@ War.capitulation(warId) -> {kid, to, left, total, suggest, options:{merge,vassal
 War.resolveCapitulation(warId, 'merge'|'vassal'|'regions') -> bool
 War.aiConsiderTotal(kid, force?) -> war | null                  // called from War.step; `force` skips the dice (tests)
 War.aiTotalWhy(kid) -> ''|reason   War.aiTotalInfo(kid) -> {why,best,ratio,p,aggr}      // read-only diagnostics of the AI rule
-War.TOTAL = { MAX_ARMIES_K, MAX_ARMIES_WAR, MAX_ARMY, MAX_SOLDIERS, FRAC, WEAR, INFAMY, INFAMY_CLAIM, CAP_SHARE, CAP_ASK, CAP_HOLD, REST, AI_* }
+War.TOTAL = { MAX_ARMIES_K, MAX_ARMIES_WAR, MAX_ARMY, MAX_SOLDIERS, FRAC, WEAR, INFAMY, INFAMY_CLAIM, CAP_SHARE, CAP_ASK, CAP_HOLD, REST, AI_MIN_TICK, AI_COOLDOWN, AI_RATIO }
 War.targetsFor(kid)[i].total  // war entries carry the flag; war.total === true and war.tw = {cap, own, occ, fell, fellLog, peak, sure, pend, out, base, why, dn, an}
 Bus 'capitulation' (war, loserKid, winnerKid)                   // a commanded winner must decide;  'warDeclared' / 'warEnded'(war, 'capitulation') as before
 ```
@@ -71,12 +71,49 @@ saved with the war; the whole thing is deterministic through `R` (save/load mid-
 
 ## 4. Tests
 
-@@TESTS@@
+| command | what it covers |
+|---|---|
+| `node tests/totalwar.test.mjs [--quick] [--seed=N]` | **24 sections** (`--quick` = one populated world / shorter runs): `canDeclareTotal` preview + every refusal reason; limited war untouched (flag, caps, infamy 8 with a claim, capital first); mobilisation (draft 37 % / 47 % vs 24 % / 33 %, weariness ×1.5); allies / vassals; the frontier chain (goals grow 1 → 8 by themselves, capital first, a limited war still holds); chain details (no foreign goals, supply attrition); capitulation thresholds (capital + 60 %, rate 0.8× … 2×) and timer (lapse eats twice as fast, both sides get peace, Log + `warEnded how=capitulation`); manpower collapse (stability alone does not end it); a capital-less state + the stalemate exemption; outcomes merge / vassal / regions (invariants after each); commanded winner (pending + `Bus 'capitulation'`, the three answers, timeout 1800, release); commanded defender merged away; allies + third parties + a second war; AI rule (every negative probe, the dice, rarity in populated worlds); natural deaths are no losses; save / load bit-identical (march, chain, timer, pending); performance; fuzz (erase, destroy, peace, annex, commands, answers, save-load) |
+| `node tests/war.test.mjs [--quick]` | the old 20 sections + 2 new: a limited war is untouched by the feature (flag, no `tw`, caps 6 / 60 / 350, one goal that never grows, old saves load as limited), the new API is safe on junk ids (read-only, no RNG roll) |
+| `node tests/ui2.test.mjs [--only=total]` | browser, 390×844 + 320×568 + 844×390: new block «total war» (@@UI2N@@ checks): the toggle [Регион \| Вся страна] (default Регион, the old flow unchanged), lit band vs dimmer deep regions, honest costs, red button + second tap, HUD chip / drawer rows, banner (own and AI wars), capitulation sheet with the three answers, no stuck state, back / release; screenshots of every state |
+| `node tests/system.test.mjs --quick` | 12 / 12 (one word added to its list of valid war ends: `capitulation`) |
+| `node tests/long.mjs --seeds=1,2,5 --ticks=30000` | 0 sim errors; limited-war statistics unchanged (median 4850-4970 ticks, base 4900-5050) |
+
+Helper: `tests/twlib.mjs` (arena builder `tarena` / `mkArena`, `feed`, `run`, `worldInvariants`, ...). `--seed=N` moves the arenas to other maps.
 
 ## 5. Balance and performance
 
-@@BALANCE@@
+**Duration** (`CAP_HOLD`): a 2:1 attacker (strength 137 vs 67) against a 6-region country in a controlled arena, 8 maps: **4720, 4810, 4930, 4990, 5080, 5170, 5590,
+7749 ticks** (median ~5000 = 83 game years; target 4000-9000), every war ended by capitulation (5 × «regions», 3 × «vassal»), the capital falls after 265-485 ticks, the
+rest is the conquest of the other regions (~1500-2000 ticks) and the government's will-to-resist timer. Real populated worlds (a total war forced at tick 9000 on the
+best pair): ratio 5.3 vs 6 regions 5148 ticks, ratio 7.2 vs 4 regions 6521, ratio 2.25 vs 9 regions 6491 (all «vassal»); a ratio-2.2 attacker against a **20-region**
+empire never gets past 2 regions and the war ends by exhaustion after 11000 ticks; a pair whose victim had two allies ended by exhaustion (the attacker, spread over
+10 small armies, was beaten piecemeal) - a total war is **not** a guaranteed win. Tune the length with `CAP_HOLD` (duration ≈ conquest time + CAP_HOLD / rate, rate 0.8 … 2).
+
+**AI total wars** (plain AI, nothing forced; 8 worlds × 30000 ticks): 3 total wars (ticks 10361, 22661, 22761; durations 4106, 4515, 4651; all by capitulation: 2 × vassal,
+1 × merge), 0 sim errors, 5-13 wars per world, 4-9 kingdoms left; the victims were small neighbours (27-39 people, 1-2 regions). Funnel behind it (5468 kingdom-looks since tick 9000, 8 worlds):
+54 % of the kingdoms are at war, 18 % (985) are free to start one, but only 4 of those had an aggression ≥ 0.3 *and* a ≥ 2.5× weaker land neighbour (28 with aggression ≥ 0.1) -
+hence the warlike threshold 0.1 and dice 0.3 (with the first values: 0 AI total wars in 8 worlds, with these: 3).
+
+**Performance** (budget: War.step + army logic < 1 ms / tick on average with 3 wars): a total war with 465 soldiers, 700 units: `War.step` **0.10-0.15 ms/tick** avg
+(worst tick 6-11 ms), the army logic about 0.9-1.9 ms/tick on a loaded machine (the limited-war test: 0.127 ms for War.step). `aiTotalCheck` runs for one kingdom in eight
+every 50 ticks (~free).
 
 ## 6. Known issues / notes
 
-@@NOTES@@
+* **Weariness and natural deaths.** In a total war the soldiers who die of old age / plague (`cause` `age`, `disease`, `erase`, `lost`) are not war losses: a war of
+  5000+ ticks (80+ years) used to wear both sides out to 95 and end in an «exhaustion» peace before the capitulation timer finished. Limited wars count everything as before.
+* **Stalemate vs the timer.** `TW_STALEMATE` (6000 ticks without a change of hands) does not end a total war while the capitulation timer is running (`tw.sure > 0`): once
+  the whole country is held nothing changes hands any more.
+* **Capital-less state.** `tw.fell` keeps «the capital is held» after the government fled; if the capital city dies out (an occupied city can starve to 0 people) and every
+  city that is left is held, the biggest one stands in. Otherwise the timer would drain and the war would end by exhaustion although the country is conquered.
+* A **commanded** attacker is asked once; while the sheet is open the war is frozen (the loser's armies go home, nobody attacks), so there is no stuck state; the AI decides
+  after 1800 ticks or when the player's command is released (`resolveCapitulation` is also callable from tests / scripts).
+* `Kingdoms.annex(…, 'merge')` still moves the player's command to the winner; `resolveCap` clears `cmd` of a commanded loser first (the realm simply falls).
+* The merge of a country is `Kingdoms.annex` (not changed); the vassal outcome raises the loser's stability to ≥ 45 so `vassalCheck` does not free it again within minutes.
+* Known limits: the AI does not concentrate its armies (a wide empire raises up to 10 small armies, one per city, and can lose them piecemeal against a defender with allies);
+  the AI picks on small neighbours (victim ≥ 24 people), which makes AI total wars «annexations of dwarfs»; timing-based assertions in other suites (`cities`
+  performance, `world` / `regions` generation speed, `units` stress) flake when the machine is loaded - `cities` does so on the untouched base too.
+* Merge notes: `src/23_ui.js` (war card / HUD / banner / capitulation sheet code, new functions only plus hooks in `updateCmd` / `cmdTap` / `stepBack`), `src/21_render.js`
+  (+22 lines, `Render.cmd.deep` and the capital star), `src/style.css` (appended section), `tests/system.test.mjs` (one word). New files: `src/35_gfx_totalwar.js`,
+  `tests/totalwar.test.mjs`, `tests/twlib.mjs`, this file.
