@@ -298,7 +298,7 @@ const GfxRocket = (() => {
   }
 
   // ------------------------------------------------------------------ warning reticle (4 rotation phases): dashed blast ring + lethal-core ring + crosshair in ONE sprite
-  const RET_N = 4, RET_S = 68, RET_C = 34;
+  const RET_S = 68, RET_C = 34;                                                      // 4 rotation phases (ph 0..3)
   function bakeReticle(ph) {
     const pb = new PB(RET_S, RET_S), R_ = 1.8 * 16, Rc = 0.75 * 16;
     for (let y = 0; y < RET_S; y++) for (let x = 0; x < RET_S; x++) {                  // the ring is a little see-through (alpha baked in), the crosshair is not
