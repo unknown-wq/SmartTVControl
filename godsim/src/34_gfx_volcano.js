@@ -14,25 +14,24 @@ const GfxVolcano = (() => {
 
   // ------------------------------------------------------------------ icon
   GfxPlugins.icons.volcano = (b, IP) => {
-    // ash cloud leaning to the right
-    b.disc(8.2, 1.9, 2, IP.W); b.disc(6.2, 2.6, 1.7, IP.g); b.disc(10.4, 2.2, 1.5, IP.g); b.disc(8.4, 3.4, 1.6, IP.G);
-    b.set(7, 1, IP.w); b.set(8, 1, IP.w); b.set(6, 2, IP.W);
-    // sparks above the crater
-    b.set(4, 4, IP.y); b.set(10, 4, IP.o); b.set(7, 3, IP.y);
-    // cone: light rock on the left, shaded on the right
-    for (let y = 5; y <= 12; y++) {
-      const hw = 2 + (y - 5) * 0.85, x0 = Math.round(6.5 - hw), x1 = Math.round(6.5 + hw);
-      for (let x = x0; x <= x1; x++) b.set(x, y, x < 6 - (y - 5) * 0.1 ? IP.g : x > 7 + (y - 5) * 0.12 ? IP.G : IP.g);
-      b.set(x1, y, IP.d); if (y > 7) b.set(x1 - 1, y, IP.d);
+    // ash cloud rising to the upper right, clearly apart from the cone
+    b.disc(10.6, 1.5, 1.7, IP.W); b.disc(8.6, 2.9, 1.5, IP.g); b.disc(12, 3.1, 1.3, IP.g); b.disc(10.4, 3.7, 1.2, IP.G);
+    b.set(10, 0, IP.w); b.set(11, 0, IP.w); b.set(9, 1, IP.w);
+    // sparks flying out of the crater
+    b.set(3, 3, IP.y); b.set(5, 1, IP.o); b.set(4, 4, IP.o); b.set(9, 4, IP.y);
+    // the cone: four tones, light rock on the left, deep shade on the right
+    for (const r of [[6, 3, 10], [7, 2, 11], [8, 2, 11], [9, 1, 12], [10, 1, 12], [11, 0, 13], [12, 0, 13]]) {
+      for (let x = r[1]; x <= r[2]; x++) { const t = (x - r[1]) / (r[2] - r[1]); b.set(x, r[0], t < 0.16 ? IP.W : t < 0.5 ? IP.g : t < 0.8 ? IP.G : IP.d); }
     }
-    for (let y = 6; y <= 12; y += 2) b.set(Math.round(6.5 - (2 + (y - 5) * 0.85)) + 1, y, IP.W);
-    // crater with glowing lava, a stream running down the slope
-    b.rect(4, 5, 6, 1, IP.R); b.rect(5, 5, 4, 1, IP.o); b.rect(6, 5, 2, 1, IP.y);
-    b.rect(5, 6, 4, 1, IP.O); b.rect(6, 6, 2, 1, IP.o);
-    b.line(7, 7, 6, 9, IP.o); b.line(6, 9, 7, 11, IP.r); b.line(8, 7, 9, 9, IP.O); b.set(7, 7, IP.y); b.set(6, 10, IP.y);
-    b.set(5, 12, IP.o); b.set(6, 12, IP.r);
+    // crater: dark rim, molten pool, a bubble of lava above it
+    b.rect(4, 5, 6, 1, IP.o); b.rect(5, 4, 4, 1, IP.y); b.rect(6, 3, 2, 1, IP.y);
+    b.rect(4, 6, 6, 1, IP.R); b.rect(5, 6, 4, 1, IP.o); b.rect(6, 6, 2, 1, IP.y);
+    b.rect(5, 7, 4, 1, IP.r); b.rect(6, 7, 2, 1, IP.o);
+    // lava streams down the slope
+    b.set(6, 8, IP.o); b.set(6, 9, IP.r); b.set(5, 9, IP.o); b.set(5, 10, IP.r); b.set(4, 10, IP.o); b.set(4, 11, IP.r); b.set(3, 11, IP.o); b.set(3, 12, IP.r);
+    b.set(8, 8, IP.O); b.set(9, 9, IP.O); b.set(9, 10, IP.R); b.set(10, 11, IP.R);
     // ground
-    b.rect(0, 13, 14, 1, IP.n); b.rect(1, 12, 3, 1, IP.e); b.rect(11, 12, 3, 1, IP.E);
+    b.rect(0, 13, 14, 1, IP.n);
   };
 
   // ------------------------------------------------------------------ small helpers
@@ -125,15 +124,29 @@ const GfxVolcano = (() => {
       g.globalAlpha = 0.75 * (1 - q); pxRing(g, AX, AY, 14 + 74 * q, 6 + 26 * q, 2, '#fff0d0');
       g.globalAlpha = 0.4 * (1 - q); pxRing(g, AX, AY, 8 + 50 * q, 4 + 17 * q, 2, '#ffb040'); g.globalAlpha = fade;
     }
-    if (p < 0.42) {                                                 // muzzle flash on the crater
-      const q = p / 0.42;
-      pxDisc(g, AX, AY - 2, (6 + 12 * q) * k, '#ff5a14'); pxDisc(g, AX, AY - 3, (4.5 + 8.5 * q) * k, '#ff9a2a');
-      pxDisc(g, AX, AY - 4, (3 + 5 * q) * k, '#ffd84a'); pxDisc(g, AX, AY - 4, (1.5 + 2.5 * q) * k, '#fff6c8');
+    if (p < 0.4) {                                                  // flash on the crater: a flat hot blob
+      const q = p / 0.4;
+      pxDisc(g, AX, AY - 2, (5 + 10 * q) * k, '#ff5a14'); pxDisc(g, AX, AY - 3, (3.6 + 7 * q) * k, '#ff9a2a');
+      pxDisc(g, AX, AY - 4, (2.4 + 4 * q) * k, '#ffd84a'); pxDisc(g, AX, AY - 4, (1.2 + 2 * q) * k, '#fff6c8');
     }
-    if (p < 0.78) {                                                 // fireball climbing out
-      const fy = AY - (3 + 34 * Math.sqrt(p)) * k, fr = (5.5 + 6 * Math.sin(Math.min(1, p * 1.5) * Math.PI * 0.75)) * k * (1 - p * 0.35);
-      pxDisc(g, AX, fy, fr, '#c93d12'); pxDisc(g, AX - 0.5, fy - 0.6, fr * 0.82, '#ff6a1a'); pxDisc(g, AX - 1, fy - 1.2, fr * 0.58, '#ffa030');
-      if (p < 0.5) pxDisc(g, AX - 1.5, fy - 1.8, fr * 0.32, '#ffe070');
+    if (p < 0.8) {                                                  // a fire fountain: tongues of flame leaning out of the crater, a ragged head
+      const grow = Math.sin(Math.min(1, p / 0.5) * Math.PI * 0.5), die = p < 0.55 ? 1 : 1 - (p - 0.55) / 0.25, top = (10 + 38 * grow) * k * die;
+      const rows = [['#c93d12', 1], ['#ff6a1a', 0.78], ['#ffb030', 0.5], ['#ffe880', 0.24]];
+      for (let j = -4; j <= 4; j++) {
+        const fx = AX + j * 3.2 * k * 0.62 + (hf(j * 2.3 + fi * 1.7) - 0.5) * 2.5 * k * 0.5, hh = top * (1 - Math.abs(j) / 5.2) * (0.68 + 0.32 * hf(j * 3.9 + fi * 2.9));
+        const lean = (hf(j + fi * 0.7) - 0.5) * hh * 0.28;
+        for (let q = 0; q < rows.length; q++) {
+          const w = Math.max(2, Math.round((4.2 - Math.abs(j) * 0.35) * k * 0.62 * rows[q][1])), h = Math.round(hh * rows[q][1]);
+          g.fillStyle = rows[q][0];
+          for (let y = 0; y < h; y += 2) g.fillRect(Math.round(fx - w / 2 + lean * (y / Math.max(1, h))), Math.round(AY - 3 - y - 2), Math.max(1, w - ((y / h) > 0.7 ? 1 : 0)), 2);
+        }
+      }
+      const hr = (5 + 6 * grow) * k * die;                           // irregular head: three lobes
+      for (let l = 0; l < 3; l++) {
+        const hx = AX + (l - 1) * hr * 0.72 + (hf(fi * 1.1 + l) - 0.5) * 3, hy = AY - 3 - top * (0.92 - 0.1 * Math.abs(l - 1)) + hf(l + fi * 0.3) * 3, lr = hr * (l === 1 ? 1 : 0.74);
+        pxDisc(g, hx, hy, lr, '#c93d12'); pxDisc(g, hx - 0.5, hy - 0.6, lr * 0.8, '#ff6a1a'); pxDisc(g, hx - 1, hy - 1.2, lr * 0.55, '#ffa030');
+        if (p < 0.45) pxDisc(g, hx - 1.4, hy - 1.7, lr * 0.28, '#ffe880');
+      }
     }
     const n = big ? 30 : 16, ks = Math.min(k, 1.9);                 // sparks / lava droplets in ballistic arcs
     for (let j = 0; j < n; j++) {
@@ -143,10 +156,13 @@ const GfxVolcano = (() => {
       const sz = j % 4 === 0 ? 3 : 2;
       g.fillRect(Math.round(sx), Math.round(sy), sz, sz);
     }
-    if (p > 0.2) {                                                  // smoke ball left behind
-      const q = (p - 0.2) / 0.8, sy = AY - (8 + 28 * Math.sqrt(0.2 + q * 0.8)) * k, rr = (5 + 8 * q) * k;
-      g.globalAlpha = 0.85 * (1 - q * 0.7);
-      pxDisc(g, AX, sy, rr, '#2b2429'); pxDisc(g, AX - rr * 0.18, sy - rr * 0.22, rr * 0.72, '#4a3f46'); pxDisc(g, AX - rr * 0.34, sy - rr * 0.4, rr * 0.34, '#76696f');
+    if (p > 0.3) {                                                  // a few ragged wisps of soot behind the flames (the plume does the real smoke)
+      const q = (p - 0.3) / 0.7;
+      g.globalAlpha = 0.7 * (1 - q * 0.8);
+      for (let j = 0; j < 5; j++) {
+        const sx = AX + (hf(j * 4.1 + 2) - 0.5) * 20 * k, sy = AY - (14 + 30 * hf(j * 2.2) + 22 * q) * k, rr = (2.6 + 3 * hf(j * 6.3 + 1)) * k * (0.7 + 0.5 * q);
+        pxDisc(g, sx, sy, rr, '#2b2429'); pxDisc(g, sx - rr * 0.25, sy - rr * 0.3, rr * 0.6, '#52474e');
+      }
     }
     return c;
   }

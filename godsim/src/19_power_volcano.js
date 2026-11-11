@@ -133,6 +133,7 @@ const PowerVolcano = (() => {
       if (e.lg.length >= 12) e.lg.shift();
       e.lg.push(c.id);
       Log.add('Лава уничтожила город «' + c.name + '»', LOG.DISASTER, c.x, c.y, c.kingdomId);
+      Hist.add(c, 'Уничтожен извержением вулкана');
     }
   }
   /** destroy (dmg undefined) or damage the building on a tile; returns true when it is gone */
@@ -400,6 +401,10 @@ const PowerVolcano = (() => {
     e.next = tick + (big ? 30 : iv);
     Fx.add('shake', e.x, e.y, { amp: big ? 7 : 2.2, ttl: big ? 0.9 : 0.35 });
     if (big) Fx.add('flash', e.x, e.y, { ttl: 0.7, a: 0.5, color: '#ffd79a' });
+    for (let k = 0; k < (big ? 5 : 3); k++) {                                     // ash flakes drifting down around the cone (cheap baked Fx)
+      const hh = Util.hash2(tick, k + e.id * 7, 191), a = (hh & 1023) / 1023 * TAU, d = (1 + ((hh >>> 10) & 1023) / 1023 * (e.rb + 2));
+      Fx.add('ash', e.x + Math.cos(a) * d, e.y + Math.sin(a) * d * 0.8 - 1, { ttl: 1.8 });
+    }
     scare(e, tick, dmax + 1.5, big ? 60 : 30);
   }
   function landBombs(e, tick) {

@@ -1,4 +1,4 @@
-// «Вулкан» (volcano) power: node tests/power_volcano.test.mjs [--nobrowser] [--shots=/tmp/godsim-volcano-shots] [--quick]
+// «Вулкан» (volcano) power: node tests/power_volcano.test.mjs [--nobrowser] [--nohead] [--shots=/tmp/godsim-volcano-shots] [--quick]
 // Headless sections use the real sim (World / Buildings / Cities / Units / Sim / Save + src/19_power_volcano.js, loaded by the harness like every plugin);
 // the browser section builds the real game (+ tests/fixtures/volcano_hooks.js) to /tmp/godsim-volcano.html and looks at it at zoom 8 / 14 / 24.
 import assert from 'node:assert/strict';
@@ -13,6 +13,7 @@ const args = Object.fromEntries(process.argv.slice(2).map(a => { const m = a.mat
 const QUICK = !!args.quick;
 const results = [];
 function section(name, fn) {
+  if (args.nohead) return;                                                       // --nohead: only the browser part (visual iteration)
   const t0 = performance.now();
   try { fn(); results.push({ name, ok: true }); console.log(`  ok   ${pad(name, 92)} ${(performance.now() - t0).toFixed(0)} ms`); }
   catch (e) { results.push({ name, ok: false, e }); console.log(`  FAIL ${name}\n       ${(e && e.stack || e).toString().split('\n').slice(0, 12).join('\n       ')}`); }
@@ -670,7 +671,7 @@ async function browserPart() {
   const frames = (n = 2) => b.page.evaluate((n) => new Promise((r) => { let i = 0; const f = () => { if (++i >= n) r(); else requestAnimationFrame(f); }; requestAnimationFrame(f); }), n);
   const view = (zoom, dx = 0, dy = -1.5) => E(({ zoom, dx, dy }) => { window.__god.Render.setCamera(48.5 + dx, 48.5 + dy, zoom); }, { zoom, dx, dy });
   const stepTo = async (n) => { await E((n) => window.__god.step(n), n); await frames(2); await b.wait(90); };
-  const info = () => E(() => { const e = window.__god.S.eff.volcanoes[0]; return e ? { phase: e.phase, nb: e.nb, lav: e.lav.length / 3, bombs: e.bombs.length, until: e.until, t0: e.t0 } : null; });
+  const info = () => E(() => { const e = window.__god.S.eff.volcanoes[0]; return e ? { phase: e.phase, nb: e.nb, lav: e.lav.length / 4, bombs: e.bombs.length, until: e.until, t0: e.t0 } : null; });
   const pixelStats = (rect) => E((rect) => {
     const c = document.getElementById('game'), g = c.getContext('2d'), d = g.getImageData(rect.x, rect.y, rect.w, rect.h).data;
     let orange = 0, dark = 0, n = 0;
