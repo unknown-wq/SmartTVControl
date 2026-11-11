@@ -1073,7 +1073,7 @@ const Diplomacy = (() => {
     return '';
   }
   function scorer() { return { s: 0, L: [], add(v, why) { v = r1(v); if (v === 0) return; this.s += v; this.L.push({ v, why }); } }; }
-  function tone(margin) { return margin >= 4 ? 'good' : margin >= 0 ? 'warn' : 'bad'; }
+  function tone(margin) { return margin >= 4 ? 'good' : margin >= -10 ? 'warn' : 'bad'; }
   function words(margin) { return margin >= 14 ? 'Охотно согласятся' : margin >= 4 ? 'Согласятся' : margin >= 0 ? 'Согласятся с трудом' : margin >= -10 ? 'Почти согласны' : 'Откажут'; }
 
   // ---------------------------------------------------------------- judges: would `kb` accept? (score, named causes)
