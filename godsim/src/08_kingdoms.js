@@ -629,6 +629,22 @@ const Kingdoms = (() => {
     return true;
   }
 
+  /** the overlord frees its vassal peacefully (player diplomacy): no penalty, the old overlord is remembered kindly */
+  function release(vassalKid) {
+    const v = get(vassalKid); if (!v || !v.overlordId) return false;
+    const o = get(v.overlordId);
+    v.overlordId = 0; v.vassalSince = 0;
+    if (o && dipOn()) {
+      Diplomacy.setState(v.id, o.id, Const.REL.PEACE);
+      Diplomacy.addOpinion(v.id, o.id, 15, 'Свобода от сюзерена');
+    }
+    Log.add(o ? 'Королевство «' + o.name + '» даровало независимость королевству «' + v.name + '»' : 'Королевство «' + v.name + '» стало независимым', LOG.KINGDOM, -1, -1, v.id);
+    Hist.add(v, 'Получило независимость'); if (o) Hist.add(o, 'Вассал «' + v.name + '» отпущен на волю');
+    S.touchOwner();
+    Bus.emit('vassalFree', v, o);
+    return true;
+  }
+
   // ---------------------------------------------------------------- rebellion / split
   function rebel(cityId) {
     const c = S.cities.get(cityId); if (!c) return 0;
@@ -1029,7 +1045,7 @@ const Kingdoms = (() => {
       announce(k);
       return k;
     },
-    transferCity, splitCity, rebel, annex, canAnnex, breakFree,
+    transferCity, splitCity, rebel, annex, canAnnex, breakFree, release,
     setCommanded(kid, on) {
       if (on === undefined) on = true;
       if (!kid || on === false) {
